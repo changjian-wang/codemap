@@ -17,26 +17,41 @@ export interface LlmClient {
   ): AsyncGenerator<string, void, void>;
 }
 
+/**
+ * VS Code LM client that prefers a caller-supplied model instance — when
+ * invoked from a Chat Participant we use `request.model`, which is the model
+ * the user picked in the Copilot Chat picker. As a fallback (e.g. command
+ * palette) we look up by `family`.
+ */
 export class VscodeLmClient implements LlmClient {
-  constructor(private preferredFamily: string) {}
+  constructor(
+    private fallbackFamily: string,
+    private preferredModel?: vscode.LanguageModelChat,
+  ) {}
+
+  /** The model that will actually be used for the next stream() call. */
+  async resolveModel(): Promise<vscode.LanguageModelChat> {
+    if (this.preferredModel) return this.preferredModel;
+    const models = await vscode.lm.selectChatModels({
+      vendor: 'copilot',
+      family: this.fallbackFamily,
+    });
+    if (models.length === 0) {
+      throw new Error(
+        `No Copilot model available for family "${this.fallbackFamily}". ` +
+          `Ensure GitHub Copilot is installed and signed in, ` +
+          `or invoke @codemap from Copilot Chat so the picked model is used.`,
+      );
+    }
+    return models[0]!;
+  }
 
   async *stream(
     systemPrompt: string,
     userMessage: string,
     token: vscode.CancellationToken,
   ): AsyncGenerator<string, void, void> {
-    const models = await vscode.lm.selectChatModels({
-      vendor: 'copilot',
-      family: this.preferredFamily,
-    });
-    if (models.length === 0) {
-      throw new Error(
-        `No Copilot model available for family "${this.preferredFamily}". ` +
-          `Ensure GitHub Copilot is installed and signed in.`,
-      );
-    }
-    const model = models[0]!;
-
+    const model = await this.resolveModel();
     const messages = [
       vscode.LanguageModelChatMessage.User(systemPrompt),
       vscode.LanguageModelChatMessage.User(userMessage),

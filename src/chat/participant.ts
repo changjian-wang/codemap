@@ -20,7 +20,7 @@ export function registerChatParticipant(context: vscode.ExtensionContext): vscod
       case 'generate_workspace':
       case 'scope':
       case 'focus':
-        await handleGenerate(context, intent, response, token);
+        await handleGenerate(context, intent, request.model, response, token);
         return;
       case 'why':
         response.markdown(
@@ -57,6 +57,7 @@ export function registerChatParticipant(context: vscode.ExtensionContext): vscod
 async function handleGenerate(
   context: vscode.ExtensionContext,
   intent: ChatIntent,
+  pickedModel: vscode.LanguageModelChat | undefined,
   response: vscode.ChatResponseStream,
   token: vscode.CancellationToken,
 ): Promise<void> {
@@ -67,9 +68,16 @@ async function handleGenerate(
   }
 
   const config = vscode.workspace.getConfiguration('codemap');
-  const family = config.get<string>('preferredModelFamily', 'gpt-4o');
+  const fallbackFamily = config.get<string>('preferredModelFamily', 'gpt-4o');
   const maxFiles = config.get<number>('maxSkeletonFiles', 30);
   const maxParallel = config.get<number>('maxParallelAnalyzers', 6);
+
+  // Prefer the model the user picked in the Copilot Chat picker. The
+  // settings-based `preferredModelFamily` is only a fallback for when the
+  // command is invoked outside a chat turn.
+  const modelLabel = pickedModel
+    ? `${pickedModel.name ?? pickedModel.family}${pickedModel.vendor ? ` (${pickedModel.vendor})` : ''}`
+    : fallbackFamily;
 
   const scopePrefix = intent.kind === 'scope' && intent.target ? intent.target : undefined;
   const rootRequest =
@@ -79,7 +87,7 @@ async function handleGenerate(
         ? `@codemap /focus ${intent.target}`
         : `@codemap ${intent.prompt}`;
 
-  response.markdown(`Analyzing workspace **\`${workspaceFolder.name}\`** with \`${family}\`...\n\n`);
+  response.markdown(`Analyzing workspace **\`${workspaceFolder.name}\`** with \`${modelLabel}\`...\n\n`);
   if (scopePrefix) response.markdown(`Scope filter: \`${scopePrefix}\`\n\n`);
 
   const chatTurns: MockupChatTurn[] = [
@@ -100,7 +108,7 @@ async function handleGenerate(
           maxFiles,
         }),
         symbols: new VscodeSymbolProvider(workspaceFolder.uri),
-        llm: new VscodeLmClient(family),
+        llm: new VscodeLmClient(fallbackFamily, pickedModel),
       },
       {
         rootRequest,
@@ -155,14 +163,26 @@ async function handleGenerate(
       actions: actionTrace,
     });
 
-    await showGraph(context, result.graph, chatTurns, {
-      verifiedCount: result.stats.verifiedCount,
-      partialCount: result.stats.partialCount,
-      unverifiedCount: result.stats.unverifiedCount,
-      filesAnalyzed: result.stats.filesAnalyzed,
-      filesFailed: result.stats.filesFailed,
-      durationMs: result.stats.durationMs,
-    });
+    await showGraph(
+      context,
+      result.graph,
+      chatTurns,
+      {
+        verifiedCount: result.stats.verifiedCount,
+        partialCount: result.stats.partialCount,
+        unverifiedCount: result.stats.unverifiedCount,
+        filesAnalyzed: result.stats.filesAnalyzed,
+        filesFailed: result.stats.filesFailed,
+        durationMs: result.stats.durationMs,
+      },
+      {
+        modelLabel,
+        repoName: workspaceFolder.name,
+        scope: scopePrefix,
+        fileCountText: `${result.stats.filesAnalyzed} files analyzed`,
+        scopePill: scopePrefix ? '📦 SCOPED' : '📦 WORKSPACE',
+      },
+    );
   } catch (err) {
     if (err instanceof CancelledError) {
       response.markdown('\n_Cancelled._');

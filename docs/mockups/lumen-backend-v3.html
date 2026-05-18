@@ -654,20 +654,16 @@
       <span>CodeMap</span>
     </div>
     <div class="repo-pill">
-      📂 <span class="repo-name">lumen</span> · apps/api
-      <span style="color:var(--vs-text-dim); margin-left:4px;">· 173 .cs files · 8.8k LOC</span>
+      📂 <span class="repo-name" id="repoName">lumen</span> <span id="repoScope">· apps/api</span>
+      <span style="color:var(--vs-text-dim); margin-left:4px;" id="repoStats">· 173 .cs files · 8.8k LOC</span>
     </div>
-    <div class="scope-pill">📦 LUMEN BACKEND</div>
+    <div class="scope-pill" id="scopePill">📦 LUMEN BACKEND</div>
 
     <div class="spacer"></div>
 
-    <div style="display:flex; align-items:center; gap:6px;">
-      <label style="color:rgba(255,255,255,0.6); font-size:11px;">Model:</label>
-      <select class="tb-select" id="modelSelect">
-        <option>claude-3.5-sonnet</option>
-        <option>gpt-4o</option>
-        <option>o1</option>
-      </select>
+    <div class="repo-pill" title="Model used for the last analysis. Pick a different one in the Copilot Chat model picker and re-run @codemap.">
+      <span style="color:var(--vs-text-dim);">Model:</span>
+      <span class="repo-name" id="modelLabel">—</span>
     </div>
 
     <button class="tb-btn primary" id="analyzeBtn">▶ Re-Analyze <span class="kbd">⌘⇧A</span></button>
@@ -1712,16 +1708,47 @@ document.getElementById('chatToggle').addEventListener('click', () => {
   document.getElementById('app').classList.toggle('chat-collapsed');
 });
 
+// ---------- Filters (composable) ----------
+// The bc filter and the three boolean toggles (hide-read, only-unverified,
+// hide-external) all share one state object so they actually combine. A
+// previous implementation had each chip directly call cy.node.style which
+// meant flipping one chip undid another.
+const filterState = {
+  bc: 'all',
+  hideRead: false,
+  onlyUnverified: false,
+  hideExternal: false,
+};
+function applyFilters() {
+  cy.nodes('.cls').forEach(n => {
+    const c = CLASSES.find(x => x.id === n.id());
+    if (!c) { n.style('display', 'none'); return; }
+    let show = true;
+    if (filterState.bc !== 'all' && c.bc !== filterState.bc) show = false;
+    if (filterState.hideRead && c.readState === 'read') show = false;
+    if (filterState.onlyUnverified && c.verification === 'verified') show = false;
+    n.style('display', show ? 'element' : 'none');
+  });
+  cy.nodes('.ext').forEach(n => {
+    n.style('display', filterState.hideExternal ? 'none' : 'element');
+  });
+  // Edges: hide whenever either endpoint is hidden, so the graph never shows
+  // a dangling edge into nowhere.
+  cy.edges().forEach(e => {
+    const src = e.source().style('display') !== 'none';
+    const tgt = e.target().style('display') !== 'none';
+    let show = src && tgt;
+    if (filterState.hideExternal && e.data('kind') === 'external_calls') show = false;
+    e.style('display', show ? 'element' : 'none');
+  });
+}
+
 document.querySelectorAll('.chip.bc-chip').forEach(chip => {
   chip.addEventListener('click', () => {
     document.querySelectorAll('.chip.bc-chip').forEach(c => c.classList.remove('active'));
     chip.classList.add('active');
-    const bc = chip.dataset.bc;
-    cy.nodes('.cls').forEach(n => {
-      const show = bc === 'all' || n.data('bc') === bc;
-      n.style('display', show ? 'element' : 'none');
-    });
-    cy.nodes('.ext').forEach(n => n.style('display', 'element'));
+    filterState.bc = chip.dataset.bc;
+    applyFilters();
   });
 });
 
@@ -1729,25 +1756,11 @@ document.querySelectorAll('.chip[data-filter]').forEach(chip => {
   chip.addEventListener('click', () => {
     chip.classList.toggle('active');
     const f = chip.dataset.filter;
-    if (f === 'only-unverified') {
-      const on = chip.classList.contains('active');
-      cy.nodes('.cls').forEach(n => {
-        const v = n.data('verification');
-        n.style('display', !on || v !== 'verified' ? 'element' : 'none');
-      });
-    }
-    if (f === 'hide-external') {
-      const on = chip.classList.contains('active');
-      cy.nodes('.ext').forEach(n => n.style('display', on ? 'none' : 'element'));
-      cy.edges('.external_calls').forEach(e => e.style('display', on ? 'none' : 'element'));
-    }
-    if (f === 'hide-read') {
-      const on = chip.classList.contains('active');
-      cy.nodes('.cls').forEach(n => {
-        const r = (CLASSES.find(c => c.id === n.id()) || {}).readState;
-        if (r === 'read') n.style('display', on ? 'none' : 'element');
-      });
-    }
+    const on = chip.classList.contains('active');
+    if (f === 'only-unverified') filterState.onlyUnverified = on;
+    else if (f === 'hide-external') filterState.hideExternal = on;
+    else if (f === 'hide-read') filterState.hideRead = on;
+    applyFilters();
   });
 });
 
@@ -1759,6 +1772,13 @@ function renderStats() {
   // Bind statusbar + chat header to real data so the UI reflects the
   // current graph rather than the canned demo numbers. (v3 plan
   // Invariant #5: chat and webview show the same graph.)
+  const meta = __INJ.meta || {};
+  setText('modelLabel', meta.modelLabel || '(local fixture)');
+  setText('repoName', meta.repoName || 'workspace');
+  setText('repoScope', meta.scope ? `· ${meta.scope}` : '');
+  setText('repoStats', meta.fileCountText ? `· ${meta.fileCountText}` : '');
+  setText('scopePill', meta.scopePill || '📦 WORKSPACE');
+
   const stats = __INJ.stats;
   if (stats) {
     const readCount = CLASSES.filter(c => c.readState === 'read').length;

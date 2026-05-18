@@ -58,6 +58,19 @@ export interface MockupChatTurn {
   actions?: { check: boolean; num: string; text: string }[];
 }
 
+export interface MockupMeta {
+  /** e.g. "Claude 3.5 Sonnet (copilot)" or "gpt-4o". */
+  modelLabel?: string;
+  /** Workspace folder name. */
+  repoName?: string;
+  /** Sub-scope (e.g. "apps/api/src/Capture"). Empty for full workspace. */
+  scope?: string;
+  /** "N files · M LOC" style summary. */
+  fileCountText?: string;
+  /** Big colored pill (e.g. "📦 WORKSPACE" or "📦 SCOPED"). */
+  scopePill?: string;
+}
+
 export interface MockupStats {
   verifiedCount: number;
   partialCount: number;
@@ -77,6 +90,7 @@ export interface MockupData {
   edges: MockupEdge[];
   chatTurns: MockupChatTurn[];
   stats?: MockupStats;
+  meta?: MockupMeta;
 }
 
 /** Pure transformation; safe to call in both extension and webview contexts. */
@@ -84,6 +98,7 @@ export function adaptGraphForMockup(
   graph: CodeMapGraph,
   chatTurns: MockupChatTurn[] = [],
   stats?: MockupStats,
+  meta?: MockupMeta,
 ): MockupData {
   const classes: MockupClass[] = Object.values(graph.nodes).map(n => ({
     id: n.id,
@@ -127,5 +142,5 @@ export function adaptGraphForMockup(
     unverifiedCount: classes.filter(c => c.verification === 'unverified').length,
   };
 
-  return { classes, externalDeps, edges, chatTurns, stats: derivedStats };
+  return { classes, externalDeps, edges, chatTurns, stats: derivedStats, meta };
 }

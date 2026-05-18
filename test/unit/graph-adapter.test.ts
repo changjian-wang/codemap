@@ -82,4 +82,28 @@ describe('adaptGraphForMockup', () => {
   it('defaults chat turns to []', () => {
     expect(adaptGraphForMockup(GRAPH).chatTurns).toEqual([]);
   });
+
+  it('derives stats from the graph when not given explicitly', () => {
+    const out = adaptGraphForMockup(GRAPH);
+    expect(out.stats).toEqual({
+      verifiedCount: 0,
+      partialCount: 1,    // Foo is partial in the fixture
+      unverifiedCount: 0,
+    });
+  });
+
+  it('passes explicit stats through verbatim, including eval', () => {
+    const stats = {
+      verifiedCount: 10,
+      partialCount: 2,
+      unverifiedCount: 1,
+      filesAnalyzed: 14,
+      durationMs: 42300,
+      eval: {
+        nodes: { precision: 0.93, recall: 0.86, f1: 0.89 },
+        edges: { precision: 0.84, recall: 0.77, f1: 0.80 },
+      },
+    };
+    expect(adaptGraphForMockup(GRAPH, [], stats).stats).toBe(stats);
+  });
 });

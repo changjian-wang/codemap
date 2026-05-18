@@ -93,7 +93,9 @@ describe('aggregate', () => {
 
   it('marks edge unverified AND downgrades source to partial when target is unknown', async () => {
     // Calibrator emits verified=false for cross-file calls. Aggregator
-    // resolves: workspace lookup fails → keep unverified, downgrade source.
+    // resolves: workspace lookup fails → keep unverified, downgrade source,
+    // AND materialize a ghost node so the UI shows a grey dotted box rather
+    // than a cytoscape-auto-created blank.
     const a = R('a.ts', [N('Foo', { verification: 'verified' })],
       [{ from: 'Foo', to: 'Ghost', kind: 'calls', verified: false }]);
     const { graph } = await aggregate({
@@ -102,6 +104,10 @@ describe('aggregate', () => {
     const edge = graph.edges.find(e => e.to === 'Ghost')!;
     expect(edge.verified).toBe(false);
     expect(graph.nodes.Foo!.verification).toBe('partial');
+    // Ghost node exists with unverified state.
+    expect(graph.nodes.Ghost).toBeDefined();
+    expect(graph.nodes.Ghost!.verification).toBe('unverified');
+    expect(graph.nodes.Ghost!.verificationDetails?.reason).toBeDefined();
   });
 
   it('upgrades verified=false cross-file edges when target found in workspace and in-graph', async () => {

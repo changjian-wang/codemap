@@ -155,7 +155,14 @@ async function handleGenerate(
       actions: actionTrace,
     });
 
-    await showGraph(context, result.graph, chatTurns);
+    await showGraph(context, result.graph, chatTurns, {
+      verifiedCount: result.stats.verifiedCount,
+      partialCount: result.stats.partialCount,
+      unverifiedCount: result.stats.unverifiedCount,
+      filesAnalyzed: result.stats.filesAnalyzed,
+      filesFailed: result.stats.filesFailed,
+      durationMs: result.stats.durationMs,
+    });
   } catch (err) {
     if (err instanceof CancelledError) {
       response.markdown('\n_Cancelled._');

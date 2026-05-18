@@ -58,17 +58,32 @@ export interface MockupChatTurn {
   actions?: { check: boolean; num: string; text: string }[];
 }
 
+export interface MockupStats {
+  verifiedCount: number;
+  partialCount: number;
+  unverifiedCount: number;
+  filesAnalyzed?: number;
+  filesFailed?: number;
+  durationMs?: number;
+  eval?: {
+    nodes: { precision: number; recall: number; f1: number };
+    edges: { precision: number; recall: number; f1: number };
+  };
+}
+
 export interface MockupData {
   classes: MockupClass[];
   externalDeps: MockupExternalDep[];
   edges: MockupEdge[];
   chatTurns: MockupChatTurn[];
+  stats?: MockupStats;
 }
 
 /** Pure transformation; safe to call in both extension and webview contexts. */
 export function adaptGraphForMockup(
   graph: CodeMapGraph,
   chatTurns: MockupChatTurn[] = [],
+  stats?: MockupStats,
 ): MockupData {
   const classes: MockupClass[] = Object.values(graph.nodes).map(n => ({
     id: n.id,
@@ -103,5 +118,14 @@ export function adaptGraphForMockup(
     kind: d.kind,
   }));
 
-  return { classes, externalDeps, edges, chatTurns };
+  // Default stats derived from the graph itself so the UI never displays
+  // canned numbers from the mockup template. Real eval scores / timings come
+  // in via the explicit `stats` argument.
+  const derivedStats: MockupStats = stats ?? {
+    verifiedCount: classes.filter(c => c.verification === 'verified').length,
+    partialCount: classes.filter(c => c.verification === 'partial').length,
+    unverifiedCount: classes.filter(c => c.verification === 'unverified').length,
+  };
+
+  return { classes, externalDeps, edges, chatTurns, stats: derivedStats };
 }

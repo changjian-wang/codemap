@@ -95,7 +95,10 @@ export async function aggregate(input: AggregateInput): Promise<AggregateResult>
       }
       // verified=false: calibrator couldn't see the target in-file. Try
       // workspace symbol lookup. Found and in-graph → upgrade to verified;
-      // otherwise leave unverified AND downgrade source node to partial.
+      // found in workspace but outside skeleton → ghost (unverified) node;
+      // not found at all → ghost (unverified) node. Either way the edge
+      // and the target survive as concrete graph elements per v3 §5.4
+      // (no bare auto-nodes from cytoscape).
       if (nodeIdSet.has(e.to)) {
         pushEdge({ ...e, verified: true });
         continue;
@@ -106,10 +109,16 @@ export async function aggregate(input: AggregateInput): Promise<AggregateResult>
         pushEdge({ from: e.from, to: exact.name, kind: 'calls', verified: true });
         continue;
       }
+      // Unresolved target — materialize a ghost node so it gets the grey
+      // dotted treatment instead of cytoscape auto-creating an unstyled box.
+      if (!nodesById.has(e.to)) {
+        nodesById.set(e.to, makeGhostNode(e.to, exact?.file));
+        nodeIdSet.add(e.to);
+      }
       pushEdge({ from: e.from, to: e.to, kind: 'calls', verified: false });
-      const node = nodesById.get(e.from);
-      if (node && node.verification === 'verified') {
-        nodesById.set(e.from, { ...node, verification: 'partial' });
+      const sourceNode = nodesById.get(e.from);
+      if (sourceNode && sourceNode.verification === 'verified') {
+        nodesById.set(e.from, { ...sourceNode, verification: 'partial' });
       }
     }
   }
@@ -168,3 +177,32 @@ export async function aggregate(input: AggregateInput): Promise<AggregateResult>
 
   return { graph, warnings };
 }
+
+function makeGhostNode(id: string, file: string | undefined): CodeNode {
+  return {
+    id,
+    kind: 'class',
+    file: file ?? `(unresolved: ${id})`,
+    range: { startLine: 0, endLine: 0 },
+    boundedContext: 'shared',
+    intent:
+      'Referenced by another class but the LLM did not (or could not) analyze it. ' +
+      'Could be outside the picked skeleton, a hallucinated identifier, or a class ' +
+      'that needs to be added via /focus.',
+    confidence: 0,
+    risks: [{ type: 'low_confidence', desc: 'unresolved in current skeleton' }],
+    methods: [],
+    readingPriority: 99,
+    readState: 'unread',
+    verification: 'unverified',
+    verificationDetails: {
+      rangeAdjusted: false,
+      droppedCalls: [],
+      droppedExternalCalls: [],
+      reason: file
+        ? `Found in workspace at ${file} but outside the analyzed skeleton`
+        : 'Not found by executeWorkspaceSymbolProvider',
+    },
+  };
+}
+

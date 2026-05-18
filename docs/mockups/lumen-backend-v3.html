@@ -748,12 +748,12 @@
   <div class="chat-pane" id="chatPane">
     <div class="chat-header" id="chatToggle">
       <span class="chat-title"><span class="chat-icon">@</span>codemap</span>
-      <span class="chat-summary">
+      <span class="chat-summary" id="chatSummary">
         已生成 14 个类、26 条调用边。建议先读 <code>CaptureEndpoints</code> →
         <code>IngestUrlHandler</code> → <code>CaptureJobWorker</code> 异步管道。
         Recall 模块的 <code>AskByQueryHandler</code> 标记为 partial。
       </span>
-      <span class="turn-count">5 turns</span>
+      <span class="turn-count" id="chatTurnCount">5 turns</span>
       <span class="toggle-arrow">▼</span>
     </div>
 
@@ -788,13 +788,13 @@
       <span class="ver-pill" style="background:rgba(255,187,90,0.25)">⚠ <span id="sbPartial">2</span> partial</span>
       <span class="ver-pill" style="background:rgba(0,0,0,0.3)">✗ <span id="sbUnverified">1</span> unverified</span>
     </div>
-    <div class="sb-item"><span>⏱ 42.3s · 14 files analyzed</span></div>
+    <div class="sb-item"><span id="sbDuration">⏱ 42.3s · 14 files analyzed</span></div>
     <div class="spacer"></div>
     <div class="sb-item" title="Eval against golden samples">
-      <span class="score-pill"><span class="label">Nodes</span> P=0.93 · R=0.86 · F1=0.89</span>
+      <span class="score-pill" id="sbNodesScore"><span class="label">Nodes</span> P=0.93 · R=0.86 · F1=0.89</span>
     </div>
     <div class="sb-item" title="Eval against golden samples">
-      <span class="score-pill"><span class="label">Edges</span> P=0.84 · R=0.77 · F1=0.80</span>
+      <span class="score-pill" id="sbEdgesScore"><span class="label">Edges</span> P=0.84 · R=0.77 · F1=0.80</span>
     </div>
     <div class="sb-item">
       <span class="score-pill">⌨ <strong>J</strong>/<strong>K</strong> nav · <strong>Enter</strong> jump · <strong>M</strong> mark</span>
@@ -1753,7 +1753,57 @@ document.querySelectorAll('.chip[data-filter]').forEach(chip => {
 
 renderOutline();
 renderChat();
-setTimeout(() => selectClass('IngestUrlHandler'), 100);
+renderStats();
+
+function renderStats() {
+  // Bind statusbar + chat header to real data so the UI reflects the
+  // current graph rather than the canned demo numbers. (v3 plan
+  // Invariant #5: chat and webview show the same graph.)
+  const stats = __INJ.stats;
+  if (stats) {
+    const readCount = CLASSES.filter(c => c.readState === 'read').length;
+    const total = CLASSES.length;
+    const pct = total > 0 ? Math.round((readCount / total) * 100) : 0;
+    setText('sbReadCount', `${readCount} / ${total} read`);
+    const fill = document.getElementById('sbReadFill');
+    if (fill) fill.style.width = pct + '%';
+    setText('sbVerified', String(stats.verifiedCount ?? 0));
+    setText('sbPartial', String(stats.partialCount ?? 0));
+    setText('sbUnverified', String(stats.unverifiedCount ?? 0));
+    if (stats.durationMs != null && stats.filesAnalyzed != null) {
+      setText('sbDuration', `⏱ ${(stats.durationMs / 1000).toFixed(1)}s · ${stats.filesAnalyzed} files analyzed`);
+    }
+    if (stats.eval) {
+      const e = stats.eval;
+      setHtml('sbNodesScore', `<span class="label">Nodes</span> P=${e.nodes.precision.toFixed(2)} · R=${e.nodes.recall.toFixed(2)} · F1=${e.nodes.f1.toFixed(2)}`);
+      setHtml('sbEdgesScore', `<span class="label">Edges</span> P=${e.edges.precision.toFixed(2)} · R=${e.edges.recall.toFixed(2)} · F1=${e.edges.f1.toFixed(2)}`);
+    } else {
+      setHtml('sbNodesScore', '<span class="label">Nodes</span> (no golden run)');
+      setHtml('sbEdgesScore', '<span class="label">Edges</span> (no golden run)');
+    }
+  }
+  const lastAssistant = [...CHAT_TURNS].reverse().find(t => t.role === 'assistant');
+  if (lastAssistant) {
+    setHtml('chatSummary', lastAssistant.content);
+  } else if (CLASSES.length > 0) {
+    setHtml('chatSummary', `${CLASSES.length} 个类、${EDGES.length} 条调用边。`);
+  }
+  setText('chatTurnCount', `${CHAT_TURNS.length} turns`);
+}
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+function setHtml(id, html) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = html;
+}
+
+setTimeout(() => {
+  if (CLASSES.length === 0) return;
+  const first = [...CLASSES].sort((a,b) => (a.readingPriority ?? 99) - (b.readingPriority ?? 99))[0];
+  selectClass(first.id);
+}, 100);
 
 </script>
 

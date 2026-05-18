@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DEMO_GRAPH, DEMO_CHAT_TURNS } from './demo-fixture';
-import { adaptGraphForMockup, type MockupChatTurn } from './graph-adapter';
+import { adaptGraphForMockup, type MockupChatTurn, type MockupStats } from './graph-adapter';
 import { ReadingProgressStore } from '../persistence/reading-progress';
 import type { ClientEvent, CodeMapGraph } from '../shared/types';
 
@@ -21,6 +21,7 @@ export async function showGraph(
   context: vscode.ExtensionContext,
   graph: CodeMapGraph,
   chatTurns: MockupChatTurn[] = [],
+  stats?: MockupStats,
 ): Promise<void> {
   if (!currentPanel) {
     currentPanel = vscode.window.createWebviewPanel(
@@ -46,7 +47,7 @@ export async function showGraph(
     currentPanel.reveal();
   }
 
-  currentPanel.webview.html = renderHtml(context, currentPanel.webview, graph, chatTurns);
+  currentPanel.webview.html = renderHtml(context, currentPanel.webview, graph, chatTurns, stats);
 }
 
 function handleClientMessage(msg: ClientEvent, context: vscode.ExtensionContext): void {
@@ -82,6 +83,7 @@ function renderHtml(
   webview: vscode.Webview,
   graph: CodeMapGraph,
   chatTurns: MockupChatTurn[],
+  stats?: MockupStats,
 ): string {
   const mockupPath = path.join(context.extensionPath, 'docs', 'mockups', 'lumen-backend-v3.html');
   let html: string;
@@ -94,7 +96,7 @@ function renderHtml(
     </body></html>`;
   }
 
-  const mockupData = adaptGraphForMockup(graph, chatTurns);
+  const mockupData = adaptGraphForMockup(graph, chatTurns, stats);
   // Embed as a JSON string and parse on the page — avoids HTML/JS escaping
   // pitfalls with < / backticks / quotes in intent text.
   const payload = JSON.stringify(mockupData).replace(/</g, '\\u003c');

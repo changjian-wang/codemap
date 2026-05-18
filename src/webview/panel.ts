@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DEMO_GRAPH } from './demo-fixture';
+import { ReadingProgressStore } from '../persistence/reading-progress';
 import type { ClientEvent, ServerEvent } from '../shared/types';
 
 let currentPanel: vscode.WebviewPanel | undefined;
@@ -44,6 +45,7 @@ function pushGraph(webview: vscode.Webview): void {
 }
 
 function handleClientMessage(msg: ClientEvent, context: vscode.ExtensionContext): void {
+  const progress = new ReadingProgressStore(context.workspaceState);
   switch (msg.type) {
     case 'ready':
       if (currentPanel) pushGraph(currentPanel.webview);
@@ -56,13 +58,13 @@ function handleClientMessage(msg: ClientEvent, context: vscode.ExtensionContext)
       return;
     }
     case 'mark_read':
-    case 'mark_method_read': {
-      // W2 persistence task; for now just log.
-      void context.workspaceState.update(`codemap.read.${'nodeId' in msg ? msg.nodeId : ''}`, true);
+      void progress.setNodeRead(msg.nodeId, msg.read);
       return;
-    }
+    case 'mark_method_read':
+      void progress.setMethodRead(msg.nodeId, msg.method, msg.read);
+      return;
     case 'reset_progress':
-      void context.workspaceState.update('codemap.readingProgress', undefined);
+      void progress.reset();
       return;
     case 'request_focus':
     case 'open_chat':

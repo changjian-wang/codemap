@@ -10,14 +10,30 @@ import type { SymbolProvider, SymbolHit } from './symbol-provider';
 export class VscodeSymbolProvider implements SymbolProvider {
   constructor(private workspaceRoot: vscode.Uri) {}
 
-  async symbolsInFile(file: string): Promise<SymbolHit[]> {
+  async symbolsInFile(file: string): Promise<SymbolHit[] | undefined> {
     const uri = vscode.Uri.joinPath(this.workspaceRoot, file);
-    const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
-      'vscode.executeDocumentSymbolProvider',
-      uri,
-    );
-    if (!symbols) return [];
-    return flatten(symbols, file);
+    // The symbol provider can return `undefined` while the language server
+    // is still indexing (especially C# Dev Kit on a fresh open) or an empty
+    // array if the file is empty. We retry with a short backoff once before
+    // giving up; the orchestrator's warmup phase also tries to make sure the
+    // first call already hits a ready server.
+    for (const delayMs of [0, 500]) {
+      if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
+      const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[] | undefined>(
+        'vscode.executeDocumentSymbolProvider',
+        uri,
+      );
+      if (symbols === undefined) continue;          // not ready
+      if (symbols.length === 0) {
+        // File really has no symbols. Distinct from "not ready" — return
+        // an explicit empty array.
+        return [];
+      }
+      return flatten(symbols, file);
+    }
+    // Two attempts and still nothing — report "no signal" rather than
+    // "no symbols". Calibrator preserves verified state in this case.
+    return undefined;
   }
 
   async findInWorkspace(name: string, limit = 10): Promise<SymbolHit[]> {

@@ -112,7 +112,9 @@ export class Calibrator {
 
     // ---- 1. Locate the class in the file. ----
     const inFileSymbols = await this.symbols.symbolsInFile(file);
-    const symbol = bestSymbolMatch(nodeId, inFileSymbols);
+    const lspNotReady = inFileSymbols === undefined;
+    const safeSymbols = inFileSymbols ?? [];
+    const symbol = bestSymbolMatch(nodeId, safeSymbols);
 
     let verification: VerificationState = 'verified';
     const rangeObj = asObject(data, 'range');
@@ -124,7 +126,13 @@ export class Calibrator {
     let range = rangeFromLlm;
     let rangeAdjusted = false;
     if (!symbol) {
-      verification = 'unverified';
+      // Two cases: (a) LSP responded with [] → the file has no symbols, the
+      // class genuinely does not exist, mark unverified; (b) LSP did not
+      // respond (lspNotReady) → no signal ≠ negative signal, keep verified
+      // and let the orchestrator's chat warning explain the situation.
+      if (!lspNotReady) {
+        verification = 'unverified';
+      }
     } else {
       // LSP wins. The diff against LLM-provided range is the rangeAdjusted flag.
       if (
@@ -144,12 +152,14 @@ export class Calibrator {
     // aggregator resolves cross-file `calls` via workspace symbol lookup. So
     // the calibrator does what it can see (in-file LSP) and hands the rest
     // off as verified=false; the aggregator does the second-stage validation.
+    // When the LSP is not ready, we cannot tell in-file from cross-file at
+    // all, so we hand every target to the aggregator as verified=false.
     const verifiedCalls: string[] = [];
     const unverifiedCalls: string[] = [];
     for (const t of asArray(data, 'calls')) {
       if (typeof t !== 'string') continue;
       const className = t.split('.')[0]!;
-      if (bestSymbolMatch(className, inFileSymbols)) {
+      if (!lspNotReady && bestSymbolMatch(className, safeSymbols)) {
         verifiedCalls.push(className);
       } else {
         unverifiedCalls.push(className);
@@ -205,6 +215,10 @@ export class Calibrator {
         rangeAdjusted,
         droppedCalls,
         droppedExternalCalls: droppedExternal,
+        lspNotReady: lspNotReady || undefined,
+        reason: lspNotReady
+          ? 'Language server did not respond at calibration time; verification is provisional. Re-run after the LSP settles.'
+          : undefined,
       },
     };
 

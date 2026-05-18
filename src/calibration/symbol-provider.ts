@@ -30,8 +30,17 @@ export interface SymbolProvider {
   /**
    * Return all class-like symbols in the given file. Used to validate
    * `node_id` and to overwrite LLM-supplied `range`.
+   *
+   * Returns:
+   *   - `SymbolHit[]` with content → the LSP responded with symbols
+   *   - `[]` empty array → the LSP responded but the file genuinely has no
+   *     top-level symbols (e.g. an empty file)
+   *   - `undefined` → the LSP did not respond (extension still loading,
+   *     server crashed, file not indexed yet). Calibrator MUST NOT
+   *     downgrade a node to unverified in this case — see v3 plan §5.4
+   *     ("missing signal" ≠ "missing symbol").
    */
-  symbolsInFile(file: string): Promise<SymbolHit[]>;
+  symbolsInFile(file: string): Promise<SymbolHit[] | undefined>;
 
   /**
    * Search the entire workspace for a symbol name. Used to soft-validate

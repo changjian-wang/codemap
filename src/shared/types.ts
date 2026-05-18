@@ -45,6 +45,13 @@ export interface CodeNode {
     droppedCalls: string[];
     droppedExternalCalls: string[];
     reason?: string;
+    /**
+     * True when the language server did not respond for this file at
+     * calibration time. The node is presented as `verified` by default
+     * (no signal ≠ negative signal), but the UI / chat surface this so
+     * the user knows the verification scores are unreliable.
+     */
+    lspNotReady?: boolean;
   };
 }
 

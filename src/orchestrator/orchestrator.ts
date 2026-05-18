@@ -60,6 +60,7 @@ export interface OrchestratorResult {
     verifiedCount: number;
     partialCount: number;
     unverifiedCount: number;
+    lspNotReadyCount: number;
     durationMs: number;
   };
   warnings: string[];
@@ -101,6 +102,24 @@ export async function runOrchestrator(
   // ---- Step 2: classify ----
   events.onStep?.(`Classifying ${skeleton.length} files into bounded contexts`);
   const classified = bucketAll(skeleton);
+  if (token.isCancellationRequested) throw new CancelledError();
+
+  // ---- Step 2.5: warm up the language server ----
+  // Languages like C# (especially with C# Dev Kit) take seconds-to-minutes to
+  // index a workspace. If we hit symbolsInFile before that, every analyzer
+  // gets `undefined` and every node ends up lspNotReady. We poll the first
+  // entry point until either we get symbols or we hit the timeout, so the
+  // bulk of the run sees a hot server.
+  events.onStep?.('Warming up language server');
+  const warmupTarget = scan.entryPoints[0] ?? skeleton[0]!;
+  const warmupReady = await warmupLsp(deps.symbols, warmupTarget, token);
+  if (!warmupReady) {
+    events.onWarning?.(
+      'Language server did not produce symbols within the warmup window. ' +
+        'Verification scores may be unreliable on this run; re-run after the ' +
+        'workspace finishes indexing.',
+    );
+  }
   if (token.isCancellationRequested) throw new CancelledError();
 
   // ---- Step 3: analyze in parallel ----
@@ -160,6 +179,13 @@ export async function runOrchestrator(
   const verifiedCount = nodes.filter(n => n.verification === 'verified').length;
   const partialCount = nodes.filter(n => n.verification === 'partial').length;
   const unverifiedCount = nodes.filter(n => n.verification === 'unverified').length;
+  const lspNotReadyCount = nodes.filter(n => n.verificationDetails?.lspNotReady).length;
+  if (lspNotReadyCount > 0) {
+    events.onWarning?.(
+      `${lspNotReadyCount} of ${nodes.length} nodes could not be calibrated against the language server. ` +
+        `Their verification state is provisional; re-run after the workspace finishes indexing.`,
+    );
+  }
 
   return {
     graph: agg.graph,
@@ -172,10 +198,33 @@ export async function runOrchestrator(
       verifiedCount,
       partialCount,
       unverifiedCount,
+      lspNotReadyCount,
       durationMs: Date.now() - t0,
     },
     warnings: agg.warnings,
   };
+}
+
+/**
+ * Warmup: poll the symbol provider for the given target file until either we
+ * see a non-undefined result or the timeout elapses. We treat `[]` as ready
+ * too (the file might really have no symbols).
+ */
+async function warmupLsp(
+  symbols: { symbolsInFile: (f: string) => Promise<unknown> },
+  target: string,
+  token: vscode.CancellationToken,
+  timeoutMs = 8000,
+  pollMs = 400,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (token.isCancellationRequested) return false;
+    const out = await symbols.symbolsInFile(target);
+    if (out !== undefined) return true;
+    await new Promise(r => setTimeout(r, pollMs));
+  }
+  return false;
 }
 
 export class CancelledError extends Error {

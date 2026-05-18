@@ -3,12 +3,14 @@ import { Calibrator } from '../../src/calibration/calibrator';
 import type { SymbolProvider, SymbolHit } from '../../src/calibration/symbol-provider';
 
 function makeProvider(args: {
-  inFile?: Record<string, SymbolHit[]>;
+  inFile?: Record<string, SymbolHit[] | undefined>;
   workspace?: Record<string, SymbolHit[]>;
+  defaultInFile?: SymbolHit[] | undefined;
 }): SymbolProvider {
   return {
     async symbolsInFile(file) {
-      return args.inFile?.[file] ?? [];
+      if (args.inFile && file in args.inFile) return args.inFile[file];
+      return args.defaultInFile ?? [];
     },
     async findInWorkspace(name) {
       return args.workspace?.[name] ?? [];
@@ -192,5 +194,23 @@ describe('Calibrator', () => {
       boundedContext: 'capture',
     });
     expect(out?.node.verification).toBe('verified');
+  });
+
+  it('keeps verified state when LSP returns undefined (not ready), and flags lspNotReady', async () => {
+    // "no signal" ≠ "negative signal". If the LSP hasn't indexed yet, we
+    // must not silently mark every node unverified — that would lie to the
+    // user and torpedo W4 prompt tuning.
+    const c = new Calibrator(makeProvider({ inFile: { 'a.cs': undefined } }));
+    const out = await c.calibrate({
+      data: { node_id: 'Foo', calls: ['Bar'] },
+      file: 'a.cs',
+      boundedContext: 'capture',
+    });
+    expect(out?.node.verification).toBe('verified');
+    expect(out?.node.verificationDetails?.lspNotReady).toBe(true);
+    expect(out?.node.verificationDetails?.reason).toMatch(/Language server/);
+    // Calls during lspNotReady are handed to the aggregator as unverified
+    // (not silently kept as in-file).
+    expect(out?.edges.find(e => e.to === 'Bar')?.verified).toBe(false);
   });
 });

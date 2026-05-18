@@ -4,9 +4,14 @@ import * as path from 'path';
 import { DEMO_GRAPH, DEMO_CHAT_TURNS } from './demo-fixture';
 import { adaptGraphForMockup, type MockupChatTurn, type MockupStats, type MockupMeta } from './graph-adapter';
 import { ReadingProgressStore } from '../persistence/reading-progress';
+import { jumpToSource } from '../editor/jump-to-source';
 import type { ClientEvent, CodeMapGraph } from '../shared/types';
 
 let currentPanel: vscode.WebviewPanel | undefined;
+// The most recent graph shown in the panel, so client messages
+// (jump_to_source, mark_read, etc.) can resolve nodeId → CodeNode without
+// re-fetching from the orchestrator.
+let currentGraph: CodeMapGraph | undefined;
 
 export async function showDemoGraph(context: vscode.ExtensionContext): Promise<void> {
   await showGraph(context, DEMO_GRAPH, DEMO_CHAT_TURNS);
@@ -48,6 +53,7 @@ export async function showGraph(
     currentPanel.reveal();
   }
 
+  currentGraph = graph;
   currentPanel.webview.html = renderHtml(context, currentPanel.webview, graph, chatTurns, stats, meta);
 }
 
@@ -59,11 +65,28 @@ function handleClientMessage(msg: ClientEvent, context: vscode.ExtensionContext)
       // is informational. We deliberately do NOT re-render here — that would
       // loop.
       return;
-    case 'jump_to_source':
-      vscode.window.showInformationMessage(
-        `jump_to_source: ${msg.nodeId}${msg.method ? '.' + msg.method : ''} (stub — implement in W4)`,
-      );
+    case 'jump_to_source': {
+      const node = currentGraph?.nodes[msg.nodeId];
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+      if (!node || !workspaceRoot) {
+        vscode.window.showWarningMessage(
+          `Cannot jump: graph not loaded or no workspace open.`,
+        );
+        return;
+      }
+      const methodInfo = msg.method
+        ? node.methods.find(m => m.name === msg.method)
+        : undefined;
+      void jumpToSource(workspaceRoot, {
+        file: node.file,
+        nodeId: node.id,
+        method: msg.method,
+        classLine: node.range.startLine,
+        methodLine: methodInfo?.line,
+        verification: node.verification,
+      });
       return;
+    }
     case 'mark_read':
       void progress.setNodeRead(msg.nodeId, msg.read);
       return;

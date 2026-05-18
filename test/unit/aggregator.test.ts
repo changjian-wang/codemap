@@ -80,7 +80,10 @@ describe('aggregate', () => {
   });
 
   it('resolves cross-file calls via workspace symbol lookup', async () => {
-    const a = R('a.ts', [N('Foo', { file: 'a.ts' })], [E('Foo', 'Bar')]);
+    // Calibrator emits verified=false for the cross-file call; aggregator
+    // upgrades because Bar is in the merged graph.
+    const a = R('a.ts', [N('Foo', { file: 'a.ts' })],
+      [{ from: 'Foo', to: 'Bar', kind: 'calls', verified: false }]);
     const b = R('b.ts', [N('Bar', { file: 'b.ts' })]);
     const { graph } = await aggregate({
       rootRequest: '', scope: 'workspace', analyses: [a, b], symbols: makeSymbols(),
@@ -89,13 +92,27 @@ describe('aggregate', () => {
   });
 
   it('marks edge unverified AND downgrades source to partial when target is unknown', async () => {
-    const a = R('a.ts', [N('Foo', { verification: 'verified' })], [E('Foo', 'Ghost')]);
+    // Calibrator emits verified=false for cross-file calls. Aggregator
+    // resolves: workspace lookup fails → keep unverified, downgrade source.
+    const a = R('a.ts', [N('Foo', { verification: 'verified' })],
+      [{ from: 'Foo', to: 'Ghost', kind: 'calls', verified: false }]);
     const { graph } = await aggregate({
       rootRequest: '', scope: 'workspace', analyses: [a], symbols: makeSymbols(),
     });
     const edge = graph.edges.find(e => e.to === 'Ghost')!;
     expect(edge.verified).toBe(false);
     expect(graph.nodes.Foo!.verification).toBe('partial');
+  });
+
+  it('upgrades verified=false cross-file edges when target found in workspace and in-graph', async () => {
+    const a = R('a.ts', [N('Foo', { file: 'a.ts' })],
+      [{ from: 'Foo', to: 'Bar', kind: 'calls', verified: false }]);
+    const b = R('b.ts', [N('Bar', { file: 'b.ts' })]);
+    const { graph } = await aggregate({
+      rootRequest: '', scope: 'workspace', analyses: [a, b], symbols: makeSymbols(),
+    });
+    expect(graph.edges).toEqual([{ from: 'Foo', to: 'Bar', kind: 'calls', verified: true }]);
+    expect(graph.nodes.Foo!.verification).toBe('verified');
   });
 
   it('dedupes parallel edges (same from/to/kind)', async () => {

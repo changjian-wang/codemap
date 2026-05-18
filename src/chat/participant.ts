@@ -1,46 +1,179 @@
 import * as vscode from 'vscode';
-import { routeChatIntent } from './intent-router';
-import { showDemoGraph } from '../webview/panel';
+import { routeChatIntent, type ChatIntent } from './intent-router';
+import { showGraph, showDemoGraph } from '../webview/panel';
+import { runOrchestrator, CancelledError } from '../orchestrator/orchestrator';
+import { createVscodeFileReader } from '../orchestrator/vscode-file-reader';
+import { VscodeSymbolProvider } from '../calibration/vscode-symbol-provider';
+import { VscodeLmClient } from '../llm/client';
+import { DEFAULT_SCAN_OPTIONS } from '../orchestrator/workspace-scanner';
+import type { MockupChatTurn } from '../webview/graph-adapter';
 
 const PARTICIPANT_ID = 'codemap.codemap';
 
 export function registerChatParticipant(context: vscode.ExtensionContext): vscode.Disposable {
-  const handler: vscode.ChatRequestHandler = async (request, _chatContext, response, token) => {
+  const handler: vscode.ChatRequestHandler = async (request, _ctx, response, token) => {
     const intent = routeChatIntent(request);
-
-    response.markdown(`👋 received intent: \`${intent.kind}\`.\n\n`);
 
     if (token.isCancellationRequested) return;
 
-    // W1 stub: any request opens the demo graph and reports progress. The
-    // real orchestrator (W2-W3) replaces this branch.
     switch (intent.kind) {
       case 'generate_workspace':
       case 'scope':
       case 'focus':
-        response.progress('Loading fixture demo graph (orchestrator pending W2-W3)…');
-        await showDemoGraph(context);
-        response.markdown(
-          '\n\nDemo graph opened in the WebView panel. Replace this branch with the real orchestrator in W2-W3.',
-        );
-        break;
+        await handleGenerate(context, intent, response, token);
+        return;
       case 'why':
+        response.markdown(
+          intent.target
+            ? `_Stub_: would explain why \`${intent.target}\` is partial/unverified. (W4 task 4.8: translate node.verificationDetails into prose.)`
+            : '_Stub_: pass a class name, e.g. `/why AskByQueryHandler`.',
+        );
+        return;
       case 'explain':
         response.markdown(
-          intent.kind === 'why'
-            ? `Stub: would explain why \`${intent.target ?? '(no target)'}\` is partial/unverified.`
-            : 'Stub: would list all unverified nodes and their reasons.',
+          '_Stub_: would list all unverified nodes in the current graph with their reasons. (W4 task 4.8.)',
         );
-        break;
+        return;
       case 'unknown':
         response.markdown(
-          'I did not recognize that command. Try: `@codemap generate workspace codemap`, `/scope <path>`, `/focus <Class>`, `/why <Class>`, `/explain unverified`.',
+          [
+            'Try one of:',
+            '- `@codemap generate codemap` — analyze the whole workspace',
+            '- `@codemap /scope <path>` — limit to a subpath',
+            '- `@codemap /focus <Class>` — re-center on a class (W4)',
+            '- `@codemap /why <Class>` — explain partial/unverified state (W4)',
+            '- `@codemap /explain unverified` — explain all unverified nodes (W4)',
+          ].join('\n'),
         );
-        break;
+        return;
     }
   };
 
   const participant = vscode.chat.createChatParticipant(PARTICIPANT_ID, handler);
   participant.iconPath = new vscode.ThemeIcon('graph');
   return participant;
+}
+
+async function handleGenerate(
+  context: vscode.ExtensionContext,
+  intent: ChatIntent,
+  response: vscode.ChatResponseStream,
+  token: vscode.CancellationToken,
+): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    response.markdown('⚠ No workspace folder open. Open a folder first, then try again.');
+    return;
+  }
+
+  const config = vscode.workspace.getConfiguration('codemap');
+  const family = config.get<string>('preferredModelFamily', 'gpt-4o');
+  const maxFiles = config.get<number>('maxSkeletonFiles', 30);
+  const maxParallel = config.get<number>('maxParallelAnalyzers', 6);
+
+  const scopePrefix = intent.kind === 'scope' && intent.target ? intent.target : undefined;
+  const rootRequest =
+    intent.kind === 'scope' && intent.target
+      ? `@codemap /scope ${intent.target}`
+      : intent.kind === 'focus' && intent.target
+        ? `@codemap /focus ${intent.target}`
+        : `@codemap ${intent.prompt}`;
+
+  response.markdown(`Analyzing workspace **\`${workspaceFolder.name}\`** with \`${family}\`...\n\n`);
+  if (scopePrefix) response.markdown(`Scope filter: \`${scopePrefix}\`\n\n`);
+
+  const chatTurns: MockupChatTurn[] = [
+    {
+      role: 'user',
+      name: 'You',
+      time: nowHHMM(),
+      content: escapeHtml(rootRequest),
+    },
+  ];
+  const actionTrace: { check: boolean; num: string; text: string }[] = [];
+
+  try {
+    const result = await runOrchestrator(
+      {
+        reader: createVscodeFileReader(workspaceFolder.uri, {
+          ...DEFAULT_SCAN_OPTIONS,
+          maxFiles,
+        }),
+        symbols: new VscodeSymbolProvider(workspaceFolder.uri),
+        llm: new VscodeLmClient(family),
+      },
+      {
+        rootRequest,
+        scope: scopePrefix ?? 'workspace',
+        scopePrefix,
+        scan: { maxFiles },
+        maxParallelAnalyzers: maxParallel,
+      },
+      {
+        onStep: msg => {
+          actionTrace.push({ check: true, num: String(actionTrace.length + 1), text: msg });
+          response.progress(msg);
+        },
+        onSkeleton: info => {
+          const txt = `Picked skeleton: ${info.skeleton.length} files (entries: ${info.entryPoints.length}, overflow: ${info.overflow.length})`;
+          actionTrace.push({ check: true, num: String(actionTrace.length + 1), text: txt });
+          response.markdown(`\n${txt}\n`);
+        },
+        onFileDone: info => {
+          if (info.error) {
+            response.markdown(`\n- ⚠ \`${info.file}\` failed: ${info.error.message}`);
+          }
+          response.progress(`Analyzing... ${info.doneCount}/${info.total}`);
+        },
+        onWarning: msg => response.markdown(`\n- ⚠ ${msg}`),
+      },
+      token,
+    );
+
+    response.markdown(
+      [
+        '',
+        `**Done in ${(result.stats.durationMs / 1000).toFixed(1)}s.** ` +
+          `${result.stats.nodeCount} classes, ${result.stats.edgeCount} edges.`,
+        `Verification: ✓ ${result.stats.verifiedCount} verified · ⚠ ${result.stats.partialCount} partial · ✗ ${result.stats.unverifiedCount} unverified.`,
+        result.graph.rootIntent ? `\n_${result.graph.rootIntent}_` : '',
+        result.graph.suggestedEntryNodes && result.graph.suggestedEntryNodes.length > 0
+          ? `Suggested reading entry: \`${result.graph.suggestedEntryNodes[0]}\``
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    );
+
+    chatTurns.push({
+      role: 'assistant',
+      name: '@codemap',
+      time: nowHHMM(),
+      content:
+        `已生成 ${result.stats.nodeCount} 个类、${result.stats.edgeCount} 条调用边。` +
+        `校准：✓${result.stats.verifiedCount} / ⚠${result.stats.partialCount} / ✗${result.stats.unverifiedCount}。耗时 ${(result.stats.durationMs / 1000).toFixed(1)}s。`,
+      actions: actionTrace,
+    });
+
+    await showGraph(context, result.graph, chatTurns);
+  } catch (err) {
+    if (err instanceof CancelledError) {
+      response.markdown('\n_Cancelled._');
+      return;
+    }
+    const e = err as Error;
+    response.markdown(`\n\n⚠ **Error**: ${e.message}\n\n_Falling back to the demo graph._`);
+    await showDemoGraph(context);
+  }
+}
+
+function nowHHMM(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, c =>
+    c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;',
+  );
 }

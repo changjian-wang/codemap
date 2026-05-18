@@ -136,24 +136,28 @@ export class Calibrator {
       range = { startLine: symbol.startLine, endLine: symbol.endLine };
     }
 
-    // ---- 2. Validate `calls` against in-file symbols. ----
-    // Per the prompt contract `calls` lists in-file class names. LLMs leak
-    // `Class.method` here regardless, so we extract the class half (first
-    // segment when dotted).
-    const droppedCalls: string[] = [];
+    // ---- 2. Sort `calls` targets into in-file (verified) vs cross-file
+    //         (unverified pending aggregator resolution).
+    //
+    // Per the v3 prompt contract `calls` is "in-file class names". LLMs leak
+    // cross-file refs here regardless, and the v3 plan explicitly says the
+    // aggregator resolves cross-file `calls` via workspace symbol lookup. So
+    // the calibrator does what it can see (in-file LSP) and hands the rest
+    // off as verified=false; the aggregator does the second-stage validation.
     const verifiedCalls: string[] = [];
+    const unverifiedCalls: string[] = [];
     for (const t of asArray(data, 'calls')) {
       if (typeof t !== 'string') continue;
       const className = t.split('.')[0]!;
       if (bestSymbolMatch(className, inFileSymbols)) {
         verifiedCalls.push(className);
       } else {
-        droppedCalls.push(t);
+        unverifiedCalls.push(className);
       }
     }
-    if (droppedCalls.length > 0 && verification === 'verified') {
-      verification = 'partial';
-    }
+    // droppedCalls stays empty at the calibrator layer; the aggregator
+    // populates it on its side when workspace lookup also fails.
+    const droppedCalls: string[] = [];
 
     // ---- 3. Soft-validate `external_calls` against the workspace. ----
     // W2 scope: we keep every external_call as an edge candidate but try a
@@ -210,6 +214,12 @@ export class Calibrator {
         to,
         kind: 'calls',
         verified: true,
+      })),
+      ...unverifiedCalls.map<CodeEdge>(to => ({
+        from: nodeId,
+        to,
+        kind: 'calls',
+        verified: false,
       })),
       ...verifiedExternal.map<CodeEdge>(to => ({
         from: nodeId,

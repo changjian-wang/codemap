@@ -65,7 +65,10 @@ describe('Calibrator', () => {
     expect(out?.node.verificationDetails?.rangeAdjusted).toBe(false);
   });
 
-  it('drops calls targets not present in the file and downgrades to partial', async () => {
+  it('emits cross-file calls as verified=false edges (aggregator resolves them later)', async () => {
+    // Cross-file calls are no longer dropped at the calibrator layer — the
+    // aggregator does workspace symbol lookup and either promotes the edge to
+    // verified or leaves it unverified and downgrades the source to partial.
     const c = new Calibrator(
       makeProvider({
         inFile: {
@@ -74,14 +77,15 @@ describe('Calibrator', () => {
       }),
     );
     const out = await c.calibrate({
-      data: { node_id: 'Foo', calls: ['Bar', 'GhostClass'] },
+      data: { node_id: 'Foo', calls: ['Bar', 'CrossFileClass'] },
       file: 'a.cs',
       boundedContext: 'capture',
     });
-    expect(out?.node.verification).toBe('partial');
-    expect(out?.node.verificationDetails?.droppedCalls).toEqual(['GhostClass']);
-    // Only the verified call survives as an edge.
-    expect(out?.edges.map(e => e.to)).toEqual(['Bar']);
+    expect(out?.node.verification).toBe('verified');          // calibrator doesn't downgrade
+    expect(out?.node.verificationDetails?.droppedCalls).toEqual([]);
+    const edges = out!.edges;
+    expect(edges.find(e => e.to === 'Bar')?.verified).toBe(true);
+    expect(edges.find(e => e.to === 'CrossFileClass')?.verified).toBe(false);
   });
 
   it('emits external_calls as ext: edges regardless of workspace symbol presence', async () => {
@@ -107,7 +111,7 @@ describe('Calibrator', () => {
     ]);
   });
 
-  it('honours dotted call targets (e.g. "Util.helper" → "helper")', async () => {
+  it('honours dotted call targets (e.g. "Util.helper" → "Util")', async () => {
     const c = new Calibrator(
       makeProvider({
         inFile: {
@@ -120,9 +124,9 @@ describe('Calibrator', () => {
       file: 'a.cs',
       boundedContext: 'capture',
     });
-    // Both kept (Util matched), no drops.
     expect(out?.node.verification).toBe('verified');
     expect(out?.edges[0]!.to).toBe('Util');
+    expect(out?.edges[0]!.verified).toBe(true);
   });
 
   it('filters invalid risk types out', async () => {

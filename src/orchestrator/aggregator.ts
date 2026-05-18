@@ -88,20 +88,24 @@ export async function aggregate(input: AggregateInput): Promise<AggregateResult>
         externalEdges.push(e);
         continue;
       }
-      if (nodeIdSet.has(e.to)) {
-        // In-graph target — pass through unchanged.
+      if (e.verified) {
+        // Calibrator already confirmed this is in-file; pass through.
         pushEdge(e);
         continue;
       }
-      // Cross-file: ask the workspace.
+      // verified=false: calibrator couldn't see the target in-file. Try
+      // workspace symbol lookup. Found and in-graph → upgrade to verified;
+      // otherwise leave unverified AND downgrade source node to partial.
+      if (nodeIdSet.has(e.to)) {
+        pushEdge({ ...e, verified: true });
+        continue;
+      }
       const hits = await symbols.findInWorkspace(e.to, 5);
       const exact = hits.find(h => h.name === e.to);
       if (exact && nodeIdSet.has(exact.name)) {
         pushEdge({ from: e.from, to: exact.name, kind: 'calls', verified: true });
         continue;
       }
-      // The class may be elsewhere in the workspace but outside the skeleton
-      // we analyzed. We surface the edge but flag it unverified.
       pushEdge({ from: e.from, to: e.to, kind: 'calls', verified: false });
       const node = nodesById.get(e.from);
       if (node && node.verification === 'verified') {

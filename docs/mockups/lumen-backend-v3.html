@@ -807,11 +807,19 @@
 cytoscape.use(cytoscapeDagre);
 
 /* ============================================================
+/* ============================================================
  *  CodeMap v3 — Real Lumen backend snapshot
  *  Source: apps/api/src (173 .cs files, scanned 2026-05-18)
+ *
+ *  Data binding: when the extension hosts this page it injects
+ *  window.__CODEMAP_DATA__ = { classes, externalDeps, edges, chatTurns }
+ *  before this script runs. Standalone browser use falls back to the
+ *  hardcoded constants below.
  * ============================================================ */
 
-const CLASSES = [
+const __INJ = (typeof window !== 'undefined' && window.__CODEMAP_DATA__) || {};
+
+const CLASSES = __INJ.classes || [
   // ---- Host (entry) ----
   {
     id: 'Program', bc: 'host',
@@ -1036,7 +1044,7 @@ const CLASSES = [
   },
 ];
 
-const EXTERNAL_DEPS = [
+const EXTERNAL_DEPS = __INJ.externalDeps || [
   { name: 'Dawning.ORM.Dapper',                       kind: 'package' },
   { name: 'Npgsql.EntityFrameworkCore.PostgreSQL',    kind: 'package' },
   { name: 'Pgvector',                                  kind: 'package' },
@@ -1046,7 +1054,7 @@ const EXTERNAL_DEPS = [
   { name: 'ReverseMarkdown',                           kind: 'package' },
 ];
 
-const EDGES = [
+const EDGES = __INJ.edges || [
   // Host wiring
   { from: 'Program',                to: 'CaptureEndpoints',       kind: 'calls',          verified: true },
   { from: 'Program',                to: 'RecallEndpoints',        kind: 'calls',          verified: true },
@@ -1628,7 +1636,7 @@ function renderRaw(c) {
 }
 
 // ---------- Chat history (Lumen-specific narrative) ----------
-const CHAT_TURNS = [
+const CHAT_TURNS = __INJ.chatTurns || [
   {
     role: 'user', name: 'You', time: '14:02',
     content: '帮我生成 <span class="ref-chip">lumen</span> 后端 (apps/api) 的 codemap',

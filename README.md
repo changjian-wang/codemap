@@ -2,7 +2,7 @@
 
 > Interactive call graph + reading guidance for AI-generated code, packaged as a VS Code extension.
 
-**Status**: pre-implementation. Product form is locked via the v3 mockup; development plan is being rewritten for repo-level scope.
+**Status**: pre-implementation. Product form is locked via the [v3 mockup](docs/mockups/lumen-backend-v3.html); the [v3 development plan](docs/plan/development-plan-v3-repo-level.md) is the active source of truth.
 
 ## Product shape (v3, locked 2026-05-18)
 
@@ -19,14 +19,15 @@ See [`docs/mockups/lumen-backend-v3.html`](docs/mockups/lumen-backend-v3.html) f
 ```
 codemap/
 ├── docs/
-│   ├── mockups/                  # canonical UI references (HTML)
-│   │   ├── lumen-backend-v3.html
+│   ├── mockups/                                       # canonical UI references
+│   │   ├── lumen-backend-v3.html                       # ← product baseline
 │   │   └── generic-repo-v3.html
 │   ├── plan/
-│   │   └── development-plan-v2-single-file.md   # superseded; v3 rewrite pending
-│   └── adrs/                     # to be added
-├── src/                          # to be scaffolded
-└── eval/                         # golden samples + score.ts
+│   │   ├── development-plan-v3-repo-level.md           # ← active plan
+│   │   └── development-plan-v2-single-file.md          # superseded
+│   └── adrs/                                          # to be added (4 core ADRs)
+├── src/                                               # to be scaffolded (W1)
+└── eval/                                              # golden samples + score.ts (W2)
 ```
 
 ## Tech stack
@@ -39,10 +40,13 @@ codemap/
 
 ## Next steps
 
-1. Rewrite the development plan for repo-level scope (supersedes the v2 single-file plan)
-2. Scaffold the `yo code` skeleton, hook up `vscode.lm`
-3. Build the workspace scanner (file BFS + LSP cross-file resolution)
-4. Set up `eval/` golden samples scored on lumen-style mid-size repos
+Follow the 5-week schedule in [`docs/plan/development-plan-v3-repo-level.md`](docs/plan/development-plan-v3-repo-level.md):
+
+1. **W1** — scaffold extension + chat participant + WebView UI mirroring the v3 mockup, fed by fixture data
+2. **W2** — workspace scanner, single-file analyzer, calibrator
+3. **W3** — aggregator + cross-file edges, real `@codemap` end-to-end on lumen
+4. **W4** — eval, prompt tuning, chat commands (`/scope`, `/focus`, `/why partial X`, `/explain unverified`)
+5. **W5** — polish, ADRs, `.vsix`, internal beta
 
 ## License
 

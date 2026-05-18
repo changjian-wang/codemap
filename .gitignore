@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# build output
+dist/
+out/
+*.vsix
+
+# editor / OS
+.DS_Store
+.vscode/*.log
+*.swp
+.idea/
+
+# logs
+*.log
+npm-debug.log*
+
+# testing / eval runs
+eval/runs/
+coverage/

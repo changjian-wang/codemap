@@ -1,0 +1,1542 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>CodeMap — 效果示意 v3（Repo / Chat-first / UML）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+  <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+
+  <style>
+    :root {
+      --vs-bg:        #1e1e1e;
+      --vs-bg-panel:  #252526;
+      --vs-bg-side:   #2d2d30;
+      --vs-bg-deep:   #181818;
+      --vs-border:    #3c3c3c;
+      --vs-border-soft: #2a2a2a;
+      --vs-text:      #cccccc;
+      --vs-text-dim:  #858585;
+      --vs-accent:    #007acc;
+      --vs-link:      #4ec9b0;
+      --vs-warn:      #d7ba7d;
+      --vs-err:       #f48771;
+
+      --risk-security:    #e06c75;
+      --risk-io:          #e5c07b;
+      --risk-low-conf:    #d19a66;
+      --risk-coupling:    #c678dd;
+      --risk-missing:     #abb2bf;
+
+      --ver-verified:   #98c379;
+      --ver-partial:    #d19a66;
+      --ver-unverified: #5c5c5c;
+
+      --edge-calls:    #61afef;
+      --edge-external: #56b6c2;
+
+      --bc-capture:  #4ec9b0;
+      --bc-recall:   #c586c0;
+      --bc-arch:     #dcdcaa;
+      --bc-shared:   #569cd6;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    body {
+      background: var(--vs-bg);
+      color: var(--vs-text);
+      font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 13px;
+      overflow: hidden;
+    }
+    code, .mono { font-family: "Consolas", "Cascadia Code", "Source Code Pro", monospace; }
+
+    .app {
+      display: grid;
+      grid-template-rows: 38px 1fr 200px 24px;
+      height: 100vh;
+    }
+    .app.chat-collapsed { grid-template-rows: 38px 1fr 38px 24px; }
+
+    /* ====== TOOLBAR ====== */
+    .toolbar {
+      background: var(--vs-bg-panel);
+      border-bottom: 1px solid var(--vs-border);
+      display: flex; align-items: center;
+      padding: 0 12px; gap: 10px;
+    }
+    .toolbar .brand {
+      font-weight: 600; color: #fff; letter-spacing: 0.3px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .toolbar .brand .logo {
+      width: 20px; height: 20px; border-radius: 4px;
+      background: linear-gradient(135deg, var(--vs-accent), var(--vs-link));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; color: #fff; font-weight: 700;
+    }
+    .repo-pill {
+      background: var(--vs-bg-deep);
+      padding: 4px 10px; border-radius: 3px;
+      font-size: 11.5px; color: var(--vs-text-dim);
+      border: 1px solid var(--vs-border-soft);
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .repo-pill .repo-name { color: #d4d4d4; font-weight: 500; }
+    .scope-pill {
+      background: rgba(0,122,204,0.18);
+      color: #9cdcfe; padding: 3px 8px; border-radius: 10px;
+      font-size: 10.5px; font-weight: 600;
+      border: 1px solid rgba(0,122,204,0.4);
+    }
+    .toolbar .spacer { flex: 1; }
+
+    .tb-group { display: flex; align-items: center; gap: 6px; }
+    .tb-btn {
+      background: transparent; border: 1px solid transparent;
+      color: var(--vs-text); padding: 4px 10px;
+      font-size: 12px; border-radius: 3px; cursor: pointer;
+      font-family: inherit;
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    .tb-btn:hover { background: rgba(255,255,255,0.06); border-color: var(--vs-border); }
+    .tb-btn.primary { background: var(--vs-accent); color: #fff; }
+    .tb-btn.primary:hover { background: #1f8acc; }
+    .tb-btn .kbd {
+      background: rgba(0,0,0,0.4); padding: 1px 5px; font-size: 10px;
+      border-radius: 2px; color: var(--vs-text-dim); margin-left: 2px;
+      font-family: "Consolas", monospace;
+    }
+    .tb-select {
+      background: var(--vs-bg-deep); color: var(--vs-text);
+      border: 1px solid var(--vs-border); padding: 3px 6px;
+      font-size: 12px; border-radius: 3px; font-family: inherit;
+    }
+    .tb-search {
+      background: var(--vs-bg-deep); border: 1px solid var(--vs-border);
+      color: var(--vs-text); padding: 4px 8px 4px 26px;
+      border-radius: 3px; font-size: 12px; width: 180px;
+      font-family: inherit;
+      background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%23858585" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>');
+      background-repeat: no-repeat; background-position: 7px center;
+    }
+    .tb-search:focus { outline: 1px solid var(--vs-accent); border-color: var(--vs-accent); }
+
+    /* ====== BODY ====== */
+    .body {
+      display: grid; grid-template-columns: 260px 1fr 380px;
+      overflow: hidden; min-height: 0;
+    }
+
+    /* ====== OUTLINE ====== */
+    .outline {
+      background: var(--vs-bg-side);
+      border-right: 1px solid var(--vs-border);
+      overflow-y: auto;
+      display: flex; flex-direction: column;
+    }
+    .outline-header {
+      padding: 8px 12px; font-size: 10.5px;
+      letter-spacing: 0.5px; color: var(--vs-text-dim);
+      text-transform: uppercase; font-weight: 600;
+      display: flex; justify-content: space-between;
+      border-bottom: 1px solid var(--vs-border-soft);
+      background: var(--vs-bg-panel);
+    }
+    .outline-section { padding: 4px 0 12px; }
+    .outline-section-title {
+      padding: 8px 12px 4px; font-size: 10.5px;
+      color: var(--vs-text-dim); text-transform: uppercase;
+      letter-spacing: 0.4px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .bc-group {
+      padding: 3px 12px 1px; font-size: 10.5px;
+      color: var(--vs-text-dim); text-transform: uppercase;
+      letter-spacing: 0.4px; margin-top: 8px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .bc-dot { width: 8px; height: 8px; border-radius: 2px; }
+    .bc-dot.capture { background: var(--bc-capture); }
+    .bc-dot.recall  { background: var(--bc-recall); }
+    .bc-dot.arch    { background: var(--bc-arch); }
+    .bc-dot.shared  { background: var(--bc-shared); }
+
+    .outline-item {
+      padding: 5px 10px 5px 18px;
+      display: flex; align-items: center; gap: 7px;
+      cursor: pointer; font-size: 12px; line-height: 1.4;
+      border-left: 2px solid transparent;
+    }
+    .outline-item:hover { background: rgba(255,255,255,0.04); }
+    .outline-item.active {
+      background: rgba(0,122,204,0.18); border-left-color: var(--vs-accent);
+    }
+    .outline-priority {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 18px; height: 18px;
+      background: var(--vs-accent); color: #fff;
+      font-size: 10px; font-weight: 700; border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .outline-priority.unverified { background: var(--ver-unverified); }
+    .outline-name {
+      flex: 1; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font-family: "Consolas", monospace; font-size: 11.5px;
+    }
+    .outline-name.read    { color: var(--vs-text-dim); text-decoration: line-through; }
+    .outline-name.unverified { color: var(--vs-text-dim); font-style: italic; }
+    .outline-icons { display: flex; gap: 3px; flex-shrink: 0; align-items: center; }
+    .icon-dot { width: 6px; height: 6px; border-radius: 50%; }
+    .icon-dot.security    { background: var(--risk-security); }
+    .icon-dot.external_io { background: var(--risk-io); }
+    .icon-dot.low_confidence { background: var(--risk-low-conf); }
+    .icon-dot.missing_test   { background: var(--risk-missing); }
+    .icon-dot.high_coupling  { background: var(--risk-coupling); }
+    .v-icon { font-size: 10px; }
+    .v-icon.verified   { color: var(--ver-verified); }
+    .v-icon.partial    { color: var(--ver-partial); }
+    .v-icon.unverified { color: var(--vs-text-dim); }
+
+    /* ====== GRAPH ====== */
+    .graph-pane {
+      position: relative;
+      background:
+        radial-gradient(circle at 50% 50%, rgba(255,255,255,0.018) 1px, transparent 1px) 0 0 / 22px 22px,
+        var(--vs-bg);
+      overflow: hidden;
+    }
+    #cy { width: 100%; height: 100%; }
+
+    .filter-bar {
+      position: absolute; top: 12px; left: 12px;
+      display: flex; gap: 6px;
+      z-index: 70; flex-wrap: wrap;
+      max-width: calc(100% - 220px);
+    }
+    .chip {
+      background: var(--vs-bg-panel);
+      border: 1px solid var(--vs-border);
+      color: var(--vs-text);
+      padding: 3px 8px; border-radius: 11px;
+      font-size: 11px; cursor: pointer; user-select: none;
+      display: inline-flex; align-items: center; gap: 4px;
+    }
+    .chip:hover { border-color: var(--vs-accent); }
+    .chip.active {
+      background: var(--vs-accent); border-color: var(--vs-accent); color: #fff;
+    }
+    .chip.bc-chip { padding-left: 4px; }
+    .chip .bc-marker {
+      width: 12px; height: 12px; border-radius: 3px;
+    }
+
+    .loading-overlay {
+      position: absolute; top: 16px; left: 50%;
+      transform: translateX(-50%);
+      background: var(--vs-bg-panel);
+      border: 1px solid var(--vs-border);
+      border-radius: 20px;
+      padding: 6px 14px; font-size: 12px;
+      display: none; align-items: center; gap: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4); z-index: 100;
+    }
+    .loading-overlay.visible { display: flex; }
+    .spinner {
+      width: 12px; height: 12px;
+      border: 2px solid var(--vs-border);
+      border-top-color: var(--vs-link);
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-overlay .cancel-btn {
+      background: transparent; border: 1px solid var(--vs-border);
+      color: var(--vs-text-dim); border-radius: 3px;
+      padding: 1px 6px; font-size: 11px; cursor: pointer;
+      margin-left: 4px; font-family: inherit;
+    }
+
+    .minimap {
+      position: absolute; right: 12px; bottom: 12px;
+      width: 200px; height: 130px;
+      background: rgba(24,24,24,0.7);
+      border: 1px solid var(--vs-border);
+      border-radius: 3px;
+      backdrop-filter: blur(6px);
+      z-index: 80; overflow: hidden;
+    }
+    .minimap .mm-title {
+      position: absolute; top: 3px; left: 6px;
+      font-size: 9px; color: var(--vs-text-dim);
+      text-transform: uppercase; letter-spacing: 0.4px;
+      pointer-events: none;
+    }
+    #minimap-canvas { width: 100%; height: 100%; display: block; }
+
+    /* ====== CARD ====== */
+    .card-pane {
+      background: var(--vs-bg-side);
+      border-left: 1px solid var(--vs-border);
+      display: flex; flex-direction: column;
+      min-height: 0;
+    }
+    .card-tabs {
+      display: flex; border-bottom: 1px solid var(--vs-border);
+      background: var(--vs-bg-panel); flex-shrink: 0;
+    }
+    .card-tab {
+      padding: 8px 14px; font-size: 11.5px; cursor: pointer;
+      color: var(--vs-text-dim);
+      border-bottom: 2px solid transparent;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .card-tab.active { color: #fff; border-bottom-color: var(--vs-accent); }
+    .card-tab:hover { color: var(--vs-text); }
+    .card-tab .count {
+      background: var(--vs-bg-deep);
+      padding: 0 5px; border-radius: 8px;
+      font-size: 10px; color: var(--vs-text-dim);
+    }
+    .card-body {
+      flex: 1; overflow-y: auto;
+      padding: 14px 16px 16px;
+    }
+
+    .card-empty {
+      color: var(--vs-text-dim); text-align: center;
+      padding: 60px 12px; font-size: 12px; line-height: 1.7;
+    }
+    .card h3 {
+      margin: 0 0 6px; font-size: 14px; color: #fff;
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    }
+    .card .kind-tag {
+      font-size: 10px; background: var(--vs-accent);
+      color: #fff; padding: 2px 6px; border-radius: 3px;
+      font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .card .bc-tag {
+      font-size: 10px; padding: 2px 6px; border-radius: 3px;
+      font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .card .bc-tag.capture { background: var(--bc-capture); color: #1e1e1e; }
+    .card .bc-tag.recall  { background: var(--bc-recall);  color: #1e1e1e; }
+    .card .bc-tag.arch    { background: var(--bc-arch);    color: #1e1e1e; }
+    .card .bc-tag.shared  { background: var(--bc-shared);  color: #fff; }
+    .card .file-line {
+      color: var(--vs-text-dim); font-size: 11px;
+      font-family: "Consolas", monospace; margin-bottom: 12px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .card .file-line a {
+      color: var(--vs-link); text-decoration: none; cursor: pointer;
+    }
+    .card .file-line a:hover { text-decoration: underline; }
+    .card .intent {
+      background: rgba(78, 201, 176, 0.06);
+      border-left: 3px solid var(--vs-link);
+      padding: 8px 12px; margin-bottom: 12px;
+      line-height: 1.6; color: #fff; font-size: 13px;
+    }
+    .card-row {
+      display: flex; margin-bottom: 8px;
+      font-size: 12px; line-height: 1.5;
+    }
+    .card-row .k { width: 84px; color: var(--vs-text-dim); flex-shrink: 0; }
+    .card-row .v { flex: 1; }
+    .conf-bar {
+      display: inline-block; width: 90px; height: 5px;
+      background: var(--vs-border); border-radius: 3px;
+      overflow: hidden; vertical-align: middle; margin-right: 8px;
+    }
+    .conf-bar > div { height: 100%; background: var(--ver-verified); }
+
+    .method-list {
+      margin: 6px 0 12px;
+      background: var(--vs-bg-deep);
+      border: 1px solid var(--vs-border-soft);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .method-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--vs-border-soft);
+      font-family: "Consolas", monospace; font-size: 11.5px;
+      cursor: pointer;
+    }
+    .method-row:last-child { border-bottom: none; }
+    .method-row:hover { background: rgba(255,255,255,0.03); }
+    .method-row .m-vis { color: var(--vs-text-dim); width: 8px; flex-shrink: 0; }
+    .method-row .m-name { color: #dcdcaa; flex: 1; }
+    .method-row .m-name.read { color: var(--vs-text-dim); text-decoration: line-through; }
+    .method-row .m-icons { display: flex; gap: 3px; align-items: center; flex-shrink: 0; }
+    .method-row .m-line  { color: var(--vs-text-dim); font-size: 10px; }
+    .method-row .m-jump  {
+      color: var(--vs-text-dim); cursor: pointer; font-size: 11px;
+      padding: 1px 4px; border-radius: 3px;
+    }
+    .method-row .m-jump:hover { background: rgba(0,122,204,0.2); color: #fff; }
+    .method-row.unverified .m-name {
+      color: var(--vs-text-dim); font-style: italic;
+    }
+
+    .risk-pill {
+      display: inline-block; font-size: 11px;
+      padding: 2px 7px; border-radius: 10px;
+      margin: 2px 4px 2px 0; background: rgba(255,255,255,0.04);
+    }
+    .risk-pill.security    { color: var(--risk-security); border: 1px solid rgba(224,108,117,0.4); }
+    .risk-pill.external_io { color: var(--risk-io);       border: 1px solid rgba(229,192,123,0.4); }
+    .risk-pill.low_confidence { color: var(--risk-low-conf); border: 1px solid rgba(209,154,102,0.4); }
+    .risk-pill.high_coupling  { color: var(--risk-coupling); border: 1px solid rgba(198,120,221,0.4); }
+    .risk-pill.missing_test   { color: var(--risk-missing);  border: 1px solid rgba(171,178,191,0.4); }
+
+    .ver-block {
+      margin-top: 12px; padding: 10px 12px;
+      background: rgba(255,255,255,0.025); border-radius: 4px;
+      border-left: 3px solid var(--ver-verified);
+      font-size: 11px; line-height: 1.6;
+    }
+    .ver-block.partial    { border-left-color: var(--ver-partial); }
+    .ver-block.unverified { border-left-color: var(--ver-unverified); background: rgba(92,92,92,0.06); }
+    .ver-block .ver-title { font-weight: 600; margin-bottom: 4px; color: var(--ver-verified); }
+    .ver-block.partial    .ver-title { color: var(--ver-partial); }
+    .ver-block.unverified .ver-title { color: var(--vs-warn); }
+    .ver-block .ver-meta { color: var(--vs-text-dim); font-size: 11px; }
+    .ver-block code {
+      font-family: "Consolas", monospace;
+      background: rgba(0,0,0,0.25); padding: 1px 5px;
+      border-radius: 3px; color: #d4d4d4;
+    }
+
+    .related-list { list-style: none; padding: 0; margin: 4px 0 0; }
+    .related-list li {
+      padding: 4px 0; font-family: "Consolas", monospace;
+      font-size: 11px; cursor: pointer; color: var(--vs-link);
+    }
+    .related-list li:hover { text-decoration: underline; }
+    .related-list li .arrow { color: var(--vs-text-dim); margin-right: 6px; }
+    .related-list li.external { color: var(--edge-external); }
+
+    .actions {
+      margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap;
+    }
+    .btn {
+      background: var(--vs-accent); color: #fff; border: none;
+      padding: 6px 12px; font-size: 12px; border-radius: 3px;
+      cursor: pointer; font-family: inherit;
+    }
+    .btn:hover { background: #1f8acc; }
+    .btn.ghost {
+      background: transparent; border: 1px solid var(--vs-border); color: var(--vs-text);
+    }
+    .btn.ghost:hover { background: rgba(255,255,255,0.04); }
+
+    /* ====== CHAT PANE ====== */
+    .chat-pane {
+      background: var(--vs-bg-panel);
+      border-top: 1px solid var(--vs-border);
+      display: flex; flex-direction: column;
+      min-height: 0; overflow: hidden;
+    }
+    .chat-header {
+      flex-shrink: 0;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--vs-border-soft);
+      display: flex; align-items: center; gap: 10px;
+      font-size: 11.5px; color: var(--vs-text-dim);
+      cursor: pointer; user-select: none;
+    }
+    .chat-header:hover { background: rgba(255,255,255,0.02); }
+    .chat-header .chat-title {
+      color: var(--vs-link); font-weight: 600;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .chat-header .chat-title .chat-icon {
+      width: 14px; height: 14px; border-radius: 3px;
+      background: linear-gradient(135deg, var(--vs-accent), var(--vs-link));
+      display: inline-flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 9px; font-weight: 700;
+    }
+    .chat-header .chat-summary {
+      flex: 1; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      color: var(--vs-text-dim);
+    }
+    .chat-header .chat-summary code {
+      color: var(--ver-verified); background: rgba(152, 195, 121, 0.08);
+      padding: 1px 5px; border-radius: 3px; font-size: 10.5px;
+    }
+    .chat-header .turn-count {
+      background: var(--vs-bg-deep);
+      padding: 1px 8px; border-radius: 10px;
+      font-size: 10px; color: var(--vs-text-dim);
+    }
+    .chat-header .toggle-arrow {
+      transition: transform 0.2s; font-size: 10px;
+    }
+    .app.chat-collapsed .chat-header .toggle-arrow { transform: rotate(-90deg); }
+
+    .chat-body {
+      flex: 1; display: flex; flex-direction: column; min-height: 0;
+    }
+    .app.chat-collapsed .chat-body { display: none; }
+
+    .chat-history {
+      flex: 1; overflow-y: auto;
+      padding: 8px 14px; font-size: 12.5px; line-height: 1.55;
+    }
+    .chat-turn {
+      display: flex; gap: 10px; margin-bottom: 10px;
+    }
+    .chat-turn .avatar {
+      width: 22px; height: 22px; border-radius: 3px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700; color: #fff;
+      flex-shrink: 0;
+    }
+    .chat-turn.user .avatar {
+      background: linear-gradient(135deg, #4a90e2, #357abd);
+    }
+    .chat-turn.assistant .avatar {
+      background: linear-gradient(135deg, var(--vs-accent), var(--vs-link));
+    }
+    .chat-turn .turn-body { flex: 1; min-width: 0; }
+    .chat-turn .turn-meta {
+      font-size: 10.5px; color: var(--vs-text-dim);
+      margin-bottom: 2px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .chat-turn .turn-meta .role { color: #fff; font-weight: 600; }
+    .chat-turn .turn-content { color: var(--vs-text); }
+    .chat-turn .turn-content code {
+      font-family: "Consolas", monospace;
+      background: rgba(0,0,0,0.3); padding: 1px 5px;
+      border-radius: 3px; color: #d4d4d4; font-size: 11.5px;
+    }
+    .chat-turn .turn-content .ref-chip {
+      display: inline-block;
+      background: rgba(78, 201, 176, 0.12);
+      border: 1px solid rgba(78, 201, 176, 0.3);
+      color: var(--vs-link);
+      padding: 1px 6px; border-radius: 3px;
+      font-family: "Consolas", monospace; font-size: 11px;
+      cursor: pointer; margin: 0 2px;
+    }
+    .chat-turn .turn-content .ref-chip:hover {
+      background: rgba(78, 201, 176, 0.25);
+    }
+    .chat-turn .action-trace {
+      margin-top: 6px; padding: 6px 10px;
+      background: rgba(0,0,0,0.25); border-radius: 4px;
+      font-family: "Consolas", monospace; font-size: 11px;
+      color: var(--vs-text-dim); line-height: 1.7;
+      border-left: 2px solid var(--vs-border);
+    }
+    .chat-turn .action-trace .step {
+      display: flex; align-items: center; gap: 6px;
+    }
+    .chat-turn .action-trace .step .check { color: var(--ver-verified); }
+    .chat-turn .action-trace .step .num    { color: var(--vs-accent); }
+
+    .chat-input-row {
+      flex-shrink: 0;
+      padding: 8px 14px 10px;
+      display: flex; gap: 8px; align-items: center;
+      border-top: 1px solid var(--vs-border-soft);
+      background: var(--vs-bg-panel);
+    }
+    .chat-input-row .at-mention {
+      background: rgba(78, 201, 176, 0.12);
+      border: 1px solid rgba(78, 201, 176, 0.3);
+      color: var(--vs-link);
+      padding: 3px 8px; border-radius: 3px;
+      font-family: "Consolas", monospace; font-size: 11.5px;
+      flex-shrink: 0;
+    }
+    .chat-input {
+      flex: 1; background: var(--vs-bg-deep);
+      border: 1px solid var(--vs-border);
+      color: var(--vs-text);
+      padding: 6px 10px; border-radius: 3px;
+      font-size: 12.5px; font-family: inherit;
+      outline: none;
+    }
+    .chat-input:focus { border-color: var(--vs-accent); }
+    .chat-send {
+      background: var(--vs-accent); color: #fff; border: none;
+      padding: 6px 14px; border-radius: 3px; cursor: pointer;
+      font-family: inherit; font-size: 12px;
+    }
+    .chat-send:hover { background: #1f8acc; }
+    .chat-quick {
+      display: flex; gap: 6px; margin-top: 6px; padding: 0 14px 6px;
+      flex-shrink: 0; flex-wrap: wrap;
+    }
+    .quick-chip {
+      background: var(--vs-bg-deep);
+      border: 1px solid var(--vs-border-soft);
+      color: var(--vs-text-dim);
+      padding: 2px 8px; border-radius: 10px;
+      font-size: 10.5px; cursor: pointer;
+    }
+    .quick-chip:hover { color: var(--vs-text); border-color: var(--vs-border); }
+
+    /* ====== STATUSBAR ====== */
+    .statusbar {
+      background: var(--vs-accent); color: #fff;
+      font-size: 11px;
+      display: flex; align-items: center;
+      padding: 0 8px; gap: 14px;
+    }
+    .statusbar .sb-item { display: inline-flex; align-items: center; gap: 4px; }
+    .statusbar .sb-progress { display: flex; align-items: center; gap: 6px; }
+    .statusbar .sb-progress .bar {
+      width: 70px; height: 4px;
+      background: rgba(255,255,255,0.25);
+      border-radius: 2px; overflow: hidden;
+    }
+    .statusbar .sb-progress .bar > div { height: 100%; background: #fff; }
+    .statusbar .spacer { flex: 1; }
+    .statusbar .ver-pill {
+      padding: 1px 6px; border-radius: 8px; font-weight: 600;
+      background: rgba(255,255,255,0.15);
+    }
+    .statusbar .score-pill {
+      padding: 1px 6px; border-radius: 8px;
+      background: rgba(0,0,0,0.25);
+    }
+    .statusbar .score-pill .label { color: rgba(255,255,255,0.65); margin-right: 4px; }
+
+    /* ====== CYTOSCAPE NODE STYLES (UML) ======
+       Class nodes are rendered as multi-line label rectangles.
+       First line = class name + verification glyph
+       Following lines = method signatures, prefixed by "+ " / "- "
+       Color of border = bounded context, line-style = verification
+    */
+  </style>
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <!-- ==== TOOLBAR ==== -->
+  <div class="toolbar">
+    <div class="brand">
+      <span class="logo">CM</span>
+      <span>CodeMap</span>
+    </div>
+    <div class="repo-pill">
+      📂 <span class="repo-name">lumen</span>
+      <span style="color:var(--vs-text-dim); margin-left:4px;">· 487 files · 12.4k LOC</span>
+    </div>
+    <div class="scope-pill">📦 WORKSPACE</div>
+
+    <div class="spacer"></div>
+
+    <div class="tb-group">
+      <label style="color:rgba(255,255,255,0.6); font-size:11px;">Model:</label>
+      <select class="tb-select" id="modelSelect">
+        <option>claude-3.5-sonnet</option>
+        <option>gpt-4o</option>
+        <option>o1</option>
+      </select>
+    </div>
+
+    <button class="tb-btn primary" id="analyzeBtn">▶ Re-Analyze <span class="kbd">⌘⇧A</span></button>
+    <button class="tb-btn" id="resetBtn">↺ Reset Progress</button>
+
+    <input class="tb-search" id="searchInput" placeholder="Search class or method..." />
+  </div>
+
+  <!-- ==== BODY ==== -->
+  <div class="body">
+
+    <div class="outline" id="outline">
+      <div class="outline-header">
+        <span>Workspace Outline</span>
+        <span class="mono" id="outlineCount">12 classes · 47 methods</span>
+      </div>
+
+      <div class="outline-section">
+        <div class="outline-section-title">
+          <span>Reading Order</span>
+          <span style="color:rgba(255,255,255,0.4); cursor:pointer" title="Reset progress" id="outlineReset">↺</span>
+        </div>
+
+        <div class="bc-group"><span class="bc-dot capture"></span>Capture</div>
+        <div id="outlineCapture"></div>
+
+        <div class="bc-group"><span class="bc-dot recall"></span>Recall</div>
+        <div id="outlineRecall"></div>
+
+        <div class="bc-group"><span class="bc-dot arch"></span>Architecture</div>
+        <div id="outlineArch"></div>
+
+        <div class="bc-group"><span class="bc-dot shared"></span>Shared / Infrastructure</div>
+        <div id="outlineShared"></div>
+      </div>
+
+      <div class="outline-section" style="border-top: 1px solid var(--vs-border-soft); margin-top: 4px;">
+        <div class="outline-section-title">
+          <span>External Deps</span>
+          <span class="mono" id="extCount">6</span>
+        </div>
+        <div id="externalList"></div>
+      </div>
+    </div>
+
+    <div class="graph-pane">
+      <div class="filter-bar">
+        <div class="chip active bc-chip" data-bc="all"><span class="bc-marker" style="background:linear-gradient(135deg,var(--bc-capture),var(--bc-recall),var(--bc-arch));"></span>All</div>
+        <div class="chip bc-chip" data-bc="capture"><span class="bc-marker" style="background:var(--bc-capture);"></span>Capture</div>
+        <div class="chip bc-chip" data-bc="recall"><span class="bc-marker" style="background:var(--bc-recall);"></span>Recall</div>
+        <div class="chip bc-chip" data-bc="arch"><span class="bc-marker" style="background:var(--bc-arch);"></span>Arch</div>
+        <div class="chip" data-filter="hide-read">○ Hide read</div>
+        <div class="chip" data-filter="only-unverified">⚠ Unverified only</div>
+        <div class="chip" data-filter="hide-external">⊘ Hide external</div>
+      </div>
+
+      <div class="loading-overlay" id="loading">
+        <div class="spinner"></div>
+        <span id="loadingText">Analyzing... 8/12 classes</span>
+        <button class="cancel-btn" id="cancelBtn">Cancel</button>
+      </div>
+
+      <div id="cy"></div>
+
+      <div class="minimap" id="minimap">
+        <div class="mm-title">Minimap</div>
+        <canvas id="minimap-canvas" width="400" height="260"></canvas>
+      </div>
+    </div>
+
+    <div class="card-pane">
+      <div class="card-tabs">
+        <div class="card-tab active" data-tab="details">Details</div>
+        <div class="card-tab" data-tab="related">Related <span class="count">6</span></div>
+        <div class="card-tab" data-tab="raw">LLM Output</div>
+      </div>
+      <div class="card-body" id="cardBody">
+        <div class="card-empty">点击图中的类节点查看详情<br><br>或在下方 Chat 中追问</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==== CHAT PANE ==== -->
+  <div class="chat-pane" id="chatPane">
+    <div class="chat-header" id="chatToggle">
+      <span class="chat-title"><span class="chat-icon">@</span>codemap</span>
+      <span class="chat-summary">
+        最后回复: 已生成 12 个类、23 条调用边。建议先读 <code>CaptureService</code> →
+        <code>NoteRepository</code> 主流程。Recall 模块有 1 个 unverified 类。
+      </span>
+      <span class="turn-count">4 turns</span>
+      <span class="toggle-arrow">▼</span>
+    </div>
+
+    <div class="chat-body">
+      <div class="chat-history" id="chatHistory"></div>
+
+      <div class="chat-input-row">
+        <span class="at-mention">@codemap</span>
+        <input class="chat-input" id="chatInput" placeholder="追问、缩小范围、或要求重新解析..." />
+        <button class="chat-send">Send <span style="opacity:0.7">⏎</span></button>
+      </div>
+
+      <div class="chat-quick">
+        <span class="quick-chip">/scope apps/api/src/Capture</span>
+        <span class="quick-chip">/focus RecallService</span>
+        <span class="quick-chip">/explain unverified classes</span>
+        <span class="quick-chip">/re-verify with o1</span>
+        <span class="quick-chip">/export mermaid</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==== STATUSBAR ==== -->
+  <div class="statusbar">
+    <div class="sb-item sb-progress">
+      <span>📖</span>
+      <span id="sbReadCount">3 / 12 read</span>
+      <div class="bar"><div id="sbReadFill" style="width:25%"></div></div>
+    </div>
+    <div class="sb-item">
+      <span class="ver-pill">✓ <span id="sbVerified">9</span> verified</span>
+      <span class="ver-pill" style="background:rgba(255,187,90,0.25)">⚠ <span id="sbPartial">2</span> partial</span>
+      <span class="ver-pill" style="background:rgba(0,0,0,0.3)">✗ <span id="sbUnverified">1</span> unverified</span>
+    </div>
+    <div class="sb-item"><span>⏱ 38.6s · 12 files analyzed</span></div>
+    <div class="spacer"></div>
+    <div class="sb-item" title="Eval against golden samples">
+      <span class="score-pill"><span class="label">Nodes</span> P=0.91 · R=0.88 · F1=0.89</span>
+    </div>
+    <div class="sb-item" title="Eval against golden samples">
+      <span class="score-pill"><span class="label">Edges</span> P=0.85 · R=0.79 · F1=0.82</span>
+    </div>
+    <div class="sb-item">
+      <span class="score-pill">⌨ <strong>J</strong>/<strong>K</strong> nav · <strong>Enter</strong> jump · <strong>M</strong> mark</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ============================================================
+ *  CodeMap v3 — Repo-level / Chat-first / UML class nodes
+ *  Demo dataset mimics lumen repository structure
+ * ============================================================ */
+
+cytoscape.use(cytoscapeDagre);
+
+// ---------- Demo data: 12 classes spanning 3 bounded contexts ----------
+const CLASSES = [
+  // ---- Capture context ----
+  {
+    id: 'CaptureController', bc: 'capture',
+    file: 'apps/api/src/Capture/Controllers/CaptureController.cs',
+    layer: 'controller', verification: 'verified', readingPriority: 1,
+    confidence: 0.94, readState: 'read',
+    intent: '接收原始素材（笔记/音频/截图）的 HTTP 入口，鉴权、限流、转交给 CaptureService',
+    methods: [
+      { name: 'PostNote',      sig: '(NoteDto dto)',  line: 28, risks: ['external_io'], read: true },
+      { name: 'PostAudio',     sig: '(IFormFile f)',  line: 47, risks: ['external_io'], read: true },
+      { name: 'PostScreenshot',sig: '(IFormFile f)',  line: 71, risks: ['external_io'], read: false },
+    ],
+    risks: [
+      { type: 'external_io', desc: '处理上传，需限流和大小校验' },
+    ],
+  },
+  {
+    id: 'CaptureService', bc: 'capture',
+    file: 'apps/api/src/Capture/Services/CaptureService.cs',
+    layer: 'service', verification: 'verified', readingPriority: 2,
+    confidence: 0.91, readState: 'read',
+    intent: 'Capture 主流程：去重 → 写入 → 触发 embedding 异步任务',
+    methods: [
+      { name: 'CaptureNoteAsync',       sig: '(Note n)',  line: 24, risks: [], read: true },
+      { name: 'CaptureAudioAsync',      sig: '(Audio a)', line: 52, risks: ['external_io'], read: true },
+      { name: 'TriggerEmbeddingAsync',  sig: '(Guid id)', line: 89, risks: ['concurrency'], read: false },
+    ],
+    risks: [{ type: 'concurrency', desc: '触发 embedding 是异步发后即忘' }],
+  },
+  {
+    id: 'NoteRepository', bc: 'capture',
+    file: 'apps/api/src/Capture/Infrastructure/NoteRepository.cs',
+    layer: 'repo', verification: 'verified', readingPriority: 3,
+    confidence: 0.96, readState: 'read',
+    intent: 'Note 实体的 EF Core 仓储',
+    methods: [
+      { name: 'AddAsync',     sig: '(Note n)',          line: 18, risks: [], read: true },
+      { name: 'FindByHash',   sig: '(string hash)',     line: 33, risks: [], read: true },
+      { name: 'UpdateAsync',  sig: '(Note n)',          line: 47, risks: [], read: true },
+    ],
+    risks: [],
+  },
+
+  // ---- Recall context ----
+  {
+    id: 'RecallController', bc: 'recall',
+    file: 'apps/api/src/Recall/Controllers/RecallController.cs',
+    layer: 'controller', verification: 'verified', readingPriority: 4,
+    confidence: 0.92, readState: 'unread',
+    intent: 'Recall 查询入口：自然语言 → 向量召回 → 重排返回',
+    methods: [
+      { name: 'PostQuery', sig: '(QueryDto dto)',   line: 32, risks: ['security'], read: false },
+      { name: 'GetById',   sig: '(Guid id)',        line: 64, risks: [], read: false },
+    ],
+    risks: [{ type: 'security', desc: 'Prompt injection: 自然语言查询' }],
+  },
+  {
+    id: 'RecallService', bc: 'recall',
+    file: 'apps/api/src/Recall/Services/RecallService.cs',
+    layer: 'service', verification: 'partial', readingPriority: 5,
+    confidence: 0.78, readState: 'unread',
+    intent: 'Recall 业务编排：调 EmbeddingsClient → VectorStore.search → ReRanker',
+    methods: [
+      { name: 'QueryAsync',    sig: '(string text)',   line: 28, risks: ['low_confidence'], read: false },
+      { name: 'RerankAsync',   sig: '(List<Hit> h)',   line: 67, risks: [], read: false },
+      { name: 'ScoreAsync',    sig: '(Hit h)',         line: 102, risks: [], read: false },
+    ],
+    risks: [{ type: 'low_confidence', desc: 'rerank 逻辑分支有未覆盖路径' }],
+    verificationDetails: {
+      rangeAdjusted: false,
+      droppedCalls: ['RerankerV2.boost'],
+      droppedExternalCalls: [],
+    },
+  },
+  {
+    id: 'EmbeddingsClient', bc: 'recall',
+    file: 'apps/api/src/Recall/Infrastructure/EmbeddingsClient.cs',
+    layer: 'util', verification: 'verified', readingPriority: 6,
+    confidence: 0.93, readState: 'unread',
+    intent: '调用本地 multilingual-e5-small 模型生成 embedding',
+    methods: [
+      { name: 'EmbedAsync',    sig: '(string txt)',  line: 21, risks: ['external_io'], read: false },
+      { name: 'BatchEmbed',    sig: '(IList<string>)', line: 58, risks: ['external_io'], read: false },
+    ],
+    risks: [{ type: 'external_io', desc: '调用本地 ONNX 模型，3-50ms 延迟' }],
+  },
+  {
+    id: 'VectorStore', bc: 'recall',
+    file: 'apps/api/src/Recall/Infrastructure/VectorStore.cs',
+    layer: 'repo', verification: 'verified', readingPriority: 7,
+    confidence: 0.95, readState: 'unread',
+    intent: 'pgvector 向量库封装：upsert / search by cosine',
+    methods: [
+      { name: 'UpsertAsync',   sig: '(Vector v)',     line: 19, risks: [], read: false },
+      { name: 'SearchAsync',   sig: '(Vector q, int k)', line: 41, risks: [], read: false },
+      { name: 'DeleteAsync',   sig: '(Guid id)',      line: 78, risks: [], read: false },
+    ],
+    risks: [],
+  },
+  {
+    id: 'RerankerV2', bc: 'recall',
+    file: '(unresolved: RerankerV2 not found in workspace)',
+    layer: 'util', verification: 'unverified', readingPriority: 99,
+    confidence: 0.42, readState: 'unread',
+    intent: 'LLM 提到该类参与 rerank，但工作区未找到对应符号',
+    methods: [
+      { name: 'boost', sig: '(Hit h)', line: 0, risks: ['low_confidence'], read: false },
+    ],
+    risks: [
+      { type: 'low_confidence', desc: 'LLM 可能幻觉，已标灰禁用跳转' },
+    ],
+    verificationDetails: {
+      rangeAdjusted: false,
+      droppedCalls: [],
+      droppedExternalCalls: [],
+      reason: 'executeWorkspaceSymbolProvider 未返回结果',
+    },
+  },
+
+  // ---- Architecture context ----
+  {
+    id: 'ArchitectureService', bc: 'arch',
+    file: 'apps/api/src/Arch/Services/ArchitectureService.cs',
+    layer: 'service', verification: 'partial', readingPriority: 8,
+    confidence: 0.81, readState: 'unread',
+    intent: '从 capture 文本中抽取 ADR 草稿、bounded context 边界',
+    methods: [
+      { name: 'ExtractAdrAsync',         sig: '(Note n)',     line: 35, risks: ['low_confidence'], read: false },
+      { name: 'DetectBoundaryShifts',    sig: '()',          line: 88, risks: [], read: false },
+    ],
+    risks: [{ type: 'low_confidence', desc: 'ADR 抽取依赖 LLM，置信度低' }],
+    verificationDetails: {
+      rangeAdjusted: true,
+      droppedCalls: ['BoundedContextExtractor.unused'],
+      droppedExternalCalls: [],
+    },
+  },
+  {
+    id: 'BoundedContextExtractor', bc: 'arch',
+    file: 'apps/api/src/Arch/Services/BoundedContextExtractor.cs',
+    layer: 'service', verification: 'verified', readingPriority: 9,
+    confidence: 0.88, readState: 'unread',
+    intent: '基于 ubiquitous language 抽取候选 bounded context',
+    methods: [
+      { name: 'ExtractAsync', sig: '(Corpus c)',  line: 22, risks: [], read: false },
+      { name: 'Score',        sig: '(BcCandidate)', line: 71, risks: [], read: false },
+    ],
+    risks: [],
+  },
+
+  // ---- Shared / Infrastructure ----
+  {
+    id: 'LumenDbContext', bc: 'shared',
+    file: 'apps/api/src/Shared/Persistence/LumenDbContext.cs',
+    layer: 'repo', verification: 'verified', readingPriority: 10,
+    confidence: 0.97, readState: 'unread',
+    intent: 'EF Core DbContext，注册所有 entity + pgvector 类型映射',
+    methods: [
+      { name: 'OnConfiguring',  sig: '(builder)',  line: 18, risks: [], read: false },
+      { name: 'OnModelCreating',sig: '(builder)',  line: 34, risks: [], read: false },
+    ],
+    risks: [],
+  },
+  {
+    id: 'AuthMiddleware', bc: 'shared',
+    file: 'apps/api/src/Shared/Auth/AuthMiddleware.cs',
+    layer: 'controller', verification: 'verified', readingPriority: 11,
+    confidence: 0.90, readState: 'unread',
+    intent: 'JWT 解析与本地用户上下文注入',
+    methods: [
+      { name: 'InvokeAsync', sig: '(HttpContext)', line: 24, risks: ['security'], read: false },
+    ],
+    risks: [{ type: 'security', desc: '认证关卡，需 review token 校验' }],
+  },
+];
+
+const EXTERNAL_DEPS = [
+  { name: 'Npgsql.EntityFrameworkCore.PostgreSQL', kind: 'package' },
+  { name: 'Pgvector.EntityFrameworkCore',          kind: 'package' },
+  { name: 'Microsoft.ML.OnnxRuntime',              kind: 'package' },
+  { name: 'System.Security.Cryptography',          kind: 'bcl' },
+  { name: 'Microsoft.AspNetCore.Authentication.JwtBearer', kind: 'package' },
+  { name: 'Polly',                                  kind: 'package' },
+];
+
+const EDGES = [
+  // calls
+  { from: 'CaptureController', to: 'CaptureService',    kind: 'calls',          verified: true },
+  { from: 'CaptureService',    to: 'NoteRepository',    kind: 'calls',          verified: true },
+  { from: 'CaptureService',    to: 'EmbeddingsClient',  kind: 'calls',          verified: true },
+  { from: 'NoteRepository',    to: 'LumenDbContext',    kind: 'calls',          verified: true },
+  { from: 'RecallController',  to: 'RecallService',     kind: 'calls',          verified: true },
+  { from: 'RecallService',     to: 'EmbeddingsClient',  kind: 'calls',          verified: true },
+  { from: 'RecallService',     to: 'VectorStore',       kind: 'calls',          verified: true },
+  { from: 'RecallService',     to: 'RerankerV2',        kind: 'calls',          verified: false }, // partial / unverified target
+  { from: 'VectorStore',       to: 'LumenDbContext',    kind: 'calls',          verified: true },
+  { from: 'ArchitectureService', to: 'BoundedContextExtractor', kind: 'calls',  verified: true },
+  { from: 'ArchitectureService', to: 'NoteRepository',  kind: 'calls',          verified: true },
+  { from: 'BoundedContextExtractor', to: 'NoteRepository', kind: 'calls',       verified: true },
+
+  // external calls
+  { from: 'NoteRepository',    to: 'ext:Npgsql.EntityFrameworkCore.PostgreSQL', kind: 'external_calls', verified: true },
+  { from: 'VectorStore',       to: 'ext:Pgvector.EntityFrameworkCore',          kind: 'external_calls', verified: true },
+  { from: 'EmbeddingsClient',  to: 'ext:Microsoft.ML.OnnxRuntime',              kind: 'external_calls', verified: true },
+  { from: 'AuthMiddleware',    to: 'ext:Microsoft.AspNetCore.Authentication.JwtBearer', kind: 'external_calls', verified: true },
+  { from: 'CaptureController', to: 'AuthMiddleware',                            kind: 'calls',          verified: true },
+  { from: 'RecallController',  to: 'AuthMiddleware',                            kind: 'calls',          verified: true },
+];
+
+// ---------- Build cytoscape elements ----------
+function visGlyph(v) {
+  return v === 'verified' ? '✓' : v === 'partial' ? '⚠' : '✗';
+}
+function bcColor(bc) {
+  return {
+    capture: '#4ec9b0',
+    recall:  '#c586c0',
+    arch:    '#dcdcaa',
+    shared:  '#569cd6',
+  }[bc] || '#aaaaaa';
+}
+function buildClassLabel(c) {
+  const header = `${c.id}  ${visGlyph(c.verification)}`;
+  const sep    = '────────────────────';
+  const methodLines = c.methods.slice(0, 5).map(m => {
+    const riskMark = m.risks.length ? ' ●' : '';
+    return `+ ${m.name}()${riskMark}`;
+  });
+  const overflow = c.methods.length > 5 ? `… +${c.methods.length - 5}` : '';
+  return [header, sep, ...methodLines, overflow].filter(Boolean).join('\n');
+}
+
+const nodes = CLASSES.map(c => ({
+  data: {
+    id: c.id,
+    label: buildClassLabel(c),
+    bc: c.bc,
+    verification: c.verification,
+    readState: c.readState,
+    width: 230,
+    height: 28 + (Math.min(c.methods.length, 5) + (c.methods.length > 5 ? 1 : 0)) * 18,
+  },
+  classes: `cls bc-${c.bc} v-${c.verification} r-${c.readState}`,
+}));
+
+// external dep nodes (small ellipses)
+EXTERNAL_DEPS.forEach(d => {
+  const id = 'ext:' + d.name;
+  if (EDGES.some(e => e.to === id)) {
+    nodes.push({
+      data: { id, label: d.name.split('.').pop(), bc: 'shared', external: true },
+      classes: 'ext'
+    });
+  }
+});
+
+const edges = EDGES.map((e, i) => ({
+  data: { id: `e${i}`, source: e.from, target: e.to, kind: e.kind, verified: e.verified },
+  classes: `${e.kind}${e.verified ? '' : ' unverified-edge'}`
+}));
+
+// ---------- Initialize cytoscape ----------
+const cy = cytoscape({
+  container: document.getElementById('cy'),
+  elements: { nodes, edges },
+  layout: {
+    name: 'dagre',
+    rankDir: 'LR',
+    nodeSep: 36,
+    rankSep: 90,
+    edgeSep: 12,
+    fit: true,
+    padding: 36,
+  },
+  style: [
+    {
+      selector: 'node.cls',
+      style: {
+        'shape': 'round-rectangle',
+        'background-color': '#252526',
+        'background-opacity': 1,
+        'border-width': 2,
+        'border-color': ele => bcColor(ele.data('bc')),
+        'border-style': 'solid',
+        'label': 'data(label)',
+        'text-wrap': 'wrap',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'color': '#d4d4d4',
+        'font-family': 'Consolas, "Cascadia Code", monospace',
+        'font-size': 11,
+        'text-margin-y': 0,
+        'width':  'data(width)',
+        'height': 'data(height)',
+        'padding': 6,
+        'text-max-width': 220,
+      }
+    },
+    {
+      selector: 'node.cls.v-verified',
+      style: { 'border-style': 'solid' }
+    },
+    {
+      selector: 'node.cls.v-partial',
+      style: {
+        'border-style': 'dashed',
+        'border-color': '#d19a66',
+      }
+    },
+    {
+      selector: 'node.cls.v-unverified',
+      style: {
+        'border-style': 'dotted',
+        'border-color': '#5c5c5c',
+        'background-color': '#2a2a2a',
+        'color': '#7a7a7a',
+        'opacity': 0.85,
+      }
+    },
+    {
+      selector: 'node.cls.r-read',
+      style: { 'opacity': 0.45 }
+    },
+    {
+      selector: 'node.ext',
+      style: {
+        'shape': 'round-rectangle',
+        'background-color': '#1f3a3a',
+        'background-opacity': 0.7,
+        'border-width': 1,
+        'border-color': '#56b6c2',
+        'border-style': 'dashed',
+        'label': 'data(label)',
+        'color': '#56b6c2',
+        'font-family': 'Consolas, monospace',
+        'font-size': 10,
+        'width': 'label',
+        'height': 24,
+        'padding': 6,
+        'text-valign': 'center',
+        'text-halign': 'center',
+      }
+    },
+    {
+      selector: 'edge.calls',
+      style: {
+        'curve-style': 'bezier',
+        'width': 1.6,
+        'line-color': '#61afef',
+        'target-arrow-color': '#61afef',
+        'target-arrow-shape': 'triangle',
+        'arrow-scale': 1.0,
+        'opacity': 0.8,
+      }
+    },
+    {
+      selector: 'edge.external_calls',
+      style: {
+        'curve-style': 'bezier',
+        'width': 1.2,
+        'line-color': '#56b6c2',
+        'line-style': 'dashed',
+        'target-arrow-color': '#56b6c2',
+        'target-arrow-shape': 'triangle',
+        'opacity': 0.7,
+      }
+    },
+    {
+      selector: 'edge.unverified-edge',
+      style: {
+        'line-color': '#5c5c5c',
+        'target-arrow-color': '#5c5c5c',
+        'line-style': 'dotted',
+      }
+    },
+    {
+      selector: 'node:selected',
+      style: {
+        'border-width': 3,
+        'border-color': '#007acc',
+        'shadow-blur': 18,
+        'shadow-color': '#007acc',
+        'shadow-opacity': 0.6,
+      }
+    },
+    {
+      selector: 'edge.highlight',
+      style: {
+        'line-color': '#d7ba7d',
+        'target-arrow-color': '#d7ba7d',
+        'width': 2.4,
+        'opacity': 1,
+      }
+    },
+  ]
+});
+
+// ---------- Outline rendering ----------
+function renderOutline() {
+  const groups = {
+    capture: document.getElementById('outlineCapture'),
+    recall:  document.getElementById('outlineRecall'),
+    arch:    document.getElementById('outlineArch'),
+    shared:  document.getElementById('outlineShared'),
+  };
+  Object.values(groups).forEach(g => g.innerHTML = '');
+
+  const sorted = [...CLASSES].sort((a,b) => a.readingPriority - b.readingPriority);
+  sorted.forEach(c => {
+    const row = document.createElement('div');
+    row.className = `outline-item${c.readState === 'read' ? ' read' : ''}`;
+    row.dataset.id = c.id;
+    const verCls = c.verification === 'unverified' ? ' unverified' : '';
+    const nameCls = (c.readState === 'read' ? ' read' : '') + (c.verification === 'unverified' ? ' unverified' : '');
+    const priorityCls = c.verification === 'unverified' ? ' unverified' : '';
+    const riskDots = c.risks.map(r => `<span class="icon-dot ${r.type}" title="${r.desc}"></span>`).join('');
+    row.innerHTML = `
+      <span class="outline-priority${priorityCls}">${c.verification === 'unverified' ? '?' : c.readingPriority}</span>
+      <span class="outline-name${nameCls}">${c.id}</span>
+      <span class="outline-icons">
+        ${riskDots}
+        <span class="v-icon ${c.verification}">${visGlyph(c.verification)}</span>
+      </span>
+    `;
+    row.addEventListener('click', () => selectClass(c.id));
+    (groups[c.bc] || groups.shared).appendChild(row);
+  });
+
+  const ext = document.getElementById('externalList');
+  ext.innerHTML = '';
+  EXTERNAL_DEPS.forEach(d => {
+    const row = document.createElement('div');
+    row.className = 'outline-item';
+    row.innerHTML = `
+      <span class="outline-priority" style="background:#56b6c2;">⌬</span>
+      <span class="outline-name" style="color:#56b6c2;">${d.name}</span>
+    `;
+    ext.appendChild(row);
+  });
+}
+
+// ---------- Card rendering ----------
+let activeTab = 'details';
+function selectClass(id) {
+  cy.$('node:selected').unselect();
+  const node = cy.getElementById(id);
+  if (node) node.select();
+  const c = CLASSES.find(x => x.id === id);
+  if (!c) return;
+
+  document.querySelectorAll('.outline-item').forEach(el => el.classList.remove('active'));
+  const ol = [...document.querySelectorAll('.outline-item')].find(el => el.dataset.id === id);
+  if (ol) ol.classList.add('active');
+
+  highlightEdges(id);
+  renderCard(c);
+}
+
+function highlightEdges(id) {
+  cy.edges().removeClass('highlight');
+  cy.edges(`[source = "${id}"], [target = "${id}"]`).addClass('highlight');
+}
+
+function renderCard(c) {
+  const body = document.getElementById('cardBody');
+  if (activeTab === 'details') body.innerHTML = renderDetails(c);
+  else if (activeTab === 'related') body.innerHTML = renderRelated(c);
+  else body.innerHTML = renderRaw(c);
+}
+
+function renderDetails(c) {
+  const verBlockCls = c.verification;
+  const verTitleText = {
+    verified: '✓ Verified by LSP',
+    partial:  '⚠ Partially Verified',
+    unverified: '✗ Unverified — 不可跳转',
+  }[c.verification];
+
+  const methodRows = c.methods.map(m => {
+    const riskIcons = m.risks.map(r => `<span class="icon-dot ${r}" title="${r}"></span>`).join('');
+    const verifIcon = c.verification === 'unverified'
+      ? `<span class="v-icon unverified">✗</span>`
+      : `<span class="v-icon verified">✓</span>`;
+    const lineLabel = m.line > 0 ? `L${m.line}` : '—';
+    const nameCls = m.read ? 'read' : '';
+    const jumpHtml = c.verification === 'unverified'
+      ? `<span class="m-jump" style="color:var(--vs-text-dim); cursor:not-allowed;" title="Unverified — cannot jump">⤴</span>`
+      : `<span class="m-jump" title="Jump to source (Enter)">⤴</span>`;
+    return `
+      <div class="method-row ${c.verification === 'unverified' ? 'unverified' : ''}">
+        <span class="m-vis">+</span>
+        <span class="m-name ${nameCls}">${m.name}<span style="color:var(--vs-text-dim);">${m.sig}</span></span>
+        <span class="m-icons">${riskIcons}</span>
+        <span class="m-line">${lineLabel}</span>
+        ${jumpHtml}
+      </div>
+    `;
+  }).join('');
+
+  const riskPills = c.risks.map(r =>
+    `<span class="risk-pill ${r.type}">${r.type}<span class="desc">· ${r.desc}</span></span>`
+  ).join('') || '<span style="color:var(--vs-text-dim);font-size:11px;">no risks flagged</span>';
+
+  let verDetail = '';
+  if (c.verificationDetails) {
+    const d = c.verificationDetails;
+    const dropped = d.droppedCalls && d.droppedCalls.length
+      ? `<div class="ver-meta">Dropped calls: ${d.droppedCalls.map(x => `<code>${x}</code>`).join(', ')}</div>` : '';
+    const droppedExt = d.droppedExternalCalls && d.droppedExternalCalls.length
+      ? `<div class="ver-meta">Dropped external: ${d.droppedExternalCalls.map(x => `<code>${x}</code>`).join(', ')}</div>` : '';
+    const rng = d.rangeAdjusted
+      ? `<div class="ver-meta">Range adjusted by LSP (LLM line numbers were off)</div>` : '';
+    const reason = d.reason ? `<div class="ver-meta">Reason: <code>${d.reason}</code></div>` : '';
+    verDetail = dropped + droppedExt + rng + reason;
+  }
+
+  return `
+    <div class="card">
+      <h3>
+        ${c.id}
+        <span class="kind-tag">class</span>
+        <span class="bc-tag ${c.bc}">${c.bc}</span>
+      </h3>
+      <div class="file-line">
+        📄 <a>${c.file}</a>
+        ${c.verification !== 'unverified' ? `<span style="margin-left:auto;">${c.methods.length} methods</span>` : ''}
+      </div>
+
+      <div class="intent">${c.intent}</div>
+
+      <div class="card-row">
+        <span class="k">置信度</span>
+        <span class="v">
+          <span class="conf-bar"><div style="width:${Math.round(c.confidence * 100)}%"></div></span>
+          ${(c.confidence * 100).toFixed(0)}%
+        </span>
+      </div>
+      <div class="card-row">
+        <span class="k">Layer</span>
+        <span class="v"><code>${c.layer}</code></span>
+      </div>
+      <div class="card-row">
+        <span class="k">Read order</span>
+        <span class="v">#${c.readingPriority === 99 ? '—' : c.readingPriority}</span>
+      </div>
+      <div class="card-row">
+        <span class="k">风险</span>
+        <span class="v">${riskPills}</span>
+      </div>
+
+      <div style="font-size:11px; color:var(--vs-text-dim); margin: 14px 0 4px; text-transform:uppercase; letter-spacing:0.4px;">
+        Methods
+      </div>
+      <div class="method-list">${methodRows}</div>
+
+      <div class="ver-block ${verBlockCls}">
+        <div class="ver-title">${verTitleText}</div>
+        ${verDetail || `<div class="ver-meta">All symbols and call targets resolved against current workspace.</div>`}
+      </div>
+
+      <div class="actions">
+        <button class="btn" ${c.verification === 'unverified' ? 'disabled style="background:var(--vs-border); color:var(--vs-text-dim); cursor:not-allowed;"' : ''}>↪ Jump to file</button>
+        <button class="btn ghost">${c.readState === 'read' ? '↺ Mark unread' : '✓ Mark read'}</button>
+        <button class="btn ghost">💬 Ask @codemap</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderRelated(c) {
+  const inbound = EDGES.filter(e => e.to === c.id).map(e =>
+    `<li><span class="arrow">←</span>${e.from} <span style="color:var(--vs-text-dim);font-size:10px;">(${e.kind})</span></li>`
+  ).join('');
+  const outbound = EDGES.filter(e => e.from === c.id).map(e => {
+    const isExt = e.to.startsWith('ext:');
+    const targetName = isExt ? e.to.slice(4) : e.to;
+    return `<li class="${isExt ? 'external' : ''}"><span class="arrow">→</span>${targetName} <span style="color:var(--vs-text-dim);font-size:10px;">(${e.kind}${e.verified ? '' : ', unverified'})</span></li>`;
+  }).join('');
+  return `
+    <h3>${c.id} <span style="font-size:11px; color:var(--vs-text-dim); font-weight:400;">relationships</span></h3>
+    <div style="font-size:11px;color:var(--vs-text-dim);margin:10px 0 4px;text-transform:uppercase;letter-spacing:0.4px;">Called by (${EDGES.filter(e => e.to === c.id).length})</div>
+    <ul class="related-list">${inbound || '<li style="color:var(--vs-text-dim);">none</li>'}</ul>
+    <div style="font-size:11px;color:var(--vs-text-dim);margin:14px 0 4px;text-transform:uppercase;letter-spacing:0.4px;">Calls (${EDGES.filter(e => e.from === c.id).length})</div>
+    <ul class="related-list">${outbound || '<li style="color:var(--vs-text-dim);">none</li>'}</ul>
+  `;
+}
+
+function renderRaw(c) {
+  const raw = {
+    node_id: c.id,
+    kind: 'class',
+    file: c.file,
+    intent: c.intent,
+    layer: c.layer,
+    confidence: c.confidence,
+    methods: c.methods.map(m => `${m.name}${m.sig}`),
+    calls: EDGES.filter(e => e.from === c.id && e.kind === 'calls').map(e => e.to),
+    external_calls: EDGES.filter(e => e.from === c.id && e.kind === 'external_calls').map(e => e.to.replace('ext:','')),
+    risks: c.risks,
+    reading_priority: c.readingPriority,
+  };
+  return `
+    <div style="font-size:11px;color:var(--vs-text-dim);margin-bottom:6px;">
+      原始 <code>codemap-meta</code> 块（已经过 calibrator 校准）
+    </div>
+    <pre style="background:var(--vs-bg-deep); border:1px solid var(--vs-border-soft); padding:10px; border-radius:4px; font-size:10.5px; line-height:1.55; color:#d4d4d4; overflow-x:auto;">${JSON.stringify(raw, null, 2)}</pre>
+  `;
+}
+
+// ---------- Chat history ----------
+const CHAT_TURNS = [
+  {
+    role: 'user',
+    name: 'You',
+    time: '14:02',
+    content: '帮我生成 <span class="ref-chip">lumen</span> 仓库的 codemap',
+  },
+  {
+    role: 'assistant',
+    name: '@codemap',
+    time: '14:02',
+    content: `好的，正在分析 <span class="ref-chip">lumen</span>。仓库较大，我会按 bounded context 分批扫描：先列出入口/Controller，再沿 import 边 BFS，截断到第 3 层；然后并行调起 12 个单文件 analyzer，最后用 <code>executeWorkspaceSymbolProvider</code> 补全跨文件调用边。预计 30~60 秒。`,
+    actions: [
+      { check: true, num: '1', text: 'Scan workspace: 487 files, 3 bounded contexts (Capture/Recall/Arch)' },
+      { check: true, num: '2', text: 'Pick skeleton: 12 classes (Controllers + Services + Repos)' },
+      { check: true, num: '3', text: 'Run 12 parallel single-file analyzers (claude-3.5-sonnet)' },
+      { check: true, num: '4', text: 'Cross-file edge resolution: 18 edges via LSP' },
+      { check: true, num: '5', text: 'Calibration: 9 verified / 2 partial / 1 unverified' },
+    ],
+  },
+  {
+    role: 'assistant',
+    name: '@codemap',
+    time: '14:03',
+    content: `分析完成。共 <code>12</code> 个类、<code>23</code> 条调用边。已生成阅读顺序——建议先读 <span class="ref-chip">CaptureService</span> 主流程，Recall 模块的 <span class="ref-chip">RecallService</span> 是 partial（calls 中提到的 <code>RerankerV2.boost</code> 在工作区找不到，已标记为 unverified 虚类）。Eval 分数：节点 P=0.91/R=0.88，边 P=0.85/R=0.79。`,
+  },
+  {
+    role: 'user',
+    name: 'You',
+    time: '14:04',
+    content: '为什么 <span class="ref-chip">RerankerV2</span> 是 unverified？',
+  },
+  {
+    role: 'assistant',
+    name: '@codemap',
+    time: '14:04',
+    content: `<code>RecallService.QueryAsync</code> 在 <code>calls</code> 字段里列出了 <code>RerankerV2.boost</code>，但 calibrator 用 <code>executeWorkspaceSymbolProvider</code> 在 workspace 里找不到这个符号。可能原因：(1) LLM 幻觉；(2) 该类在 git 历史中已被删除但 LLM 看到了过时的引用；(3) 在 gitignored 目录里。我把它保留为灰色虚节点，跳转被禁用，避免误导。建议你在 <span class="ref-chip">RecallService</span> 里 grep 一下 <code>Rerank</code>，确认现役实现叫什么。`,
+  },
+];
+
+function renderChat() {
+  const host = document.getElementById('chatHistory');
+  host.innerHTML = CHAT_TURNS.map(t => {
+    const actions = t.actions ? `
+      <div class="action-trace">
+        ${t.actions.map(a => `<div class="step"><span class="check">${a.check ? '✓' : '○'}</span><span class="num">[${a.num}]</span><span>${a.text}</span></div>`).join('')}
+      </div>` : '';
+    return `
+      <div class="chat-turn ${t.role}">
+        <div class="avatar">${t.role === 'user' ? 'U' : '@'}</div>
+        <div class="turn-body">
+          <div class="turn-meta">
+            <span class="role">${t.name}</span>
+            <span>·</span>
+            <span>${t.time}</span>
+          </div>
+          <div class="turn-content">${t.content}${actions}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  host.scrollTop = host.scrollHeight;
+}
+
+// ---------- Wire up ----------
+cy.on('tap', 'node.cls', evt => selectClass(evt.target.id()));
+
+document.querySelectorAll('.card-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.card-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    activeTab = tab.dataset.tab;
+    const sel = cy.$('node:selected')[0];
+    if (sel) {
+      const c = CLASSES.find(x => x.id === sel.id());
+      if (c) renderCard(c);
+    }
+  });
+});
+
+document.getElementById('chatToggle').addEventListener('click', () => {
+  document.getElementById('app').classList.toggle('chat-collapsed');
+});
+
+document.querySelectorAll('.chip.bc-chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.chip.bc-chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    const bc = chip.dataset.bc;
+    cy.nodes('.cls').forEach(n => {
+      const show = bc === 'all' || n.data('bc') === bc;
+      n.style('display', show ? 'element' : 'none');
+    });
+    // hide external when filter
+    cy.nodes('.ext').forEach(n => n.style('display', 'element'));
+  });
+});
+
+document.querySelectorAll('.chip[data-filter]').forEach(chip => {
+  chip.addEventListener('click', () => {
+    chip.classList.toggle('active');
+    const f = chip.dataset.filter;
+    if (f === 'only-unverified') {
+      const on = chip.classList.contains('active');
+      cy.nodes('.cls').forEach(n => {
+        const v = n.data('verification');
+        n.style('display', !on || v !== 'verified' ? 'element' : 'none');
+      });
+    }
+    if (f === 'hide-external') {
+      const on = chip.classList.contains('active');
+      cy.nodes('.ext').forEach(n => n.style('display', on ? 'none' : 'element'));
+      cy.edges('.external_calls').forEach(e => e.style('display', on ? 'none' : 'element'));
+    }
+    if (f === 'hide-read') {
+      const on = chip.classList.contains('active');
+      cy.nodes('.cls').forEach(n => {
+        const r = (CLASSES.find(c => c.id === n.id()) || {}).readState;
+        if (r === 'read') n.style('display', on ? 'none' : 'element');
+      });
+    }
+  });
+});
+
+// ---------- Initial render ----------
+renderOutline();
+renderChat();
+// pre-select a default node to populate the card
+setTimeout(() => selectClass('RecallService'), 100);
+
+</script>
+
+</body>
+</html>

@@ -5,6 +5,8 @@ import { runOrchestrator, CancelledError } from '../orchestrator/orchestrator';
 import { createVscodeFileReader } from '../orchestrator/vscode-file-reader';
 import { VscodeSymbolProvider } from '../calibration/vscode-symbol-provider';
 import { VscodeLmClient } from '../llm/client';
+import { loadGoldenForWorkspace } from '../eval/golden-loader';
+import { scoreGraph } from '../eval/score';
 import { DEFAULT_SCAN_OPTIONS } from '../orchestrator/workspace-scanner';
 import type { MockupChatTurn } from '../webview/graph-adapter';
 
@@ -164,6 +166,28 @@ async function handleGenerate(
       actions: actionTrace,
     });
 
+    // ---- Optional eval against a golden sample ----
+    const golden = await loadGoldenForWorkspace(workspaceFolder.uri);
+    let evalScore: { nodes: { precision: number; recall: number; f1: number }; edges: { precision: number; recall: number; f1: number } } | undefined;
+    if (golden) {
+      const sc = scoreGraph(result.graph, golden);
+      evalScore = { nodes: sc.nodes, edges: sc.edges };
+      response.markdown(
+        [
+          '',
+          `**Eval against \`${golden.name}\`**:`,
+          `- Nodes: P=${sc.nodes.precision.toFixed(2)} · R=${sc.nodes.recall.toFixed(2)} · F1=${sc.nodes.f1.toFixed(2)}`,
+          `- Edges: P=${sc.edges.precision.toFixed(2)} · R=${sc.edges.recall.toFixed(2)} · F1=${sc.edges.f1.toFixed(2)}`,
+          sc.diff.missingNodes.length > 0
+            ? `- Missing nodes: ${sc.diff.missingNodes.map(n => '`' + n + '`').join(', ')}`
+            : '',
+          sc.diff.missingEdges.length > 0
+            ? `- Missing edges: ${sc.diff.missingEdges.slice(0, 5).map(e => `\`${e.from}→${e.to}\``).join(', ')}${sc.diff.missingEdges.length > 5 ? ` (+${sc.diff.missingEdges.length - 5} more)` : ''}`
+            : '',
+        ].filter(Boolean).join('\n'),
+      );
+    }
+
     await showGraph(
       context,
       result.graph,
@@ -175,6 +199,7 @@ async function handleGenerate(
         filesAnalyzed: result.stats.filesAnalyzed,
         filesFailed: result.stats.filesFailed,
         durationMs: result.stats.durationMs,
+        eval: evalScore,
       },
       {
         modelLabel,

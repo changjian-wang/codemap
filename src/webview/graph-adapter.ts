@@ -28,6 +28,9 @@ export interface MockupClass {
     line: number;
     risks: string[];
     read: boolean;
+    intent?: string;
+    calls?: string[];
+    externalCalls?: string[];
   }[];
   risks: { type: string; desc: string }[];
   verificationDetails?: {
@@ -116,6 +119,9 @@ export function adaptGraphForMockup(
       line: m.line,
       risks: m.risks ?? [],
       read: m.readState === 'read',
+      intent: m.intent,
+      calls: m.calls,
+      externalCalls: m.externalCalls,
     })),
     risks: n.risks ?? [],
     verificationDetails: n.verificationDetails,

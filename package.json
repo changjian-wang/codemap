@@ -93,6 +93,11 @@
           "type": "boolean",
           "default": true,
           "description": "When true, unverified nodes are shown but not clickable."
+        },
+        "codemap.devGoldenPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a golden sample JSON (workspace-relative or absolute). Used for eval scoring; leave empty to fall back to <workspace>/.codemap/golden.json."
         }
       }
     }

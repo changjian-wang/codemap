@@ -1344,142 +1344,50 @@ function renderCard(c) {
   else body.innerHTML = renderRaw(c);
 }
 
-// Per-method enrichment. For the 8-10 most interesting methods we hand-author
-// what the LLM would have emitted in its codemap-meta block (intent + calls +
-// risk descriptions). Anything not in this map falls back to generic content.
-const METHOD_DETAILS = {
-  'CaptureEndpoints.IngestUrl': {
-    intent: 'HTTP 入口：接 POST /api/captures/url，调 IngestUrlHandler.EnqueueAsync 写入 capture_jobs (pending)，立即返回 202 Accepted + jobId。',
-    calls: [{ to: 'IngestUrlHandler.EnqueueAsync', kind: 'calls' }],
-    externalCalls: [{ to: 'Microsoft.AspNetCore.Http.Results.Accepted' }],
-    riskDescs: { external_io: '用户可控 URL，需 ValidationFilter + SSRF 边界（在 HtmlContentExtractor）' },
-  },
-  'IngestUrlHandler.EnqueueAsync': {
-    intent: 'ADR-029 Layer 1：URL canonicalize → 查 in-flight 同 (url, actor) job → 若已有 pending/processing 直接返回其 jobId；否则 INSERT。并发 INSERT 由部分 UNIQUE 索引 (status IN pending/processing) 兜底，捕获 23505 后回查返回现有 jobId。',
-    calls: [
-      { to: 'UrlCanonicalizer.Canonicalize', kind: 'calls' },
-      { to: 'CaptureJobStore.FindInFlightByCanonicalUrlAsync', kind: 'calls' },
-      { to: 'CaptureJobStore.InsertAsync', kind: 'calls' },
-    ],
-    externalCalls: [],
-    riskDescs: {
-      concurrency: 'FindInFlight 与 Insert 之间有竞态窗口，依赖 UNIQUE 索引 23505 兜底',
-      external_io: '无外部 IO（仅 DB），但调用方 IngestUrl 是 HTTP entry',
-    },
-  },
-  'IngestUrlHandler.ExecuteAsync': {
-    intent: 'Worker dispatch 入口：worker 拿到 jobId 后调用本方法跑完整管道——抓取 HTML → 抽正文 → chunk → embed → 写 events + event_chunks → mark succeeded。失败按 RetryDelays 退避或终态 failed。',
-    calls: [
-      { to: 'HtmlContentExtractor.ExtractAsync', kind: 'calls' },
-      { to: 'ParagraphAwareChunker.Chunk', kind: 'calls' },
-      { to: 'OnnxEmbeddingService.EmbedDocumentAsync', kind: 'calls' },
-      { to: 'EventStore.InsertAsync', kind: 'calls' },
-      { to: 'EventChunkStore.InsertRangeAsync', kind: 'calls' },
-      { to: 'CaptureJobStore.MarkSucceededAsync', kind: 'calls' },
-      { to: 'CaptureJobStore.RescheduleAsync', kind: 'calls' },
-      { to: 'CaptureJobStore.MarkFailedAsync', kind: 'calls' },
-    ],
-    externalCalls: [],
-    riskDescs: {
-      external_io: '抓取远端 URL（10s timeout, 4MB cap）；ONNX 推理 CPU 重',
-      concurrency: 'OperationCanceledException 不 mark failed，留 processing 给下次 ResetStuck 兜底',
-    },
-  },
-  'CaptureJobWorker.StartAsync': {
-    intent: 'ADR-028 §决策 D9：在 base.StartAsync 前同步调 ResetStuckProcessingAsync，把上次崩溃残留的 processing 行翻回 pending。Fail-open：reset 失败仅日志，不阻止 host 启动。',
-    calls: [
-      { to: 'CaptureJobStore.ResetStuckProcessingAsync', kind: 'calls' },
-    ],
-    externalCalls: [],
-    riskDescs: { concurrency: 'reset 必须在 polling loop 启动前完成，否则有 window 漏掉残留行' },
-  },
-  'CaptureJobWorker.ExecuteAsync': {
-    intent: 'PeriodicTimer 串行循环：每 tick 开新 DI scope → ClaimNextPendingAsync → IngestUrlHandler.ExecuteAsync。stoppingToken 传到 claim 与 timer.WaitForNextTickAsync 两端。',
-    calls: [
-      { to: 'IServiceScopeFactory.CreateAsyncScope', kind: 'calls' },
-      { to: 'CaptureJobWorker.TickOnceAsync', kind: 'calls' },
-    ],
-    externalCalls: [{ to: 'PeriodicTimer.WaitForNextTickAsync' }],
-    riskDescs: { concurrency: '单 worker 串行设计——与 Ollama CPU serial 推理形态一致，禁止扩到多实例' },
-  },
-  'CaptureJobWorker.TickOnceAsync': {
-    intent: '单 tick 主体：claim → dispatch handler → 处理 OperationCanceledException 与一般 Exception 分支（前者不消耗 attempt，后者按 attempt_count 决定 reschedule 或 mark failed）。',
-    calls: [
-      { to: 'CaptureJobStore.ClaimNextPendingAsync', kind: 'calls' },
-      { to: 'IngestUrlHandler.ExecuteAsync', kind: 'calls' },
-    ],
-    externalCalls: [],
-    riskDescs: { concurrency: 'attempt_count + 1 < MaxAttempts 的边界条件曾出 off-by-one，需测试覆盖' },
-  },
-  'AskByQueryHandler.HandleAsync': {
-    intent: 'ADR-017 §决策 E1 首切片：query → embed → top-K cosine → 组装 GroundedAskPrompts.SystemPrompt + BuildUserPrompt → ILlmService.ChatAsync → 反查答案中 [n] 编号，过滤未引用的 citations（强引用）。',
-    calls: [
-      { to: 'OnnxEmbeddingService.EmbedQueryAsync', kind: 'calls' },
-      { to: 'RecallQuery.SearchAsync', kind: 'calls' },
-      { to: 'GroundedAskPrompts.ExtractSnippetText', kind: 'calls' },
-      { to: 'GroundedAskPrompts.BuildUserPrompt', kind: 'calls' },
-      { to: 'GroundedAskPromptsV2.BuildUserPrompt', kind: 'calls', unverified: true },
-      { to: 'OllamaLlmService.ChatAsync', kind: 'calls' },
-      { to: 'AskByQueryHandler.ExtractReferencedIndices', kind: 'calls' },
-    ],
-    externalCalls: [{ to: 'System.Text.RegularExpressions.Regex' }],
-    riskDescs: {
-      security: 'request.Q 直接进 user prompt——prompt injection 重灾区',
-      low_confidence: 'rows 为空时走"未找到"路径，golden test 仅覆盖 1 例',
-    },
-  },
-  'HtmlContentExtractor.ExtractAsync': {
-    intent: '抓 URL → SmartReader 主路径 → 失败回退到 HtmlSelectorFallback。先做 SSRF 校验，拒绝非 http/https 与私有/loopback 网段。',
-    calls: [
-      { to: 'HtmlContentExtractor.AssertHostIsPublicAsync', kind: 'calls' },
-      { to: 'HtmlSelectorFallback.TryExtract', kind: 'calls' },
-    ],
-    externalCalls: [
-      { to: 'SmartReader.Reader' },
-      { to: 'ReverseMarkdown.Converter' },
-      { to: 'HttpClient.GetAsync' },
-    ],
-    riskDescs: {
-      security: 'OWASP A10:2021 SSRF——self-hosted 部署里这条边界尤其关键',
-      external_io: '10s timeout、4MB cap、5 次重定向上限',
-    },
-  },
-};
-
 function buildMethodDetail(c, m) {
-  const key = `${c.id}.${m.name}`;
-  const md = METHOD_DETAILS[key];
+  // Real-data path: every method object carries intent / calls /
+  // externalCalls / risks straight from the LLM (calibrated where
+  // possible). We no longer keep a hand-authored METHOD_DETAILS table —
+  // anything we cannot show here is something the prompt did not produce,
+  // which is a signal for W4 prompt tuning rather than a UI gap to paper
+  // over with hardcoded text.
 
   const sigParams = m.sig.replace(/^\(|\)$/g, '').trim();
   const paramsHtml = sigParams
-    ? `<div class="md-row"><span class="md-k">Params</span><span class="md-v"><code>${sigParams}</code></span></div>`
+    ? `<div class="md-row"><span class="md-k">Params</span><span class="md-v"><code>${escapeAttr(sigParams)}</code></span></div>`
     : `<div class="md-row"><span class="md-k">Params</span><span class="md-v md-empty">none</span></div>`;
 
-  const intentHtml = md && md.intent
-    ? `<div class="md-row"><span class="md-k">Intent</span><span class="md-v">${md.intent}</span></div>`
-    : `<div class="md-row"><span class="md-k">Intent</span><span class="md-v md-empty">LLM 未对该方法单独给出 intent — 见类级 intent</span></div>`;
+  const intentHtml = m.intent
+    ? `<div class="md-row"><span class="md-k">Intent</span><span class="md-v">${escapeAttr(m.intent)}</span></div>`
+    : `<div class="md-row"><span class="md-k">Intent</span><span class="md-v md-empty">LLM did not emit a per-method intent for this one — see the class-level intent above</span></div>`;
 
-  let callsHtml = '<span class="md-empty">no in-file calls detected</span>';
-  if (md && md.calls && md.calls.length) {
-    callsHtml = md.calls.map(call => {
-      const cls = call.unverified ? 'md-call' : 'md-call';
-      const style = call.unverified ? ' style="border-style:dotted; opacity:0.6;" title="Unverified — class not found in workspace"' : '';
-      return `<span class="${cls}"${style}>${call.to}${call.unverified ? ' ✗' : ''}</span>`;
+  const calls = m.calls ?? [];
+  let callsHtml = '<span class="md-empty">no in-file calls reported</span>';
+  if (calls.length) {
+    callsHtml = calls.map(call => {
+      const isExt = call.startsWith('ext:');
+      const display = isExt ? call.slice(4) : call;
+      const inGraph = CLASSES.some(x => x.id === display);
+      const unverified = !inGraph;
+      const style = unverified ? ' style="border-style:dotted; opacity:0.7;" title="Not in current skeleton"' : '';
+      return `<span class="md-call"${style}>${escapeAttr(display)}${unverified ? ' \u2717' : ''}</span>`;
     }).join('');
   }
 
-  let extHtml = '';
-  if (md && md.externalCalls && md.externalCalls.length) {
-    extHtml = `<div class="md-row"><span class="md-k">External</span><span class="md-v">${
-      md.externalCalls.map(e => `<span class="md-call external">${e.to}</span>`).join('')
-    }</span></div>`;
-  }
+  const ext = m.externalCalls ?? [];
+  const extHtml = ext.length
+    ? `<div class="md-row"><span class="md-k">External</span><span class="md-v">${
+        ext.map(e => `<span class="md-call external">${escapeAttr(e)}</span>`).join('')
+      }</span></div>`
+    : '';
 
-  let risksHtml = '<span class="md-empty">no risks at this method</span>';
+  let risksHtml = '<span class="md-empty">no risks flagged at this method</span>';
   if (m.risks && m.risks.length) {
     risksHtml = m.risks.map(r => {
-      const desc = (md && md.riskDescs && md.riskDescs[r]) || '(see class-level risk for details)';
-      return `<span class="md-risk ${r}"><span class="md-risk-type">${r}</span>${desc}</span>`;
+      // Look up class-level desc for the same risk type as a fallback —
+      // the LLM usually only writes desc at the class level.
+      const classDesc = (c.risks || []).find(cr => cr.type === r)?.desc ?? '';
+      return `<span class="md-risk ${r}"><span class="md-risk-type">${r}</span>${escapeAttr(classDesc)}</span>`;
     }).join('');
   }
 
@@ -1490,6 +1398,10 @@ function buildMethodDetail(c, m) {
     ${extHtml}
     <div class="md-row"><span class="md-k">Risks</span><span class="md-v">${risksHtml}</span></div>
   `;
+}
+
+function escapeAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function renderDetails(c) {

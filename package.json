@@ -1,0 +1,117 @@
+{
+  "name": "codemap",
+  "displayName": "CodeMap",
+  "description": "Interactive call graph + reading guidance for AI-generated code. Repo-level UML class graph with LSP-calibrated verification.",
+  "version": "0.0.1",
+  "publisher": "changjian-wang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/changjian-wang/codemap.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "extensionDependencies": [
+    "GitHub.copilot-chat"
+  ],
+  "activationEvents": [
+    "onChatParticipant:codemap.codemap",
+    "onCommand:codemap.showDemoGraph"
+  ],
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "codemap.codemap",
+        "name": "codemap",
+        "fullName": "CodeMap",
+        "description": "Generate an interactive UML call graph for your workspace",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "scope",
+            "description": "Limit analysis to a subpath, e.g. /scope apps/api/src/Capture"
+          },
+          {
+            "name": "focus",
+            "description": "Re-expand the graph around a single class, e.g. /focus IngestUrlHandler"
+          },
+          {
+            "name": "why",
+            "description": "Explain why a node or edge is partial / unverified"
+          },
+          {
+            "name": "explain",
+            "description": "Explain unverified nodes in the current graph"
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "codemap.showDemoGraph",
+        "title": "CodeMap: Show Demo Graph (fixture data)"
+      },
+      {
+        "command": "codemap.resetReadingProgress",
+        "title": "CodeMap: Reset Reading Progress"
+      }
+    ],
+    "configuration": {
+      "title": "CodeMap",
+      "properties": {
+        "codemap.preferredModelFamily": {
+          "type": "string",
+          "default": "gpt-4o",
+          "enum": [
+            "gpt-4o",
+            "claude-3.5-sonnet",
+            "o1"
+          ],
+          "description": "Preferred Copilot model family."
+        },
+        "codemap.maxSkeletonFiles": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 80,
+          "description": "Maximum number of files the workspace scanner picks as skeleton for LLM analysis."
+        },
+        "codemap.maxParallelAnalyzers": {
+          "type": "number",
+          "default": 6,
+          "minimum": 1,
+          "maximum": 12,
+          "description": "How many single-file analyzers run concurrently."
+        },
+        "codemap.strictVerification": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, unverified nodes are shown but not clickable."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package",
+    "test": "vitest",
+    "eval": "ts-node eval/score.ts",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.20.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
+  }
+}

@@ -158,8 +158,9 @@ async function handleGenerate(
       name: '@codemap',
       time: nowHHMM(),
       content:
-        `已生成 ${result.stats.nodeCount} 个类、${result.stats.edgeCount} 条调用边。` +
-        `校准：✓${result.stats.verifiedCount} / ⚠${result.stats.partialCount} / ✗${result.stats.unverifiedCount}。耗时 ${(result.stats.durationMs / 1000).toFixed(1)}s。`,
+        `Generated <code>${result.stats.nodeCount}</code> classes and <code>${result.stats.edgeCount}</code> edges. ` +
+        `Calibration: ✓ ${result.stats.verifiedCount} / ⚠ ${result.stats.partialCount} / ✗ ${result.stats.unverifiedCount}. ` +
+        `Took ${(result.stats.durationMs / 1000).toFixed(1)}s.`,
       actions: actionTrace,
     });
 

@@ -26,7 +26,7 @@ For every class defined in the file, output exactly one fenced block:
   "kind": "class",
   "file": "<workspace-relative path, copied from the user message>",
   "range": { "startLine": <int>, "endLine": <int> },
-  "intent": "<≤ 30 字 / 80 chars summarising the class purpose>",
+  "intent": "<≤ 80 chars summarising the class purpose>",
   "layer": "entry" | "controller" | "service" | "repo" | "util",
   "confidence": <0.0-1.0>,
   "methods": [
@@ -34,7 +34,7 @@ For every class defined in the file, output exactly one fenced block:
       "name": "<MethodName>",
       "signature": "(<short param list>)",
       "line": <int>,
-      "intent": "<optional: ≤ 30 字 method intent>",
+      "intent": "<optional: ≤ 80 chars method intent>",
       "calls": ["<in-file class name>", ...],
       "external_calls": ["<cross-file or cross-package identifier>", ...],
       "risks": ["security" | "external_io" | "concurrency" | "low_confidence" | "high_coupling" | "missing_test", ...]
@@ -44,7 +44,7 @@ For every class defined in the file, output exactly one fenced block:
   "external_calls": ["<cross-file / cross-package identifiers>", ...],
   "risks": [
     { "type": "security" | "external_io" | "concurrency" | "low_confidence" | "high_coupling" | "missing_test",
-      "desc": "<≤ 20 字 reason>" }
+      "desc": "<≤ 60 chars reason>" }
   ],
   "reading_priority": <1 = read first, 5 = read last>
 }

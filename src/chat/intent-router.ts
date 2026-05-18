@@ -32,9 +32,9 @@ export function routeChatIntent(request: vscode.ChatRequest): ChatIntent {
       return { kind: 'explain', target: prompt, prompt };
   }
 
-  // No sub-command. If the prompt body mentions "codemap" / "graph" / "图" we
-  // treat it as a workspace-level generation request; otherwise unknown.
-  if (/codemap|call\s*graph|图谱|graph/i.test(prompt) || prompt.length === 0) {
+  // No sub-command. If the prompt body mentions codemap / call graph / graph
+  // we treat it as a workspace-level generation request; otherwise unknown.
+  if (/codemap|call\s*graph|graph/i.test(prompt) || prompt.length === 0) {
     return { kind: 'generate_workspace', prompt };
   }
   return { kind: 'unknown', prompt };

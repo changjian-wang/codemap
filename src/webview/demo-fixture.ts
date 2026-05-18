@@ -21,7 +21,7 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'host', layer: 'entry',
       verification: 'verified', readingPriority: 1,
       confidence: 0.95, readState: 'read',
-      intent: 'WebApplication 启动：注册 modules（Capture/Recall/Memory/...）、配置 Postgres + pgvector、挂载 endpoints',
+      intent: 'WebApplication bootstrap: registers modules (Capture/Recall/Memory/...), configures Postgres + pgvector, mounts endpoints',
       risks: [],
       methods: [
         { name: 'Main', signature: '(string[] args)', line: 14, risks: [], readState: 'read' },
@@ -37,8 +37,8 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'capture', layer: 'controller',
       verification: 'verified', readingPriority: 2,
       confidence: 0.96, readState: 'read',
-      intent: 'Minimal API 路由组 /api/captures：POST /url 异步入队、GET / 列表、GET /jobs/{id}',
-      risks: [{ type: 'external_io', desc: 'HTTP entry — 接收用户上传 URL' }],
+      intent: 'Minimal API route group /api/captures: POST /url async-enqueue, GET / list, GET /jobs/{id}',
+      risks: [{ type: 'external_io', desc: 'HTTP entry — accepts user-supplied URL upload' }],
       methods: [
         { name: 'MapCaptureEndpoints', signature: '(this app)', line: 14, risks: [], readState: 'read' },
         { name: 'IngestUrl', signature: '(req, handler, ct)', line: 28, risks: ['external_io'], readState: 'read' },
@@ -54,10 +54,10 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'capture', layer: 'service',
       verification: 'verified', readingPriority: 3,
       confidence: 0.9, readState: 'read',
-      intent: 'ADR-028/029：URL canonicalize → 去重 in-flight → 写 capture_jobs (pending) → worker 异步执行 extract+embed+chunk',
+      intent: 'ADR-028/029: URL canonicalize → in-flight dedup → write capture_jobs (pending) → worker runs extract+embed+chunk asynchronously',
       risks: [
-        { type: 'concurrency', desc: 'UNIQUE 索引并发 insert + 23505 重试' },
-        { type: 'external_io', desc: '抓取远端 URL（HtmlContentExtractor）' },
+        { type: 'concurrency', desc: 'concurrent INSERT under UNIQUE index + 23505 retry' },
+        { type: 'external_io', desc: 'fetches remote URL via HtmlContentExtractor' },
       ],
       methods: [
         { name: 'EnqueueAsync', signature: '(IngestUrlRequest, ct)', line: 49, risks: ['concurrency', 'external_io'], readState: 'read' },
@@ -72,7 +72,7 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'capture', layer: 'service',
       verification: 'verified', readingPriority: 4,
       confidence: 0.88, readState: 'unread',
-      intent: 'BackgroundService：串行 drain capture_jobs。崩溃恢复 (ResetStuckProcessing) + 重试退避 + 取消语义',
+      intent: 'BackgroundService: serially drains capture_jobs. Crash recovery (ResetStuckProcessing) + retry backoff + cancel semantics',
       risks: [{ type: 'concurrency', desc: 'BackgroundService + DI scope per tick' }],
       methods: [
         { name: 'StartAsync', signature: '(ct)', line: 49, risks: ['concurrency'] },
@@ -88,7 +88,7 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'capture', layer: 'repo',
       verification: 'verified', readingPriority: 5,
       confidence: 0.97, readState: 'unread',
-      intent: 'Dapper-based store for EventEntity（含 pgvector 列）。Insert 与按 Id 查询',
+      intent: 'Dapper-based store for EventEntity (includes pgvector column). Insert and lookup by Id',
       risks: [],
       methods: [
         { name: 'InsertAsync', signature: '(EventEntity, ct)', line: 24, risks: [] },
@@ -103,7 +103,7 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'capture', layer: 'repo',
       verification: 'verified', readingPriority: 6,
       confidence: 0.96, readState: 'unread',
-      intent: 'ADR-022 §C：批量 insert event chunks (≤ 32/event)，每行单独 INSERT',
+      intent: 'ADR-022 §C: batch insert event chunks (≤ 32/event), one INSERT per row',
       risks: [],
       methods: [
         { name: 'InsertRangeAsync', signature: '(chunks, ct)', line: 18, risks: [] },
@@ -117,8 +117,8 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'capture', layer: 'repo',
       verification: 'verified', readingPriority: 7,
       confidence: 0.93, readState: 'unread',
-      intent: 'capture_jobs 表的 Dapper 仓储：claim/insert/mark/reset stuck/find in-flight',
-      risks: [{ type: 'concurrency', desc: '依赖部分 UNIQUE 索引兜底并发' }],
+      intent: 'Dapper repository for the capture_jobs table: claim / insert / mark / reset stuck / find in-flight',
+      risks: [{ type: 'concurrency', desc: 'relies on partial UNIQUE index for concurrency safety' }],
       methods: [
         { name: 'InsertAsync', signature: '(...)', line: 22, risks: ['concurrency'] },
         { name: 'FindInFlightByCanonicalUrlAsync', signature: '(url, actor, ct)', line: 51, risks: [] },
@@ -137,8 +137,8 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'recall', layer: 'controller',
       verification: 'verified', readingPriority: 8,
       confidence: 0.96, readState: 'unread',
-      intent: 'Minimal API 路由组 /api/recall：GET / 向量召回、POST /ask grounded LLM 问答',
-      risks: [{ type: 'security', desc: 'Prompt injection 风险：自然语言 query' }],
+      intent: 'Minimal API route group /api/recall: GET / vector recall, POST /ask grounded LLM Q&A',
+      risks: [{ type: 'security', desc: 'Prompt injection risk: natural-language query' }],
       methods: [
         { name: 'MapRecallEndpoints', signature: '(this app)', line: 14, risks: [] },
         { name: 'Search', signature: '(req, handler, ct)', line: 28, risks: [] },
@@ -153,7 +153,7 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'recall', layer: 'service',
       verification: 'verified', readingPriority: 9,
       confidence: 0.94, readState: 'unread',
-      intent: 'query → embed → IRecallQuery.SearchAsync（pgvector cosine top-K）→ 反序列化 payload',
+      intent: 'query → embed → IRecallQuery.SearchAsync (pgvector cosine top-K) → deserialize payload',
       risks: [],
       methods: [
         { name: 'HandleAsync', signature: '(req, ct)', line: 14, risks: [] },
@@ -168,10 +168,10 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'recall', layer: 'service',
       verification: 'partial', readingPriority: 10,
       confidence: 0.81, readState: 'unread',
-      intent: 'ADR-017 grounded ask：embed → top-K cosine → 组装 GroundedAskPrompts → ILlmService → 解析 [n] 强引用',
+      intent: 'ADR-017 grounded ask: embed → top-K cosine → assemble GroundedAskPrompts → ILlmService → parse [n] strong citations',
       risks: [
-        { type: 'security', desc: 'Prompt injection 重灾区' },
-        { type: 'low_confidence', desc: 'fail-soft 路径未被 golden 完全覆盖' },
+        { type: 'security', desc: 'Prompt injection hotspot' },
+        { type: 'low_confidence', desc: 'fail-soft path not fully covered by golden samples' },
       ],
       methods: [
         { name: 'HandleAsync', signature: '(req, ct)', line: 33, risks: ['security', 'low_confidence'] },
@@ -191,8 +191,8 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'recall', layer: 'repo',
       verification: 'verified', readingPriority: 11,
       confidence: 0.92, readState: 'unread',
-      intent: '原生 SQL：pgvector cosine（<=> 操作符）做 top-K 搜索，按 topic 分区',
-      risks: [{ type: 'external_io', desc: 'pgvector 索引未命中时全表扫描' }],
+      intent: 'Native SQL: pgvector cosine (<=> operator) top-K search, partitioned by topic',
+      risks: [{ type: 'external_io', desc: 'full table scan when pgvector index misses' }],
       methods: [
         { name: 'SearchAsync', signature: '(Vector q, topic, k, ct)', line: 18, risks: ['external_io'] },
       ],
@@ -205,8 +205,8 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'shared', layer: 'util',
       verification: 'verified', readingPriority: 12,
       confidence: 0.93, readState: 'unread',
-      intent: 'In-process ONNX：tokenize → inference → masked mean pool → L2 normalize。多线程读路径安全',
-      risks: [{ type: 'concurrency', desc: 'singleton + ORT InferenceSession 并发推理' }],
+      intent: 'In-process ONNX: tokenize → inference → masked mean pool → L2 normalize. Read path is thread-safe',
+      risks: [{ type: 'concurrency', desc: 'singleton + ORT InferenceSession under concurrent inference' }],
       methods: [
         { name: 'EmbedQueryAsync', signature: '(text, ct)', line: 44, risks: ['concurrency'] },
         { name: 'EmbedDocumentAsync', signature: '(text, ct)', line: 55, risks: ['concurrency'] },
@@ -222,8 +222,8 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'shared', layer: 'util',
       verification: 'partial', readingPriority: 13,
       confidence: 0.84, readState: 'unread',
-      intent: 'ADR-017：HTTP POST Ollama /api/chat（non-streaming），剥离 <think> 块到 ReasoningTrace',
-      risks: [{ type: 'external_io', desc: 'Ollama sidecar HTTP，超时/503 需重试' }],
+      intent: 'ADR-017: HTTP POST Ollama /api/chat (non-streaming), strips <think> blocks into ReasoningTrace',
+      risks: [{ type: 'external_io', desc: 'Ollama sidecar HTTP — retries on timeout / 503' }],
       methods: [
         { name: 'ChatAsync', signature: '(messages, opts, ct)', line: 48, risks: ['external_io'] },
         { name: 'StripThinkBlock', signature: '(rawAnswer)', line: 121, risks: [] },
@@ -243,8 +243,8 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'shared', layer: 'util',
       verification: 'verified', readingPriority: 14,
       confidence: 0.91, readState: 'unread',
-      intent: 'HttpClient 抓 → SmartReader Readability → ReverseMarkdown。带 SSRF 防护（拒绝 RFC1918/loopback 等）',
-      risks: [{ type: 'security', desc: 'SSRF 边界（OWASP A10:2021）' }],
+      intent: 'HttpClient fetch → SmartReader Readability → ReverseMarkdown. SSRF guard rejects RFC1918/loopback etc.',
+      risks: [{ type: 'security', desc: 'SSRF boundary (OWASP A10:2021)' }],
       methods: [
         { name: 'ExtractAsync', signature: '(url, ct)', line: 43, risks: ['security', 'external_io'] },
         { name: 'AssertHostIsPublicAsync', signature: '(host, ct)', line: 102, risks: ['security'] },
@@ -259,8 +259,8 @@ export const DEMO_GRAPH: CodeMapGraph = {
       boundedContext: 'recall', layer: 'util',
       verification: 'unverified', readingPriority: 99,
       confidence: 0.38, readState: 'unread',
-      intent: 'LLM 在 AskByQueryHandler 的 calls 中提到该类，但 executeWorkspaceSymbolProvider 未找到',
-      risks: [{ type: 'low_confidence', desc: 'LLM 可能幻觉，已标灰禁用跳转' }],
+      intent: 'Referenced by AskByQueryHandler.calls, but executeWorkspaceSymbolProvider could not locate it',
+      risks: [{ type: 'low_confidence', desc: 'possible LLM hallucination; greyed out and jump disabled' }],
       methods: [
         { name: 'BuildUserPrompt', signature: '(q, snippets)', line: 0, risks: ['low_confidence'] },
       ],
@@ -268,7 +268,7 @@ export const DEMO_GRAPH: CodeMapGraph = {
         rangeAdjusted: false,
         droppedCalls: [],
         droppedExternalCalls: [],
-        reason: 'executeWorkspaceSymbolProvider 未返回结果；可能 LLM 把 V1 + ADR-017 演进描述合成了一个虚类',
+        reason: 'executeWorkspaceSymbolProvider returned nothing; LLM may have synthesized a non-existent class from a V1 + ADR-017 evolution description',
       },
     },
   },
@@ -319,12 +319,12 @@ export const DEMO_GRAPH: CodeMapGraph = {
 export const DEMO_CHAT_TURNS: MockupChatTurn[] = [
   {
     role: 'user', name: 'You', time: '14:02',
-    content: '帮我生成 <span class="ref-chip">lumen</span> 后端 (apps/api) 的 codemap',
+    content: 'Generate a codemap for the <span class="ref-chip">lumen</span> backend (apps/api)',
   },
   {
     role: 'assistant', name: '@codemap', time: '14:02',
     content:
-      '好的，扫描 <span class="ref-chip">apps/api/src</span>。检测到这是 .NET 8 模块化单体，按 <code>Lumen.Modules.*</code> + <code>Lumen.Shared.*</code> 拆分。我会按 module 分批分析。',
+      'Scanning <span class="ref-chip">apps/api/src</span>. Detected a .NET 8 modular monolith split into <code>Lumen.Modules.*</code> + <code>Lumen.Shared.*</code>. Analyzing module-by-module.',
     actions: [
       { check: true, num: '1', text: 'Scan: 173 .cs files, 8.8k LOC, 9 csproj projects' },
       { check: true, num: '2', text: 'Detect bounded contexts: Host, Modules.{Capture,Recall,Memory,Connect,...}, Shared' },
@@ -337,15 +337,15 @@ export const DEMO_CHAT_TURNS: MockupChatTurn[] = [
   {
     role: 'assistant', name: '@codemap', time: '14:03',
     content:
-      '分析完成。共 <code>14</code> 个类、<code>26</code> 条调用边。主管道：<span class="ref-chip">CaptureEndpoints</span> → <span class="ref-chip">IngestUrlHandler</span> → <span class="ref-chip">CaptureJobWorker</span>。Recall 侧两个端点。Eval：节点 P=0.93/R=0.86，边 P=0.84/R=0.77。',
+      'Done. <code>14</code> classes, <code>26</code> edges. Main pipeline: <span class="ref-chip">CaptureEndpoints</span> → <span class="ref-chip">IngestUrlHandler</span> → <span class="ref-chip">CaptureJobWorker</span>. Recall side exposes two endpoints. Eval: nodes P=0.93/R=0.86, edges P=0.84/R=0.77.',
   },
   {
     role: 'user', name: 'You', time: '14:04',
-    content: '为什么 <span class="ref-chip">AskByQueryHandler</span> 是 partial？',
+    content: 'Why is <span class="ref-chip">AskByQueryHandler</span> marked partial?',
   },
   {
     role: 'assistant', name: '@codemap', time: '14:04',
     content:
-      'LLM 在它的 <code>calls</code> 字段里列了 <code>GroundedAskPromptsV2.BuildUserPrompt</code>，但 calibrator 用 <code>executeWorkspaceSymbolProvider</code> 在工作区只找到 <code>GroundedAskPrompts</code>。保留节点但把这条边标为 unverified 灰线，禁用跳转。',
+      'The LLM listed <code>GroundedAskPromptsV2.BuildUserPrompt</code> in its <code>calls</code> field, but the calibrator could only find <code>GroundedAskPrompts</code> via <code>executeWorkspaceSymbolProvider</code>. The node is kept, but that edge is marked unverified (grey dotted line) and the jump is disabled.',
   },
 ];

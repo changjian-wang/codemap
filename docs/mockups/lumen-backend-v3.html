@@ -770,6 +770,7 @@
 
     <button class="tb-btn primary" id="analyzeBtn">▶ Re-Analyze <span class="kbd">⌘⇧A</span></button>
     <button class="tb-btn" id="resetBtn">↺ Reset Progress</button>
+    <button class="tb-btn" id="exportBtn" title="Export graph as JSON / Markdown / Mermaid">↓ Export</button>
 
     <input class="tb-search" id="searchInput" placeholder="Search class or method..." />
   </div>
@@ -1847,7 +1848,7 @@ function renderDetails(c) {
         <span class="bc-tag ${c.bc}">${c.bc}</span>
       </h3>
       <div class="file-line">
-        📄 <a>${c.file}</a>
+        📄 <a class="file-jump" title="Jump to file" data-node-id="${escapeAttr(c.id)}">${c.file}</a>
       </div>
 
       <div class="intent">${c.intent}</div>
@@ -2465,6 +2466,24 @@ const analyzeBtn = document.getElementById('analyzeBtn');
 if (analyzeBtn) analyzeBtn.addEventListener('click', postReanalyze);
 const resetBtn = document.getElementById('resetBtn');
 if (resetBtn) resetBtn.addEventListener('click', postResetProgress);
+const exportBtn = document.getElementById('exportBtn');
+if (exportBtn) exportBtn.addEventListener('click', () => {
+  if (window.codemap && window.codemap.postMessage) {
+    window.codemap.postMessage({ type: 'export_graph' });
+  }
+});
+// Delegated click on the card file-line link → jump to file. We attach to
+// document so the handler keeps working after renderCard() replaces the
+// .file-jump element.
+document.addEventListener('click', e => {
+  const t = e.target;
+  if (!t || !(t instanceof Element)) return;
+  const link = t.closest('.file-jump');
+  if (!link) return;
+  e.preventDefault();
+  const id = link.getAttribute('data-node-id');
+  if (id) postJump(id);
+});
 const outlineResetEl = document.getElementById('outlineReset');
 if (outlineResetEl) outlineResetEl.addEventListener('click', postResetProgress);
 const searchInputEl = document.getElementById('searchInput');

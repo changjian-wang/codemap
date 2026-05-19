@@ -129,4 +129,5 @@ export type ClientEvent =
   | { type: 'reset_progress' }
   | { type: 'request_focus'; nodeId: string }
   | { type: 'open_chat'; prefill?: string }
-  | { type: 'pick_scope'; currentScope?: string; rootName?: string };
+  | { type: 'pick_scope'; currentScope?: string; rootName?: string }
+  | { type: 'export_graph'; format?: 'json' | 'markdown' | 'mermaid' };

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { adaptGraphForMockup, type MockupChatTurn, type MockupStats, type MockupMeta } from './graph-adapter';
 import { ReadingProgressStore, applyReadingProgress } from '../persistence/reading-progress';
 import { jumpToSource } from '../editor/jump-to-source';
+import { formatGraph, EXPORT_SPECS, type ExportFormat } from '../export/formatters';
 import type { ClientEvent, CodeMapGraph } from '../shared/types';
 
 let currentPanel: vscode.WebviewPanel | undefined;
@@ -125,6 +126,69 @@ function handleClientMessage(msg: ClientEvent, context: vscode.ExtensionContext)
     case 'pick_scope':
       void pickScopeAndRegenerate(msg.currentScope, msg.rootName);
       return;
+    case 'export_graph':
+      void exportCurrentGraph(msg.format);
+      return;
+  }
+}
+
+async function exportCurrentGraph(preferred?: ExportFormat): Promise<void> {
+  if (!currentGraph) {
+    vscode.window.showWarningMessage('No graph in the panel yet — run @codemap first.');
+    return;
+  }
+  // Format pick: honor the message hint when present, otherwise prompt.
+  let format: ExportFormat | undefined = preferred;
+  if (!format) {
+    const items = (Object.values(EXPORT_SPECS) as { format: ExportFormat; label: string; description: string }[]).map(s => ({
+      label: s.label,
+      description: s.description,
+      format: s.format,
+    }));
+    const pick = await vscode.window.showQuickPick(items, {
+      title: 'Export CodeMap graph',
+      placeHolder: 'Choose an export format',
+    });
+    if (!pick) return;
+    format = pick.format;
+  }
+  const spec = EXPORT_SPECS[format];
+
+  const rootForDialog =
+    currentWorkspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+  const safeScope = (currentGraph.scope || 'workspace').replace(/[^A-Za-z0-9_.-]/g, '-');
+  const defaultName = `codemap-${safeScope}.${spec.extension}`;
+  const defaultUri = rootForDialog
+    ? vscode.Uri.file(path.join(rootForDialog.fsPath, defaultName))
+    : vscode.Uri.file(defaultName);
+
+  const saveAs = await vscode.window.showSaveDialog({
+    title: `Export CodeMap (${spec.label})`,
+    defaultUri,
+    filters: { [spec.label]: [spec.extension] },
+  });
+  if (!saveAs) return;
+
+  try {
+    const body = formatGraph(currentGraph, format);
+    await vscode.workspace.fs.writeFile(saveAs, Buffer.from(body, 'utf8'));
+    const open = 'Open File';
+    const reveal = 'Reveal in Explorer';
+    const action = await vscode.window.showInformationMessage(
+      `Exported ${Object.keys(currentGraph.nodes).length} classes to ${path.basename(saveAs.fsPath)}.`,
+      open,
+      reveal,
+    );
+    if (action === open) {
+      const doc = await vscode.workspace.openTextDocument(saveAs);
+      await vscode.window.showTextDocument(doc);
+    } else if (action === reveal) {
+      await vscode.commands.executeCommand('revealFileInOS', saveAs);
+    }
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `Export failed: ${(err as Error).message}`,
+    );
   }
 }
 

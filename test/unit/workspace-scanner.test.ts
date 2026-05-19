@@ -154,4 +154,85 @@ describe('scanWorkspace', () => {
     const r = await scanWorkspace(reader);
     expect(r.skeleton).toEqual(['src/main.ts']);
   });
+
+  it('fillToMaxFiles tops up skeleton when BFS cannot resolve imports (C# scenario)', async () => {
+    // Mimic lumen/apps/api/src: 5 entry points + many .cs files where every
+    // `using` statement is a namespace, not a path, so resolveImport always
+    // returns undefined. BFS from entries discovers nothing more; without
+    // fillToMaxFiles the skeleton would be just the 5 entries.
+    const fs: Record<string, string> = {
+      'apps/api/src/Lumen.Host/Program.cs': 'using System;',
+      'apps/api/src/Lumen.Eval/Program.cs': 'using System;',
+      'apps/api/src/Lumen.Modules.Capture/Endpoints/CaptureEndpoints.cs': 'using System;',
+      'apps/api/src/Lumen.Modules.Recall/Endpoints/RecallEndpoints.cs': 'using System;',
+      'apps/api/src/Lumen.Modules.Connect/Endpoints/ConnectEndpoints.cs': 'using System;',
+    };
+    // 168 additional non-entry .cs files spread across module subdirs.
+    for (let i = 0; i < 168; i++) {
+      fs[`apps/api/src/Lumen.Modules.Capture/Features/Handler${i}.cs`] = 'using System;';
+    }
+    const reader: FileReader = {
+      async listFiles() { return Object.keys(fs); },
+      async readText(rel) { return fs[rel]; },
+      async resolveImport() { return undefined; }, // C# `using` never resolves to a file
+    };
+    const r = await scanWorkspace(reader, {
+      maxDepth: 3,
+      maxFiles: 80,
+      extensions: ['.cs'],
+      rankBy: 'centrality',
+      fillToMaxFiles: true,
+    });
+    expect(r.entryPoints.length).toBe(5);
+    expect(r.skeleton.length).toBe(80); // <- the bug: was 5 without fill
+    // Entries survive at the front; the rest is filled with shortest-path-first
+    // remainder of eligible files.
+    for (const e of r.entryPoints) expect(r.skeleton).toContain(e);
+    expect(r.overflow.length).toBe(173 - 80);
+  });
+
+  it('fillToMaxFiles is a no-op when BFS already filled the skeleton', async () => {
+    // TS scenario where every relative import resolves: fill should not
+    // double-add already-included files.
+    const fs: Record<string, string> = { 'src/main.ts': '' };
+    for (let i = 0; i < 50; i++) {
+      fs['src/main.ts'] += `import './f${i}';`;
+      fs[`src/f${i}.ts`] = '';
+    }
+    const reader = makeReader(fs);
+    const r = await scanWorkspace(reader, {
+      maxDepth: 3,
+      maxFiles: 10,
+      extensions: ['.ts'],
+      rankBy: 'centrality',
+      fillToMaxFiles: true,
+    });
+    expect(r.skeleton.length).toBe(10);
+    // No duplicates.
+    expect(new Set(r.skeleton).size).toBe(10);
+  });
+
+  it('fillToMaxFiles respects pathPrefix (only fills files in scope)', async () => {
+    const fs: Record<string, string> = {
+      'apps/api/src/Lumen.Host/Program.cs': '',
+      'apps/api/src/Lumen.Modules.Capture/Features/Handler0.cs': '',
+      'apps/api/src/Lumen.Modules.Capture/Features/Handler1.cs': '',
+      'other-app/src/Misc.cs': '', // out of scope — must not appear
+    };
+    const reader: FileReader = {
+      async listFiles() { return Object.keys(fs); },
+      async readText(rel) { return fs[rel]; },
+      async resolveImport() { return undefined; },
+    };
+    const r = await scanWorkspace(reader, {
+      maxDepth: 3,
+      maxFiles: 80,
+      extensions: ['.cs'],
+      pathPrefix: 'apps/api/src',
+      rankBy: 'centrality',
+      fillToMaxFiles: true,
+    });
+    expect(r.skeleton).not.toContain('other-app/src/Misc.cs');
+    expect(r.skeleton.length).toBe(3);
+  });
 });

@@ -4,6 +4,7 @@ test/**
 eval/**
 docs/plan/**
 docs/adrs/**
+docs/media/**
 .vscode/**
 .vscode-test/**
 .github/**

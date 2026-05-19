@@ -11,6 +11,10 @@ let currentPanel: vscode.WebviewPanel | undefined;
 // (jump_to_source, mark_read, etc.) can resolve nodeId → CodeNode without
 // re-fetching from the orchestrator.
 let currentGraph: CodeMapGraph | undefined;
+// The workspace folder the current graph was generated against. Multi-root
+// workspaces need this so `jump_to_source` doesn't resolve `node.file` against
+// the first folder when the graph actually came from another.
+let currentWorkspaceRoot: vscode.Uri | undefined;
 
 /**
  * Open or refocus the WebView panel, rendering the given graph. Re-rendering
@@ -23,6 +27,7 @@ export async function showGraph(
   chatTurns: MockupChatTurn[] = [],
   stats?: MockupStats,
   meta?: MockupMeta,
+  workspaceRoot?: vscode.Uri,
 ): Promise<void> {
   if (!currentPanel) {
     currentPanel = vscode.window.createWebviewPanel(
@@ -49,6 +54,7 @@ export async function showGraph(
   }
 
   currentGraph = graph;
+  currentWorkspaceRoot = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri;
   // Overlay persisted "mark as read" state — the orchestrator always emits
   // fresh nodes with readState='unread', but the user's prior marks (stored
   // in workspaceState) should still surface on this render.
@@ -67,7 +73,7 @@ function handleClientMessage(msg: ClientEvent, context: vscode.ExtensionContext)
       return;
     case 'jump_to_source': {
       const node = currentGraph?.nodes[msg.nodeId];
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+      const workspaceRoot = currentWorkspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri;
       if (!node || !workspaceRoot) {
         vscode.window.showWarningMessage(
           `Cannot jump: graph not loaded or no workspace open.`,

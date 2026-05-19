@@ -250,7 +250,7 @@ async function handleGenerate(
       scope: scopePrefix,
       fileCountText: `${result.stats.filesAnalyzed} files analyzed`,
       scopePill: scopePrefix ? '📦 SCOPED' : '📦 WORKSPACE',
-    });
+    }, workspaceFolder.uri);
 
     // ---- Persist for /why, /explain, /focus and reloads. ----
     await new GraphStore(context.workspaceState).save({
@@ -374,6 +374,7 @@ async function handleFocus(
       fileCountText: `${focus.includedIds.length} classes in focus`,
       scopePill: '🎯 FOCUS',
     },
+    vscode.workspace.workspaceFolders?.[0]?.uri,
   );
 
   // /focus is transient: don't overwrite the persisted full graph so /why

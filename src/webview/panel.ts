@@ -123,23 +123,35 @@ function handleClientMessage(msg: ClientEvent, context: vscode.ExtensionContext)
       return;
     }
     case 'pick_scope':
-      void pickScopeAndRegenerate(msg.currentScope);
+      void pickScopeAndRegenerate(msg.currentScope, msg.rootName);
       return;
   }
 }
 
-async function pickScopeAndRegenerate(currentScope: string | undefined): Promise<void> {
+async function pickScopeAndRegenerate(
+  currentScope: string | undefined,
+  rootNameHint?: string,
+): Promise<void> {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) {
     vscode.window.showWarningMessage('No workspace folder open.');
     return;
   }
-  // Re-analyze should start from the folder the visible graph belongs to,
-  // not blindly from workspaceFolders[0]. `currentWorkspaceRoot` is set by
-  // `showGraph` and points at whichever root the orchestrator just ran on.
-  const activeRootFs = currentWorkspaceRoot?.fsPath;
-  const workspaceFolder =
-    folders.find(f => f.uri.fsPath === activeRootFs) ?? folders[0]!;
+  // Prefer the explicit rootName carried by the pick_scope message (set by
+  // the webview from the visible breadcrumb). Falls back to the module-level
+  // `currentWorkspaceRoot`, which can be `undefined` after a window reload
+  // re-creates the extension host while the webview is reopened from the
+  // persisted graph store.
+  const byHint = rootNameHint
+    ? folders.find(f => f.name.toLowerCase() === rootNameHint.toLowerCase())
+    : undefined;
+  const byState = currentWorkspaceRoot
+    ? folders.find(f => f.uri.fsPath === currentWorkspaceRoot!.fsPath)
+    : undefined;
+  const workspaceFolder = byHint ?? byState ?? folders[0]!;
+  // Keep module state in sync so jump_to_source on the same panel uses the
+  // right root even before the next showGraph call lands.
+  currentWorkspaceRoot = workspaceFolder.uri;
   const rootFs = workspaceFolder.uri.fsPath;
   // Multi-root only: when the active folder is NOT the first one, we must
   // prefix the produced scope with `<folderName>/` so the chat-side
@@ -348,10 +360,12 @@ function renderHtml(
           });
           pill.addEventListener('click', function () {
             var scopeEl = document.getElementById('repoScope');
+            var nameEl = document.getElementById('repoName');
             // repoScope renders as "· <path>"; strip the leading marker.
             var raw = scopeEl ? (scopeEl.textContent || '') : '';
             var current = raw.replace(/^\\s*\u00b7\\s*/, '').trim();
-            send({ type: 'pick_scope', currentScope: current || undefined });
+            var rootName = nameEl ? (nameEl.textContent || '').trim() : '';
+            send({ type: 'pick_scope', currentScope: current || undefined, rootName: rootName || undefined });
           });
         })();
 

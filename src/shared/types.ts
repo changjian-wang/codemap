@@ -2,7 +2,7 @@
 // Any change here must be made in lockstep on both sides; the bundler
 // inlines this file into both bundles.
 
-export type NodeKind = 'class';
+export type NodeKind = 'class' | 'interface' | 'record' | 'enum';
 export type VerificationState = 'verified' | 'partial' | 'unverified';
 export type EdgeKind = 'calls' | 'external_calls';
 

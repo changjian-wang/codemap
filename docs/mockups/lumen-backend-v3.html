@@ -189,6 +189,13 @@
     }
     .outline-name.read    { color: var(--vs-text-dim); text-decoration: line-through; }
     .outline-name.unverified { color: var(--vs-text-dim); font-style: italic; }
+    .outline-name .kind-prefix {
+      font-size: 10px; margin-right: 2px; letter-spacing: -0.5px;
+      color: var(--vs-text-dim);
+    }
+    .outline-name .kind-prefix.kind-interface { color: #2ea043; }
+    .outline-name .kind-prefix.kind-record    { color: #8957e5; }
+    .outline-name .kind-prefix.kind-enum      { color: #b58900; }
     .outline-icons { display: flex; gap: 3px; flex-shrink: 0; align-items: center; }
     .icon-dot { width: 6px; height: 6px; border-radius: 50%; }
     .icon-dot.security    { background: var(--risk-security); }
@@ -287,6 +294,12 @@
       font-size: 10px; background: var(--vs-accent);
       color: #fff; padding: 2px 6px; border-radius: 3px;
       font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .card .kind-tag.interface { background: #2ea043; }
+    .card .kind-tag.record    { background: #8957e5; }
+    .card .kind-tag.enum {
+      /* Different hue from class so it's distinguishable from a glance. */
+      background: #b58900;
     }
     .card .bc-tag {
       font-size: 10px; padding: 2px 6px; border-radius: 3px;
@@ -1178,12 +1191,18 @@ function bcColor(bc) {
   }[bc] || '#aaaaaa';
 }
 function buildClassLabel(c) {
-  const header = `${c.id}  ${visGlyph(c.verification)}`;
+  // Non-class kinds get a UML stereotype line in front of the name so
+  // they're recognisable at a glance even if the node shape doesn't
+  // render distinctly (accessibility, b/w printing). Enum members render
+  // as `· Foo` rather than `+ Foo()` since they're not callable.
+  const stereotype = (c.kind && c.kind !== 'class') ? `«${c.kind}»\n` : '';
+  const header = `${stereotype}${c.id}  ${visGlyph(c.verification)}`;
   const sep    = '──────────────────────';
   const visible = c.methods.slice(0, 5);
+  const isMemberOnly = c.kind === 'enum';
   const methodLines = visible.map(m => {
     const riskMark = m.risks.length ? ' ●' : '';
-    return `+ ${m.name}()${riskMark}`;
+    return isMemberOnly ? `· ${m.name}${riskMark}` : `+ ${m.name}()${riskMark}`;
   });
   const overflow = c.methods.length > 5 ? `… +${c.methods.length - 5} more` : '';
   return [header, sep, ...methodLines, overflow].filter(Boolean).join('\n');
@@ -1194,12 +1213,15 @@ const nodes = CLASSES.map(c => ({
     id: c.id,
     label: buildClassLabel(c),
     bc: c.bc,
+    kind: c.kind || 'class',
     verification: c.verification,
     readState: c.readState,
     width: 250,
-    height: 32 + (Math.min(c.methods.length, 5) + (c.methods.length > 5 ? 1 : 0)) * 18,
+    // Non-class kinds get an extra row for the «stereotype» line.
+    height: 32 + ((c.kind && c.kind !== 'class') ? 14 : 0) +
+      (Math.min(c.methods.length, 5) + (c.methods.length > 5 ? 1 : 0)) * 18,
   },
-  classes: `cls bc-${c.bc} v-${c.verification} r-${c.readState}`,
+  classes: `cls bc-${c.bc} v-${c.verification} r-${c.readState} kind-${c.kind || 'class'}`,
 }));
 
 EXTERNAL_DEPS.forEach(d => {
@@ -1282,6 +1304,32 @@ const cy = cytoscape({
       }
     },
     { selector: 'node.cls.r-read', style: { 'opacity': 0.45 } },
+    {
+      // Interface: pure contract — ellipse + faint cyan tint. bc/verification
+      // styling still applies through .bc-* and .v-* classes.
+      selector: 'node.cls.kind-interface',
+      style: {
+        'shape': 'ellipse',
+        'background-color': '#1f2a2a',
+      }
+    },
+    {
+      // Record: immutable data carrier — barrel shape + faint purple tint.
+      selector: 'node.cls.kind-record',
+      style: {
+        'shape': 'barrel',
+        'background-color': '#2a1f2a',
+      }
+    },
+    {
+      // Enum: cut-corner rectangle + faint gold tint. Same bc/verification
+      // rules still apply via .bc-* / .v-* classes — only shape and bg shift.
+      selector: 'node.cls.kind-enum',
+      style: {
+        'shape': 'cut-rectangle',
+        'background-color': '#2d2d22',
+      }
+    },
     {
       selector: 'node.ext',
       style: {
@@ -1373,9 +1421,15 @@ function renderOutline() {
     const nameCls = (c.readState === 'read' ? ' read' : '') + (c.verification === 'unverified' ? ' unverified' : '');
     const priorityCls = c.verification === 'unverified' ? ' unverified' : '';
     const riskDots = c.risks.map(r => `<span class="icon-dot ${r.type}" title="${r.desc}"></span>`).join('');
+    // Mark non-class entries in the outline with a UML-style prefix so
+    // they're recognisable even before the user opens the card.
+    const KIND_PREFIX = { interface: 'I', record: 'R', enum: 'E' };
+    const kindPrefix = c.kind && KIND_PREFIX[c.kind]
+      ? `<span class="kind-prefix kind-${c.kind}" title="${c.kind}">«${KIND_PREFIX[c.kind]}»</span> `
+      : '';
     row.innerHTML = `
       <span class="outline-priority${priorityCls}">${c.verification === 'unverified' ? '?' : c.readingPriority}</span>
-      <span class="outline-name${nameCls}">${c.id}</span>
+      <span class="outline-name${nameCls}">${kindPrefix}${c.id}</span>
       <span class="outline-icons">
         ${riskDots}
         <span class="v-icon ${c.verification}">${visGlyph(c.verification)}</span>
@@ -1728,7 +1782,7 @@ function renderDetails(c) {
     <div class="card">
       <h3>
         ${c.id}
-        <span class="kind-tag">class</span>
+        <span class="kind-tag ${c.kind || 'class'}">${c.kind || 'class'}</span>
         <span class="bc-tag ${c.bc}">${c.bc}</span>
       </h3>
       <div class="file-line">

@@ -14,6 +14,8 @@ import type { CodeMapGraph } from '../shared/types';
 
 export interface MockupClass {
   id: string;
+  /** 'class' or 'enum'. Drives the node shape on the graph and the kind tag. */
+  kind: 'class' | 'enum';
   bc: string;
   file: string;
   layer?: string;
@@ -167,6 +169,7 @@ export function adaptGraphForMockup(
 
   const classes: MockupClass[] = Object.values(graph.nodes).map(n => ({
     id: n.id,
+    kind: n.kind,
     bc: slotForBc.get(n.boundedContext) ?? 'shared',
     file: n.file,
     layer: n.layer,

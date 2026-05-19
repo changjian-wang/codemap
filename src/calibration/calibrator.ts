@@ -211,9 +211,18 @@ export class Calibrator {
     }));
 
     // ---- 5. Top-level fields with defaults. ----
+    // Accept the four in-scope kinds; anything else (e.g. a hallucinated
+    // "delegate" or "function") falls back to 'class' — the dependency
+    // graph still reads correctly, only the visual stereotype is lost.
+    const rawKind = asString(data, 'kind');
+    const kind: CodeNode['kind'] =
+      rawKind === 'enum' ? 'enum'
+      : rawKind === 'interface' ? 'interface'
+      : rawKind === 'record' ? 'record'
+      : 'class';
     const node: CodeNode = {
       id: nodeId,
-      kind: 'class',
+      kind,
       file,
       range,
       boundedContext,

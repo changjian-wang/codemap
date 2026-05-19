@@ -155,6 +155,58 @@ describe('computeReadingOrder', () => {
       order.indexOf('FileSearchBackend'),
     );
   });
+
+  it('ranks Program/Startup-style roots above routing-surface entries', () => {
+    // Both qualify as entries (in-degree 0). The LLM commonly fails to wire
+    // `Program → RecallEndpoints` because the call goes through DI; without
+    // the filename signal, RecallEndpoints would beat Program on confidence
+    // ties. The filename heuristic encodes the convention so the reviewer
+    // sees the real composition root first.
+    const graph = G([
+      N('RecallEndpoints', {
+        file: 'apps/api/src/Lumen.Modules.Recall/Endpoints/RecallEndpoints.cs',
+        confidence: 0.95,
+      }),
+      N('Program', {
+        file: 'apps/api/src/Lumen.Host/Program.cs',
+        confidence: 0.8,
+      }),
+    ]);
+    expect(computeReadingOrder(graph)).toEqual(['Program', 'RecallEndpoints']);
+  });
+
+  it('breaks filename/test-rank ties by in-degree (true topo root wins)', () => {
+    // Two ordinary-named files. One has in-degree 0; the other is reachable
+    // via layer:entry plus an inbound edge. The topological root must lead.
+    const graph = G(
+      [
+        N('CalledEntry', { layer: 'entry' }),
+        N('RealRoot'),
+      ],
+      [{ from: 'RealRoot', to: 'CalledEntry' }],
+    );
+    expect(computeReadingOrder(graph)).toEqual(['RealRoot', 'CalledEntry']);
+  });
+
+  it('breaks filename/in-degree ties by out-degree (wider wiring wins)', () => {
+    // Both in-degree 0, neither matches a name convention. The one that
+    // wires up more dependencies is more likely the real composition root.
+    const graph = G(
+      [
+        N('NarrowRoot'),
+        N('WideRoot'),
+        N('A'),
+        N('B'),
+      ],
+      [
+        { from: 'WideRoot', to: 'A' },
+        { from: 'WideRoot', to: 'B' },
+        { from: 'NarrowRoot', to: 'A' },
+      ],
+    );
+    const order = computeReadingOrder(graph);
+    expect(order.indexOf('WideRoot')).toBeLessThan(order.indexOf('NarrowRoot'));
+  });
 });
 
 describe('isTestNode', () => {

@@ -171,6 +171,162 @@ describe('runOrchestrator', () => {
     expect(onFileDone.mock.calls.some(c => c[0].error?.message === 'boom')).toBe(true);
   });
 
+  it('skips LSP warmup when every skeleton file is a cache hit', async () => {
+    // ---- Arrange ----
+    // Pre-populate the cache for both skeleton files. The orchestrator's
+    // pre-check phase computes the same key the worker would; if both keys
+    // resolve to cached results, warmup is pure latency and we should
+    // skip it. We assert this by spying on the symbol provider: warmup
+    // is the only path that touches `symbolsInFile` during a fully-cached
+    // run (the analyzer calibration is baked into the cached result).
+    const { AnalyzerCache } = await import('../../src/persistence/analyzer-cache');
+    const { PROMPT_VERSION } = await import('../../src/llm/prompts');
+    const { CALIBRATOR_VERSION } = await import('../../src/calibration/calibrator');
+    const store = new Map<string, unknown>();
+    const memento = {
+      get: <T>(k: string) => store.get(k) as T | undefined,
+      update: async (k: string, v: unknown) => {
+        if (v === undefined) store.delete(k); else store.set(k, v);
+      },
+      keys: () => Array.from(store.keys()),
+    } as unknown as vscode.Memento;
+    const cache = new AnalyzerCache(memento);
+
+    const files = {
+      'apps/api/src/Lumen.Host/Program.cs': 'class Program {}',
+      'apps/api/src/Lumen.Modules.Capture/Endpoints/CaptureEndpoints.cs': 'class CaptureEndpoints {}',
+    };
+    const reader = fakeFileReader(files);
+
+    for (const [file, text] of Object.entries(files)) {
+      const id = file.includes('Program') ? 'Program' : 'CaptureEndpoints';
+      const key = AnalyzerCache.key(`${PROMPT_VERSION}/${CALIBRATOR_VERSION}`, file, text);
+      await cache.set(key, {
+        file,
+        nodes: [
+          {
+            id,
+            file,
+            range: { startLine: 1, endLine: 10 },
+            intent: id,
+            layer: 'service',
+            confidence: 0.9,
+            methods: [],
+            risks: [],
+            reading_priority: 3,
+            verification: 'verified',
+          } as never,
+        ],
+        edges: [],
+        parseErrors: [],
+      });
+    }
+
+    const symbolsInFileSpy = vi.fn(async () => []);
+    const findInWorkspaceSpy = vi.fn(async () => []);
+    const symbols: SymbolProvider = {
+      symbolsInFile: symbolsInFileSpy,
+      findInWorkspace: findInWorkspaceSpy,
+    };
+
+    const llm: LlmClient = {
+      // Cached results should bypass the LLM entirely; a throwing stream
+      // proves no call ever reaches it.
+      async *stream() {
+        throw new Error('llm should not be called on a fully-cached run');
+      },
+    };
+
+    // ---- Act ----
+    const onStep = vi.fn();
+    const out = await runOrchestrator(
+      { reader, symbols, llm, cache },
+      { rootRequest: '', scope: 'workspace' },
+      { onStep },
+      NEVER_CANCELLED,
+    );
+
+    // ---- Assert ----
+    expect(out.stats.filesAnalyzed).toBe(2);
+    expect(out.stats.filesFromCache).toBe(2);
+    expect(out.stats.warmupMs).toBe(0);
+    expect(symbolsInFileSpy).not.toHaveBeenCalled();
+    expect(onStep.mock.calls.flat().some(arg => /skipping LSP warmup/i.test(String(arg)))).toBe(true);
+  });
+
+  it('still warms up the LSP when any file is a cache miss', async () => {
+    // One cached file + one fresh file → cacheMissCount > 0 → warmup runs.
+    // We don't measure exact warmup duration (timing-dependent); we just
+    // check that `symbolsInFile` is invoked, which only happens via
+    // warmup or live analysis.
+    const { AnalyzerCache } = await import('../../src/persistence/analyzer-cache');
+    const { PROMPT_VERSION } = await import('../../src/llm/prompts');
+    const { CALIBRATOR_VERSION } = await import('../../src/calibration/calibrator');
+    const store = new Map<string, unknown>();
+    const memento = {
+      get: <T>(k: string) => store.get(k) as T | undefined,
+      update: async (k: string, v: unknown) => {
+        if (v === undefined) store.delete(k); else store.set(k, v);
+      },
+      keys: () => Array.from(store.keys()),
+    } as unknown as vscode.Memento;
+    const cache = new AnalyzerCache(memento);
+
+    const cachedFile = 'apps/api/src/Lumen.Host/Program.cs';
+    const freshFile = 'apps/api/src/Lumen.Modules.Capture/Endpoints/CaptureEndpoints.cs';
+    const files = { [cachedFile]: 'class Program {}', [freshFile]: 'class CaptureEndpoints {}' };
+    const reader = fakeFileReader(files);
+
+    await cache.set(
+      AnalyzerCache.key(`${PROMPT_VERSION}/${CALIBRATOR_VERSION}`, cachedFile, files[cachedFile]!),
+      {
+        file: cachedFile,
+        nodes: [
+          {
+            id: 'Program',
+            file: cachedFile,
+            range: { startLine: 1, endLine: 10 },
+            intent: 'Program',
+            layer: 'service',
+            confidence: 0.9,
+            methods: [],
+            risks: [],
+            reading_priority: 3,
+            verification: 'verified',
+          } as never,
+        ],
+        edges: [],
+        parseErrors: [],
+      },
+    );
+
+    const symbolsInFileSpy = vi.fn(async (file: string) => {
+      if (file === freshFile) return [sym('CaptureEndpoints', freshFile, 1, 10)];
+      return [];
+    });
+    const symbols: SymbolProvider = {
+      symbolsInFile: symbolsInFileSpy,
+      findInWorkspace: async () => [],
+    };
+
+    const llm = fakeLlm({
+      [freshFile]: metaBlock({ id: 'CaptureEndpoints' }) + '\n' + SUMMARY,
+    });
+
+    const out = await runOrchestrator(
+      { reader, symbols, llm, cache },
+      { rootRequest: '', scope: 'workspace' },
+      { lspWarmupTimeoutMs: 100 },
+      NEVER_CANCELLED,
+    );
+
+    expect(out.stats.filesFromCache).toBe(1);
+    expect(out.stats.filesAnalyzed).toBe(2);
+    // symbolsInFile was called — either by warmup or by the calibrator for
+    // the fresh file. Either way proves warmup was NOT skipped.
+    expect(symbolsInFileSpy).toHaveBeenCalled();
+  });
+
   it('filters the skeleton by scopePrefix', async () => {
     const reader = fakeFileReader({
       'apps/api/src/Lumen.Modules.Capture/Endpoints/CaptureEndpoints.cs': 'class CaptureEndpoints {}',

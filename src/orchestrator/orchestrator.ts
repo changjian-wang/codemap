@@ -146,26 +146,70 @@ export async function runOrchestrator(
   const classified = bucketAll(skeleton);
   if (token.isCancellationRequested) throw new CancelledError();
 
-  // ---- Step 2.5: warm up the language server ----
+  // ---- Step 2.5: pre-read file texts + predict cache coverage ----
+  //
+  // Reading every skeleton file in parallel is cheap (~50ms for 80 .cs
+  // files). The payoff: we can compute the cache hit rate BEFORE deciding
+  // whether to warm up the language server. C# Dev Kit cold-starts in 30s
+  // even on a small solution; if every file is already cached, the LSP
+  // never gets touched and waiting on warmup is pure friction.
+  //
+  // Side benefit: each worker reuses the pre-read text instead of
+  // re-reading from disk.
+  events.onStep?.(`Pre-reading ${skeleton.length} files and probing cache`);
+  interface PrecheckEntry {
+    text: string;
+    cacheKey: string;
+    cached: AnalyzeResult | undefined;
+  }
+  const preCheck = new Map<string, PrecheckEntry>();
+  await Promise.all(
+    skeleton.map(async file => {
+      const text = await deps.reader.readText(file);
+      if (text === undefined) return;
+      const cacheKey = deps.cache
+        ? AnalyzerCacheClass.key(
+            `${PROMPT_VERSION}/${CALIBRATOR_VERSION}`,
+            file,
+            text,
+          )
+        : '';
+      const cached = deps.cache?.get(cacheKey);
+      preCheck.set(file, { text, cacheKey, cached });
+    }),
+  );
+  if (token.isCancellationRequested) throw new CancelledError();
+  const cacheMissCount = Array.from(preCheck.values()).filter(p => !p.cached).length;
+
+  // ---- Step 2.6: warm up the language server (skip when fully cached) ----
   // Languages like C# (especially with C# Dev Kit) take seconds-to-minutes to
   // index a workspace. If we hit symbolsInFile before that, every analyzer
   // gets `undefined` and every node ends up lspNotReady. We poll multiple
   // entry points until at least one returns a non-empty symbol list—C# Dev
   // Kit famously returns `[]` for a few seconds during indexing, so an
   // empty response is not a proof of readiness.
-  events.onStep?.('Warming up language server');
-  const warmupTargets = (scan.entryPoints.length > 0 ? scan.entryPoints : skeleton).slice(0, 3);
-  const warmupT0 = Date.now();
-  const warmupReady = await warmupLsp(deps.symbols, warmupTargets, token, {
-    timeoutMs: options.lspWarmupTimeoutMs ?? 30_000,
-  });
-  const warmupMs = Date.now() - warmupT0;
-  if (!warmupReady) {
-    events.onWarning?.(
-      `Language server did not produce symbols within the warmup window (${Math.round(warmupMs / 1000)}s). ` +
-        'Verification scores may be unreliable on this run; re-run after the ' +
-        'workspace finishes indexing.',
-    );
+  //
+  // When cacheMissCount === 0, no analyzer worker will need the LSP at all
+  // (every file is served from cache). Warmup is pure latency in that case;
+  // skip it.
+  let warmupMs = 0;
+  if (cacheMissCount === 0 && preCheck.size > 0) {
+    events.onStep?.('All files cached — skipping LSP warmup');
+  } else {
+    events.onStep?.('Warming up language server');
+    const warmupTargets = (scan.entryPoints.length > 0 ? scan.entryPoints : skeleton).slice(0, 3);
+    const warmupT0 = Date.now();
+    const warmupReady = await warmupLsp(deps.symbols, warmupTargets, token, {
+      timeoutMs: options.lspWarmupTimeoutMs ?? 30_000,
+    });
+    warmupMs = Date.now() - warmupT0;
+    if (!warmupReady) {
+      events.onWarning?.(
+        `Language server did not produce symbols within the warmup window (${Math.round(warmupMs / 1000)}s). ` +
+          'Verification scores may be unreliable on this run; re-run after the ' +
+          'workspace finishes indexing.',
+      );
+    }
   }
   if (token.isCancellationRequested) throw new CancelledError();
 
@@ -180,7 +224,8 @@ export async function runOrchestrator(
     classified,
     async ({ file, bucket }) => {
       if (token.isCancellationRequested) throw new CancelledError();
-      const fileText = await deps.reader.readText(file);
+      const pre = preCheck.get(file);
+      const fileText = pre?.text ?? (await deps.reader.readText(file));
       if (fileText === undefined) throw new Error(`could not read ${file}`);
 
       // ---- Cache lookup ----
@@ -191,10 +236,21 @@ export async function runOrchestrator(
       //    verdict is baked into the cached AnalyzeResult),
       //  - editing the file invalidates that file,
       //  - renaming the file invalidates because file path is part of key.
-      const cacheKey = deps.cache
-        ? AnalyzerCacheClass.key(`${PROMPT_VERSION}/${CALIBRATOR_VERSION}`, file, fileText)
-        : '';
-      const cached = deps.cache?.get(cacheKey);
+      //
+      // The pre-check phase already populated `pre.cached` for files we
+      // know about; the lookup here is the fallback for newly-discovered
+      // files (shouldn't happen — skeleton is fixed before pre-check —
+      // but defended for safety).
+      const cacheKey =
+        pre?.cacheKey ??
+        (deps.cache
+          ? AnalyzerCacheClass.key(
+              `${PROMPT_VERSION}/${CALIBRATOR_VERSION}`,
+              file,
+              fileText,
+            )
+          : '');
+      const cached = pre?.cached ?? deps.cache?.get(cacheKey);
       if (cached) {
         // Older cache entries pre-date docComment extraction. Re-running
         // the extractor is purely a string operation; cheap enough to do on

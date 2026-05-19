@@ -116,7 +116,94 @@ function handleClientMessage(msg: ClientEvent, context: vscode.ExtensionContext)
       );
       return;
     }
+    case 'pick_scope':
+      void pickScopeAndRegenerate(msg.currentScope);
+      return;
   }
+}
+
+async function pickScopeAndRegenerate(currentScope: string | undefined): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    vscode.window.showWarningMessage('No workspace folder open.');
+    return;
+  }
+  const rootFs = workspaceFolder.uri.fsPath;
+
+  type ScopeAction = 'workspace' | 'folder' | 'file' | 'type';
+  interface ScopeItem extends vscode.QuickPickItem { action: ScopeAction; }
+  const items: ScopeItem[] = [
+    { label: '$(root-folder) Whole workspace', detail: workspaceFolder.name, action: 'workspace' },
+    { label: '$(folder-opened) Pick folder…', detail: 'Browse for a folder under this workspace', action: 'folder' },
+    { label: '$(file) Pick file…', detail: 'Browse for a single file under this workspace', action: 'file' },
+    { label: '$(edit) Type path…', detail: currentScope ? `Current: ${currentScope}` : 'Workspace-relative path', action: 'type' },
+  ];
+  const pick = await vscode.window.showQuickPick(items, {
+    title: 'Re-analyze with scope',
+    placeHolder: 'Choose the scope for the next @codemap run',
+  });
+  if (!pick) return;
+
+  let scope: string | undefined;
+  switch (pick.action) {
+    case 'workspace':
+      scope = undefined;
+      break;
+    case 'folder': {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        defaultUri: workspaceFolder.uri,
+        openLabel: 'Use as scope',
+      });
+      if (!picked || picked.length === 0) return;
+      scope = toWorkspaceRelative(picked[0].fsPath, rootFs);
+      if (scope === undefined) {
+        vscode.window.showWarningMessage('Selected folder is outside the workspace.');
+        return;
+      }
+      break;
+    }
+    case 'file': {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        defaultUri: workspaceFolder.uri,
+        openLabel: 'Use as scope',
+      });
+      if (!picked || picked.length === 0) return;
+      scope = toWorkspaceRelative(picked[0].fsPath, rootFs);
+      if (scope === undefined) {
+        vscode.window.showWarningMessage('Selected file is outside the workspace.');
+        return;
+      }
+      break;
+    }
+    case 'type': {
+      const typed = await vscode.window.showInputBox({
+        title: 'Scope path',
+        prompt: 'Workspace-relative path (folder or file). Leave empty for the whole workspace.',
+        value: currentScope ?? '',
+        placeHolder: 'e.g. sdk/storage  or  src/main.ts',
+      });
+      if (typed === undefined) return;
+      const trimmed = typed.trim();
+      scope = trimmed.length === 0 ? undefined : trimmed;
+      break;
+    }
+  }
+
+  const query = scope ? `@codemap /scope ${scope}` : '@codemap generate codemap';
+  await vscode.commands.executeCommand('workbench.action.chat.open', { query });
+}
+
+function toWorkspaceRelative(fsPath: string, rootFs: string): string | undefined {
+  const rel = path.relative(rootFs, fsPath);
+  if (rel === '') return '';
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+  return rel.split(path.sep).join('/');
 }
 
 function renderHtml(
@@ -198,6 +285,36 @@ function renderHtml(
         function send(msg) {
           if (window.codemap && window.codemap.postMessage) window.codemap.postMessage(msg);
         }
+
+        // --- repo pill: click to pick a new scope and re-analyze ---
+        // The breadcrumb shows workspace · scope. Clicking it sends pick_scope
+        // to the extension host, which opens a QuickPick and routes the user
+        // through @codemap /scope <path> (or @codemap generate codemap).
+        (function () {
+          var pill = document.querySelector('.repo-pill');
+          if (!pill) return;
+          pill.style.cursor = 'pointer';
+          pill.title = 'Click to change scope and re-analyze';
+          pill.addEventListener('mouseenter', function () {
+            var name = pill.querySelector('#repoName');
+            var scope = pill.querySelector('#repoScope');
+            if (name) name.style.textDecoration = 'underline';
+            if (scope) scope.style.textDecoration = 'underline';
+          });
+          pill.addEventListener('mouseleave', function () {
+            var name = pill.querySelector('#repoName');
+            var scope = pill.querySelector('#repoScope');
+            if (name) name.style.textDecoration = 'none';
+            if (scope) scope.style.textDecoration = 'none';
+          });
+          pill.addEventListener('click', function () {
+            var scopeEl = document.getElementById('repoScope');
+            // repoScope renders as "· <path>"; strip the leading marker.
+            var raw = scopeEl ? (scopeEl.textContent || '') : '';
+            var current = raw.replace(/^\\s*\u00b7\\s*/, '').trim();
+            send({ type: 'pick_scope', currentScope: current || undefined });
+          });
+        })();
 
         // --- chat input: Enter submits to @codemap, with slash autocomplete ---
         // The popup mirrors the participant.ts "Try one of" fallback so the

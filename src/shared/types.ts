@@ -128,4 +128,5 @@ export type ClientEvent =
   | { type: 'jump_to_source'; nodeId: string; method?: string }
   | { type: 'reset_progress' }
   | { type: 'request_focus'; nodeId: string }
-  | { type: 'open_chat'; prefill?: string };
+  | { type: 'open_chat'; prefill?: string }
+  | { type: 'pick_scope'; currentScope?: string };

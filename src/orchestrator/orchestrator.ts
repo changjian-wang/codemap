@@ -47,6 +47,12 @@ export interface OrchestratorOptions {
   scopePrefix?: string;
   scan?: Partial<ScanOptions>;
   maxParallelAnalyzers?: number;
+  /**
+   * Upper bound on how long the orchestrator waits for the language server
+   * to produce symbols before kicking off analysis. Default 30s—covers a
+   * cold C# Dev Kit start. Bump higher on very large solutions.
+   */
+  lspWarmupTimeoutMs?: number;
 }
 
 export interface OrchestratorEvents {
@@ -69,6 +75,8 @@ export interface OrchestratorResult {
     partialCount: number;
     unverifiedCount: number;
     lspNotReadyCount: number;
+    /** Wall-clock spent waiting for the language server to produce its first non-empty symbol list. */
+    warmupMs: number;
     durationMs: number;
   };
   warnings: string[];
@@ -141,15 +149,20 @@ export async function runOrchestrator(
   // ---- Step 2.5: warm up the language server ----
   // Languages like C# (especially with C# Dev Kit) take seconds-to-minutes to
   // index a workspace. If we hit symbolsInFile before that, every analyzer
-  // gets `undefined` and every node ends up lspNotReady. We poll the first
-  // entry point until either we get symbols or we hit the timeout, so the
-  // bulk of the run sees a hot server.
+  // gets `undefined` and every node ends up lspNotReady. We poll multiple
+  // entry points until at least one returns a non-empty symbol list—C# Dev
+  // Kit famously returns `[]` for a few seconds during indexing, so an
+  // empty response is not a proof of readiness.
   events.onStep?.('Warming up language server');
-  const warmupTarget = scan.entryPoints[0] ?? skeleton[0]!;
-  const warmupReady = await warmupLsp(deps.symbols, warmupTarget, token);
+  const warmupTargets = (scan.entryPoints.length > 0 ? scan.entryPoints : skeleton).slice(0, 3);
+  const warmupT0 = Date.now();
+  const warmupReady = await warmupLsp(deps.symbols, warmupTargets, token, {
+    timeoutMs: options.lspWarmupTimeoutMs ?? 30_000,
+  });
+  const warmupMs = Date.now() - warmupT0;
   if (!warmupReady) {
     events.onWarning?.(
-      'Language server did not produce symbols within the warmup window. ' +
+      `Language server did not produce symbols within the warmup window (${Math.round(warmupMs / 1000)}s). ` +
         'Verification scores may be unreliable on this run; re-run after the ' +
         'workspace finishes indexing.',
     );
@@ -272,6 +285,7 @@ export async function runOrchestrator(
       partialCount,
       unverifiedCount,
       lspNotReadyCount,
+      warmupMs,
       durationMs: Date.now() - t0,
     },
     warnings: agg.warnings,
@@ -279,22 +293,46 @@ export async function runOrchestrator(
 }
 
 /**
- * Warmup: poll the symbol provider for the given target file until either we
- * see a non-undefined result or the timeout elapses. We treat `[]` as ready
- * too (the file might really have no symbols).
+ * Warmup: poll the symbol provider for a small list of target files until
+ * one of them returns a NON-EMPTY symbol array, or the timeout elapses.
+ *
+ * Why non-empty matters: a cold C# Dev Kit responds with `[]` for several
+ * seconds during indexing. The previous implementation treated that as
+ * "ready" and the bulk of the run then went through the calibrator with
+ * still-empty symbol lists, marking every node unverified. We now require
+ * proof-of-life: at least one entry file must report at least one symbol.
+ *
+ * `undefined` means the LSP itself didn't respond (still booting). We keep
+ * polling. If the deadline passes without seeing any non-empty result we
+ * return false and the orchestrator emits the lspNotReady warning so the
+ * user knows verification scores are provisional.
  */
-async function warmupLsp(
-  symbols: { symbolsInFile: (f: string) => Promise<unknown> },
-  target: string,
+export interface WarmupOptions {
+  timeoutMs?: number;
+  pollMs?: number;
+}
+
+export async function warmupLsp(
+  symbols: { symbolsInFile: (f: string) => Promise<{ length?: number } | undefined | null> },
+  targets: string[] | string,
   token: vscode.CancellationToken,
-  timeoutMs = 8000,
-  pollMs = 400,
+  opts: WarmupOptions = {},
 ): Promise<boolean> {
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  const pollMs = opts.pollMs ?? 400;
+  const targetList = (Array.isArray(targets) ? targets : [targets]).slice(0, 5);
+  if (targetList.length === 0) return false;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (token.isCancellationRequested) return false;
-    const out = await symbols.symbolsInFile(target);
-    if (out !== undefined) return true;
+    for (const target of targetList) {
+      const out = await symbols.symbolsInFile(target);
+      // Ready iff LSP returned an actual array with at least one symbol.
+      // `undefined` = still booting. `[]` = LSP responded but produced no
+      // symbols (C# Dev Kit does this during indexing).
+      if (out && typeof out === 'object' && (out.length ?? 0) > 0) return true;
+      if (token.isCancellationRequested) return false;
+    }
     await new Promise(r => setTimeout(r, pollMs));
   }
   return false;

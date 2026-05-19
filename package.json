@@ -109,6 +109,13 @@
           "type": "boolean",
           "default": true,
           "description": "Cache per-file analyzer results in workspace state. Skips the LM call when (prompt version, file path, file contents) match. Use 'CodeMap: Clear Analyzer Cache' to reset."
+        },
+        "codemap.lspWarmupTimeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "minimum": 5000,
+          "maximum": 120000,
+          "description": "How long to wait for the language server to produce symbols before starting analysis. Default 30s covers a cold C# Dev Kit start. Raise it for very large solutions."
         }
       }
     }

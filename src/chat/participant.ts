@@ -74,6 +74,7 @@ async function handleGenerate(
   const maxFiles = config.get<number>('maxSkeletonFiles', 30);
   const maxParallel = config.get<number>('maxParallelAnalyzers', 6);
   const enableCache = config.get<boolean>('enableAnalyzerCache', true);
+  const lspWarmupTimeoutMs = config.get<number>('lspWarmupTimeoutMs', 30_000);
 
   // Prefer the model the user picked in the Copilot Chat picker. The
   // settings-based `preferredModelFamily` is only a fallback for when the
@@ -154,6 +155,7 @@ async function handleGenerate(
         scopePrefix,
         scan: { maxFiles },
         maxParallelAnalyzers: maxParallel,
+        lspWarmupTimeoutMs,
       },
       {
         onStep: msg => {
@@ -191,6 +193,9 @@ async function handleGenerate(
         '',
         `**Done in ${(result.stats.durationMs / 1000).toFixed(1)}s.** ` +
           `${result.stats.nodeCount} classes, ${result.stats.edgeCount} edges.` +
+          (result.stats.warmupMs > 500
+            ? ` _(LSP warmup ${(result.stats.warmupMs / 1000).toFixed(1)}s)_`
+            : '') +
           (result.stats.filesFromCache > 0
             ? ` _(⚡ ${result.stats.filesFromCache} of ${result.stats.filesAnalyzed} files served from cache)_`
             : ''),

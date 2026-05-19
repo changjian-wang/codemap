@@ -1,4 +1,6 @@
-// esbuild.js — dual build: extension host (CJS, node) + webview UI (IIFE, browser)
+// esbuild.js — extension host bundle (CJS, node). The WebView panel loads
+// the static mockup HTML directly (panel.ts reads docs/mockups/lumen-backend-v3.html);
+// there is no React WebView build to bundle.
 const esbuild = require('esbuild');
 const watch = process.argv.includes('--watch');
 
@@ -14,28 +16,13 @@ const extensionConfig = {
   logLevel: 'info',
 };
 
-const webviewConfig = {
-  entryPoints: ['src/webview/ui/index.tsx'],
-  bundle: true,
-  outfile: 'dist/webview.js',
-  platform: 'browser',
-  target: 'es2022',
-  format: 'iife',
-  sourcemap: true,
-  logLevel: 'info',
-};
-
 async function run() {
   if (watch) {
-    const ctxA = await esbuild.context(extensionConfig);
-    const ctxB = await esbuild.context(webviewConfig);
-    await Promise.all([ctxA.watch(), ctxB.watch()]);
+    const ctx = await esbuild.context(extensionConfig);
+    await ctx.watch();
     console.log('[esbuild] watching…');
   } else {
-    await Promise.all([
-      esbuild.build(extensionConfig),
-      esbuild.build(webviewConfig),
-    ]);
+    await esbuild.build(extensionConfig);
     console.log('[esbuild] build complete');
   }
 }

@@ -2,9 +2,7 @@
 src/**
 test/**
 eval/**
-examples/**
 docs/plan/**
-docs/mockups/generic-repo-v3.html
 .vscode/**
 .vscode-test/**
 .github/**

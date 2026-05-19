@@ -89,7 +89,6 @@ codemap/
 │   ├── editor/                           # editor / decoration glue
 │   └── extension.ts                      # activation
 ├── eval/                                 # CLI eval harness + golden samples
-├── examples/                             # example golden + actual JSON
 └── test/unit/                            # vitest suites (calibrator, graph-store, responders, …)
 ```
 

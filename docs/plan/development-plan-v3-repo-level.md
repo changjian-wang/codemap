@@ -1,6 +1,6 @@
 # CodeMap 开发计划 v3（仓库级 / Chat-first / UML）
 
-> **状态**：active。supersedes [`development-plan-v2-single-file.md`](./development-plan-v2-single-file.md)。
+> **状态**：active。
 > **产品形态基准**：[`../mockups/lumen-backend-v3.html`](../mockups/lumen-backend-v3.html)。
 > **一句话定位**：在 VS Code Copilot Chat 里输入 `@codemap`，对**整个仓库**生成可信、可读、可追问的 UML 调用图谱。
 
@@ -506,7 +506,6 @@ codemap/
 
 ### 本 repo 内
 - 产品形态基准：[`../mockups/lumen-backend-v3.html`](../mockups/lumen-backend-v3.html)
-- 被取代的 v2 计划：[`./development-plan-v2-single-file.md`](./development-plan-v2-single-file.md)
 
 ---
 

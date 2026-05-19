@@ -49,26 +49,37 @@ describe('aggregate', () => {
     expect(warnings).toEqual([]);
   });
 
-  it('merges nodes from multiple files, first wins, warns on duplicate', async () => {
-    const a = R('a.ts', [N('Foo', { file: 'a.ts' })]);
-    const b = R('b.ts', [N('Foo', { file: 'b.ts', intent: 'dupe' })]);
+  it('disambiguates same-name classes from different folders via parent-folder qualifier', async () => {
+    // lumen has 6+ AssemblyMarker classes (one per module). The previous
+    // "first wins" strategy silently dropped 5 of them; now we keep all and
+    // qualify each by its parent folder name.
+    const a = R('src/eval/AssemblyMarker.ts', [N('AssemblyMarker', { file: 'src/eval/AssemblyMarker.ts' })]);
+    const b = R('src/memory/AssemblyMarker.ts', [N('AssemblyMarker', { file: 'src/memory/AssemblyMarker.ts', intent: 'memory marker' })]);
     const { graph, warnings } = await aggregate({
       rootRequest: 'test', scope: 'workspace',
       analyses: [a, b], symbols: makeSymbols(),
     });
-    expect(graph.nodes.Foo!.file).toBe('a.ts');
+    expect(graph.nodes['eval.AssemblyMarker']!.file).toBe('src/eval/AssemblyMarker.ts');
+    expect(graph.nodes['memory.AssemblyMarker']!.file).toBe('src/memory/AssemblyMarker.ts');
+    expect(graph.nodes.AssemblyMarker).toBeUndefined();
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/duplicate class id/);
+    expect(warnings[0]).toMatch(/AssemblyMarker.*2 files/);
+    expect(warnings[0]).toMatch(/disambiguated/);
   });
 
-  it('upgrades to a verified duplicate when first occurrence was partial', async () => {
-    const a = R('a.ts', [N('Foo', { file: 'a.ts', verification: 'partial' })]);
-    const b = R('b.ts', [N('Foo', { file: 'b.ts', verification: 'verified' })]);
+  it('upgrades to a verified copy when the same file appears twice (streaming dedupe)', async () => {
+    // Within ONE file the analyzer can emit the same id twice as the
+    // stream is parsed; we keep the better-verified copy. This is distinct
+    // from cross-file collisions, which are now disambiguated rather than
+    // collapsed.
+    const a = R('a.ts', [
+      N('Foo', { file: 'a.ts', verification: 'partial' }),
+      N('Foo', { file: 'a.ts', verification: 'verified' }),
+    ]);
     const { graph } = await aggregate({
-      rootRequest: '', scope: 'workspace', analyses: [a, b], symbols: makeSymbols(),
+      rootRequest: '', scope: 'workspace', analyses: [a], symbols: makeSymbols(),
     });
     expect(graph.nodes.Foo!.verification).toBe('verified');
-    expect(graph.nodes.Foo!.file).toBe('b.ts');
   });
 
   it('keeps in-graph calls edges as-is', async () => {
@@ -216,6 +227,38 @@ describe('aggregate', () => {
       rootRequest: '', scope: 'workspace', analyses: [a, b], symbols: makeSymbols(),
     });
     expect(graph.nodes.RecallEndpoints!.verificationDetails!.droppedExternalCalls).toEqual(['NuGetPkg']);
+  });
+
+  it('rewrites edges to match disambiguated ids, preferring same-qualifier targets', async () => {
+    // Two AssemblyMarker classes in different folders, and a caller in each
+    // folder that references "AssemblyMarker" via a normal calls edge. The
+    // aggregator must rewrite each caller's edge to point at the
+    // disambiguated id in its own qualifier (NOT the other folder's).
+    const a = R('src/eval/AssemblyMarker.ts', [
+      N('AssemblyMarker', { file: 'src/eval/AssemblyMarker.ts' }),
+    ]);
+    const b = R('src/memory/AssemblyMarker.ts', [
+      N('AssemblyMarker', { file: 'src/memory/AssemblyMarker.ts' }),
+    ]);
+    const c = R('src/eval/EvalRunner.ts', [
+      N('EvalRunner', { file: 'src/eval/EvalRunner.ts' }),
+    ], [
+      E('EvalRunner', 'AssemblyMarker'),
+    ]);
+    const d = R('src/memory/MemoryRunner.ts', [
+      N('MemoryRunner', { file: 'src/memory/MemoryRunner.ts' }),
+    ], [
+      E('MemoryRunner', 'AssemblyMarker'),
+    ]);
+    const { graph } = await aggregate({
+      rootRequest: '', scope: 'workspace', analyses: [a, b, c, d], symbols: makeSymbols(),
+    });
+    expect(graph.edges).toContainEqual({
+      from: 'EvalRunner', to: 'eval.AssemblyMarker', kind: 'calls', verified: true,
+    });
+    expect(graph.edges).toContainEqual({
+      from: 'MemoryRunner', to: 'memory.AssemblyMarker', kind: 'calls', verified: true,
+    });
   });
 
   it('drops edges whose from-node was not merged', async () => {

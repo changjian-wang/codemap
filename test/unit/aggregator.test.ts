@@ -141,6 +141,83 @@ describe('aggregate', () => {
     expect(graph.externalDeps.map(d => d.name).sort()).toEqual(['lodash', 'react']);
   });
 
+  it('promotes ext: edges whose bare name is already an in-graph node id', async () => {
+    // RecallEndpoints lumen regression: the LLM puts cross-FILE handler
+    // names into external_calls per the v3 prompt, but if the handler is
+    // in the same workspace we want a real class-to-class edge, not a
+    // misleading "external dep".
+    const a = R('a.ts', [N('RecallEndpoints')], [
+      { from: 'RecallEndpoints', to: 'ext:RecallByQueryHandler', kind: 'external_calls', verified: true },
+    ]);
+    const b = R('b.ts', [N('RecallByQueryHandler', { file: 'b.ts' })]);
+    const { graph } = await aggregate({
+      rootRequest: '', scope: 'workspace', analyses: [a, b], symbols: makeSymbols(),
+    });
+    expect(graph.edges).toEqual([
+      { from: 'RecallEndpoints', to: 'RecallByQueryHandler', kind: 'calls', verified: true },
+    ]);
+    expect(graph.externalDeps.map(d => d.name)).toEqual([]);
+  });
+
+  it('promotes ext: edges via workspace symbol lookup when bare name does not match an id', async () => {
+    // Here `findInWorkspace` is the only signal — the LLM emitted a
+    // slightly-off identifier, and the LSP confirms it resolves to the
+    // in-graph canonical id.
+    const a = R('a.ts', [N('Foo')], [
+      { from: 'Foo', to: 'ext:Bar', kind: 'external_calls', verified: true },
+    ]);
+    const b = R('b.ts', [N('Bar', { file: 'b.ts' })]);
+    const symbols = makeSymbols({
+      Bar: [{ name: 'Bar', file: 'b.ts', startLine: 1, endLine: 10 }],
+    });
+    const { graph } = await aggregate({
+      rootRequest: '', scope: 'workspace', analyses: [a, b], symbols,
+    });
+    expect(graph.edges.find(e => e.from === 'Foo')).toEqual({
+      from: 'Foo', to: 'Bar', kind: 'calls', verified: true,
+    });
+    expect(graph.externalDeps).toEqual([]);
+  });
+
+  it('keeps ext: edges for names that do not resolve to any in-graph node', async () => {
+    // Pure third-party dep: IEndpointRouteBuilder lives in ASP.NET Core,
+    // not in workspace, not in graph — stays as an external dep.
+    const a = R('a.ts', [N('Foo')], [
+      { from: 'Foo', to: 'ext:IEndpointRouteBuilder', kind: 'external_calls', verified: true },
+    ]);
+    const { graph } = await aggregate({
+      rootRequest: '', scope: 'workspace', analyses: [a], symbols: makeSymbols(),
+    });
+    expect(graph.edges).toEqual([
+      { from: 'Foo', to: 'ext:IEndpointRouteBuilder', kind: 'external_calls', verified: true },
+    ]);
+    expect(graph.externalDeps).toEqual([{ name: 'IEndpointRouteBuilder', kind: 'package' }]);
+  });
+
+  it('scrubs droppedExternalCalls entries that got promoted to real calls edges', async () => {
+    // The calibrator wrote ValidationFilter into droppedExternalCalls
+    // because its findInWorkspace returned []. The aggregator later
+    // discovered ValidationFilter is in fact an in-graph node and
+    // promoted the edge. The card should no longer accuse it of being
+    // "dropped".
+    const recallEndpoints = N('RecallEndpoints', {
+      verificationDetails: {
+        rangeAdjusted: false,
+        droppedCalls: [],
+        droppedExternalCalls: ['ValidationFilter', 'NuGetPkg'],
+      },
+    });
+    const a = R('a.ts', [recallEndpoints], [
+      { from: 'RecallEndpoints', to: 'ext:ValidationFilter', kind: 'external_calls', verified: true },
+      { from: 'RecallEndpoints', to: 'ext:NuGetPkg', kind: 'external_calls', verified: true },
+    ]);
+    const b = R('b.ts', [N('ValidationFilter', { file: 'b.ts' })]);
+    const { graph } = await aggregate({
+      rootRequest: '', scope: 'workspace', analyses: [a, b], symbols: makeSymbols(),
+    });
+    expect(graph.nodes.RecallEndpoints!.verificationDetails!.droppedExternalCalls).toEqual(['NuGetPkg']);
+  });
+
   it('drops edges whose from-node was not merged', async () => {
     const a = R('a.ts', [], [E('Ghost', 'Bar', 'external_calls')]);
     const { graph } = await aggregate({

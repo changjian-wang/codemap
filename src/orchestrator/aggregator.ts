@@ -123,11 +123,65 @@ export async function aggregate(input: AggregateInput): Promise<AggregateResult>
     }
   }
 
-  // External edges go through unchanged. Drop edges whose `from` doesn't exist
-  // (orphan after a node-merge failure).
+  // External edges: try to promote any that turn out to be in-workspace
+  // class references before treating them as third-party deps.
+  //
+  // Why this matters: the v3 prompt tells the LLM to put cross-FILE
+  // identifiers into `external_calls`, but a cross-file identifier in a
+  // monorepo .NET solution is overwhelmingly an in-workspace class (a
+  // handler, a request record, a shared filter), not a NuGet package. If
+  // we keep them as `ext:*` the graph loses the class-to-class structure
+  // entirely — the user sees a sea of "external deps" instead of the
+  // actual call graph.
+  //
+  // Resolution order:
+  //   1. If `ext:Foo` already matches an in-graph node id `Foo`, promote
+  //      directly (no LSP roundtrip).
+  //   2. Otherwise ask the workspace symbol provider. If the exact-name
+  //      hit is also in-graph, promote and retarget onto the canonical id.
+  //   3. Otherwise leave as an `ext:` edge (true third-party dep).
+  //
+  // After promotion, scrub the promoted name from the source node's
+  // verificationDetails.droppedExternalCalls so the card no longer claims
+  // "Dropped external: RecallByQueryHandler" for something now wired as a
+  // real call edge.
+  const promotedExtBySource = new Map<string, Set<string>>();
   for (const e of externalEdges) {
     if (!nodeIdSet.has(e.from)) continue;
+    const bare = e.to.replace(/^ext:/, '');
+    const promote = (canonicalId: string): void => {
+      pushEdge({ from: e.from, to: canonicalId, kind: 'calls', verified: true });
+      let set = promotedExtBySource.get(e.from);
+      if (!set) {
+        set = new Set();
+        promotedExtBySource.set(e.from, set);
+      }
+      set.add(bare);
+    };
+    if (nodeIdSet.has(bare)) {
+      promote(bare);
+      continue;
+    }
+    const hits = await symbols.findInWorkspace(bare, 5);
+    const exact = hits.find(h => h.name === bare);
+    if (exact && nodeIdSet.has(exact.name)) {
+      promote(exact.name);
+      continue;
+    }
     pushEdge(e);
+  }
+  for (const [sourceId, promoted] of promotedExtBySource) {
+    const node = nodesById.get(sourceId);
+    if (!node?.verificationDetails) continue;
+    const filtered = (node.verificationDetails.droppedExternalCalls ?? [])
+      .filter(name => !promoted.has(name));
+    nodesById.set(sourceId, {
+      ...node,
+      verificationDetails: {
+        ...node.verificationDetails,
+        droppedExternalCalls: filtered,
+      },
+    });
   }
 
   // ---- 3. External dep list (de-duped from ext:* edge targets). ----

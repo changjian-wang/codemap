@@ -8,6 +8,17 @@ import type {
 import type { SymbolProvider, SymbolHit } from './symbol-provider';
 
 /**
+ * Bump when the calibrator's verdict logic changes (not just prompt text).
+ * Folded into the analyzer cache key so cached AnalyzeResults built under
+ * the old logic are invalidated automatically.
+ *
+ * History:
+ *   v1 — initial
+ *   v2 — symmetric generic-stripping in bestSymbolMatch (Foo<T> <-> Foo)
+ */
+export const CALIBRATOR_VERSION = 'v2';
+
+/**
  * Calibrator: LLM raw output → validated CodeNode + CodeEdge[].
  *
  * Per the v3 plan §5.4 unchanged from v2:

@@ -11,6 +11,7 @@ import { aggregate } from './aggregator';
 import type { AnalyzerCache } from '../persistence/analyzer-cache';
 import { AnalyzerCache as AnalyzerCacheClass } from '../persistence/analyzer-cache';
 import { PROMPT_VERSION } from '../llm/prompts';
+import { CALIBRATOR_VERSION } from '../calibration/calibrator';
 import { hydrateDocComments } from './doc-extractor';
 
 /**
@@ -170,12 +171,15 @@ export async function runOrchestrator(
       if (fileText === undefined) throw new Error(`could not read ${file}`);
 
       // ---- Cache lookup ----
-      // The cache is keyed on (PROMPT_VERSION, file, fileText) so:
+      // The cache is keyed on (PROMPT_VERSION, CALIBRATOR_VERSION, file,
+      // fileText) so:
       //  - bumping PROMPT_VERSION invalidates everything,
+      //  - bumping CALIBRATOR_VERSION invalidates everything (calibration
+      //    verdict is baked into the cached AnalyzeResult),
       //  - editing the file invalidates that file,
       //  - renaming the file invalidates because file path is part of key.
       const cacheKey = deps.cache
-        ? AnalyzerCacheClass.key(PROMPT_VERSION, file, fileText)
+        ? AnalyzerCacheClass.key(`${PROMPT_VERSION}/${CALIBRATOR_VERSION}`, file, fileText)
         : '';
       const cached = deps.cache?.get(cacheKey);
       if (cached) {

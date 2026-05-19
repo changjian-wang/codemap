@@ -1,4 +1,4 @@
-import type { CodeMapGraph } from '../shared/types';
+import type { CodeMapGraph, NodeKind } from '../shared/types';
 
 /**
  * View-layer DTOs consumed by the v3 mockup HTML.
@@ -14,8 +14,8 @@ import type { CodeMapGraph } from '../shared/types';
 
 export interface MockupClass {
   id: string;
-  /** 'class' or 'enum'. Drives the node shape on the graph and the kind tag. */
-  kind: 'class' | 'enum';
+  /** Node kind: class / interface / record / enum. Drives the node shape on the graph and the kind tag. */
+  kind: NodeKind;
   bc: string;
   file: string;
   layer?: string;

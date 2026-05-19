@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeReadingOrder } from '../../src/graph/reading-order';
+import { computeReadingOrder, isTestNode } from '../../src/graph/reading-order';
 import type { CodeMapGraph, CodeNode } from '../../src/shared/types';
 
 const N = (id: string, partial: Partial<CodeNode> = {}): CodeNode => ({
@@ -122,5 +122,68 @@ describe('computeReadingOrder', () => {
       ],
     );
     expect(computeReadingOrder(graph)).toEqual(['A', 'B']);
+  });
+
+  it('demotes test classes below production entries', () => {
+    // Both nodes have in-degree 0 (no inbound calls), so both qualify as
+    // entries. With equal confidence, production must lead.
+    const graph = G([
+      N('TestFoo', { file: 'tests/test_foo.py' }),
+      N('FooService', { file: 'src/foo_service.py' }),
+    ]);
+    expect(computeReadingOrder(graph)).toEqual(['FooService', 'TestFoo']);
+  });
+
+  it('keeps production tree before test tree when both are independent entries', () => {
+    // Both production and test classes are in-degree 0 (independent entries).
+    // The fix demotes test to after production regardless of confidence.
+    const graph = G(
+      [
+        N('FileSearchBackend', { file: 'src/_file_search.py', confidence: 0.7 }),
+        N('TestFileSearch', { file: 'tests/test_file_search.py', confidence: 0.95 }),
+        N('Helper', { file: 'src/_helper.py' }),
+      ],
+      [
+        { from: 'FileSearchBackend', to: 'Helper' },
+        { from: 'TestFileSearch', to: 'Helper' },
+      ],
+    );
+    const order = computeReadingOrder(graph);
+    // FileSearchBackend leads despite lower confidence; test entry trails.
+    expect(order[0]).toBe('FileSearchBackend');
+    expect(order.indexOf('TestFileSearch')).toBeGreaterThan(
+      order.indexOf('FileSearchBackend'),
+    );
+  });
+});
+
+describe('isTestNode', () => {
+  const make = (file: string): CodeNode => N('X', { file });
+
+  it.each([
+    ['tests/cu/test_models.py', true],
+    ['src/agent/tests/test_foo.py', true],
+    ['packages/foo/__tests__/bar.ts', true],
+    ['src/spec/foo.cs', true],
+    ['app/test_foo.py', true],
+    ['app/foo_test.go', true],
+    ['app/foo.test.ts', true],
+    ['app/foo.spec.ts', true],
+    ['src/FooTests.cs', true],
+    ['src/BarTest.java', true],
+    // pytest convention: any `test_*.py` is a test file, regardless of dir.
+    ['src/agent_framework/test_runner_config.py', true],
+  ])('flags %s as test', (file, expected) => {
+    expect(isTestNode(make(file))).toBe(expected);
+  });
+
+  it.each([
+    ['src/testing.py', false], // utility, not a test
+    ['src/protester.ts', false],
+    ['src/contesting.cs', false],
+    ['src/foo.py', false],
+    ['samples/01-get-started/01_document_qa.py', false],
+  ])('does not flag %s', (file, _expected) => {
+    expect(isTestNode(make(file))).toBe(false);
   });
 });

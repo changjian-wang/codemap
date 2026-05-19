@@ -31,6 +31,11 @@ export interface StoredGraph {
     unverifiedCount: number;
     filesAnalyzed: number;
     filesFailed: number;
+    /**
+     * Files served from the persistent analyzer cache (no LM call). Optional
+     * because older stored graphs predate the cache and didn't track it.
+     */
+    filesFromCache?: number;
     durationMs: number;
   };
 }

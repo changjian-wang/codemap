@@ -11,6 +11,15 @@
  * The actual user message wraps the source code and adds the file path; see
  * {@link buildUserMessage}.
  */
+
+/**
+ * Cache-busting tag for {@link AnalyzerCache}. Bump whenever the prompt
+ * contract changes in a way that invalidates prior LLM outputs (new fields,
+ * removed fields, semantic shifts). Patch tweaks to wording are fine to
+ * leave alone — they will still produce the same JSON shape.
+ */
+export const PROMPT_VERSION = 'v3.1';
+
 export const SYSTEM_PROMPT = `You are CodeMap's static-analysis assistant. Read the source file given by
 the user and emit one structured metadata block per class (UML-class
 granularity). Methods go inside each class block — do NOT emit one block

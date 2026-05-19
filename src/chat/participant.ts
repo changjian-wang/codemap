@@ -11,7 +11,8 @@ import { scoreGraph } from '../eval/score';
 import { DEFAULT_SCAN_OPTIONS } from '../orchestrator/workspace-scanner';
 import type { MockupChatTurn } from '../webview/graph-adapter';
 import { GraphStore, currentWorkspaceRevHash, type StoredGraph } from '../persistence/graph-store';
-import { explainNode, explainUnverified, focusSubgraph } from './chat-responders';
+import { AnalyzerCache } from '../persistence/analyzer-cache';
+import { explainNode, explainUnverified, focusSubgraph, formatVerificationDigest } from './chat-responders';
 
 const PARTICIPANT_ID = 'codemap.codemap';
 
@@ -72,6 +73,7 @@ async function handleGenerate(
   const fallbackFamily = config.get<string>('preferredModelFamily', 'gpt-4o');
   const maxFiles = config.get<number>('maxSkeletonFiles', 30);
   const maxParallel = config.get<number>('maxParallelAnalyzers', 6);
+  const enableCache = config.get<boolean>('enableAnalyzerCache', true);
 
   // Prefer the model the user picked in the Copilot Chat picker. The
   // settings-based `preferredModelFamily` is only a fallback for when the
@@ -107,6 +109,18 @@ async function handleGenerate(
   const actionTrace: { check: boolean; num: string; text: string }[] = [];
 
   try {
+    // Cache survives reloads and reuses analyzer JSON when (prompt version,
+    // file path, file contents) all match. This is what makes the second
+    // `generate codemap` on the same workspace ~free.
+    const cache = enableCache ? new AnalyzerCache(context.workspaceState) : undefined;
+
+    // Cap the verbose per-file progress markdown so a 30-file scan doesn't
+    // bury the rest of the response. Cache hits/misses still count toward
+    // the cap so failures aren't drowned by chatty cached lines.
+    const FILE_LINE_CAP = 20;
+    let fileLinesPrinted = 0;
+    let fileLinesSkipped = 0;
+
     const result = await runOrchestrator(
       {
         reader: createVscodeFileReader(workspaceFolder.uri, {
@@ -115,6 +129,7 @@ async function handleGenerate(
         }),
         symbols: new VscodeSymbolProvider(workspaceFolder.uri),
         llm: new VscodeLmClient(fallbackFamily, pickedModel),
+        cache,
       },
       {
         rootRequest,
@@ -134,8 +149,14 @@ async function handleGenerate(
           response.markdown(`\n${txt}\n`);
         },
         onFileDone: info => {
-          if (info.error) {
-            response.markdown(`\n- ⚠ \`${info.file}\` failed: ${info.error.message}`);
+          if (fileLinesPrinted < FILE_LINE_CAP) {
+            const icon = info.error ? '⚠' : info.cached ? '⚡' : '✓';
+            const tag = info.cached ? ' _(cached)_' : '';
+            const detail = info.error ? `: ${info.error.message}` : '';
+            response.markdown(`\n- ${icon} \`${info.file}\`${tag}${detail}`);
+            fileLinesPrinted++;
+          } else {
+            fileLinesSkipped++;
           }
           response.progress(`Analyzing... ${info.doneCount}/${info.total}`);
         },
@@ -144,12 +165,20 @@ async function handleGenerate(
       token,
     );
 
+    if (fileLinesSkipped > 0) {
+      response.markdown(`\n- _… and ${fileLinesSkipped} more file(s) (truncated)_`);
+    }
+
     response.markdown(
       [
         '',
         `**Done in ${(result.stats.durationMs / 1000).toFixed(1)}s.** ` +
-          `${result.stats.nodeCount} classes, ${result.stats.edgeCount} edges.`,
+          `${result.stats.nodeCount} classes, ${result.stats.edgeCount} edges.` +
+          (result.stats.filesFromCache > 0
+            ? ` _(⚡ ${result.stats.filesFromCache} of ${result.stats.filesAnalyzed} files served from cache)_`
+            : ''),
         `Verification: ✓ ${result.stats.verifiedCount} verified · ⚠ ${result.stats.partialCount} partial · ✗ ${result.stats.unverifiedCount} unverified.`,
+        formatVerificationDigest(result.graph) ?? '',
         result.graph.rootIntent ? `\n_${result.graph.rootIntent}_` : '',
         result.graph.suggestedEntryNodes && result.graph.suggestedEntryNodes.length > 0
           ? `Suggested reading entry: \`${result.graph.suggestedEntryNodes[0]}\``
@@ -202,6 +231,7 @@ async function handleGenerate(
       unverifiedCount: result.stats.unverifiedCount,
       filesAnalyzed: result.stats.filesAnalyzed,
       filesFailed: result.stats.filesFailed,
+      filesFromCache: result.stats.filesFromCache,
       durationMs: result.stats.durationMs,
       eval: evalScore,
     };
@@ -235,7 +265,8 @@ async function handleGenerate(
         '',
         'Common causes:',
         '- Copilot Chat not signed in (the LLM call needs `vscode.lm`).',
-        '- Workspace has no `.cs/.ts/.tsx/.js/.jsx` files (scanner extension whitelist).',
+        '- Workspace has no source files matching the scanner extension whitelist (`.cs/.ts/.tsx/.js/.jsx/.py`).',
+        '- `/scope <path>` typo — the path must be **workspace-relative** to the **root** of the open folder (forward slashes ok).',
         '- C# Dev Kit / TS LSP not finished indexing yet — try again in a moment.',
       ].join('\n'),
     );

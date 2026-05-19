@@ -3,6 +3,7 @@ import {
   explainNode,
   explainUnverified,
   focusSubgraph,
+  formatVerificationDigest,
 } from '../../src/chat/chat-responders';
 import type { CodeMapGraph, CodeNode, CodeEdge } from '../../src/shared/types';
 
@@ -156,6 +157,91 @@ describe('explainUnverified', () => {
     const g = makeGraph(nodes);
     const out = explainUnverified(g);
     expect(out.markdown).toMatch(/and 5 more/);
+  });
+});
+
+describe('formatVerificationDigest', () => {
+  it('returns undefined when nothing to surface', () => {
+    const g = makeGraph([node('A'), node('B')]);
+    expect(formatVerificationDigest(g)).toBeUndefined();
+  });
+
+  it('emits a bold heading + bulleted list of partial nodes with reasons', () => {
+    const g = makeGraph([
+      node('A', {
+        verification: 'partial',
+        file: 'src/a.py',
+        verificationDetails: {
+          rangeAdjusted: true,
+          droppedCalls: [],
+          droppedExternalCalls: [],
+        },
+      }),
+      node('B', {
+        verification: 'partial',
+        file: 'src/b.py',
+        verificationDetails: {
+          rangeAdjusted: false,
+          droppedCalls: ['ghost1', 'ghost2'],
+          droppedExternalCalls: [],
+        },
+      }),
+    ]);
+    const md = formatVerificationDigest(g);
+    expect(md).toBeDefined();
+    expect(md).not.toContain('<details>');
+    expect(md).not.toContain('</details>');
+    expect(md).toContain('**Why 2 partial?**');
+    expect(md).toContain('⚠ `A` (`src/a.py`)');
+    expect(md).toContain('range adjusted');
+    expect(md).toContain('⚠ `B` (`src/b.py`)');
+    expect(md).toContain('2 unresolved call(s)');
+  });
+
+  it('lists unverified nodes with the ✗ marker', () => {
+    const g = makeGraph([
+      node('Ghost', {
+        verification: 'unverified',
+        file: 'src/ghost.py',
+        verificationDetails: {
+          rangeAdjusted: false,
+          droppedCalls: [],
+          droppedExternalCalls: [],
+          reason: 'Not found by executeWorkspaceSymbolProvider',
+        },
+      }),
+    ]);
+    const md = formatVerificationDigest(g);
+    expect(md).toContain('**Why 1 unverified?**');
+    expect(md).toContain('✗ `Ghost`');
+    expect(md).toContain('Not found by executeWorkspaceSymbolProvider');
+  });
+
+  it('truncates with a hint when over maxItems', () => {
+    const partials: CodeNode[] = Array.from({ length: 15 }, (_, i) =>
+      node(`P${i}`, {
+        verification: 'partial',
+        verificationDetails: {
+          rangeAdjusted: true,
+          droppedCalls: [],
+          droppedExternalCalls: [],
+        },
+      }),
+    );
+    const g = makeGraph(partials);
+    const md = formatVerificationDigest(g, 5);
+    expect(md).toContain('…and 10 more partial');
+  });
+
+  it('combines partial and unverified into one block', () => {
+    const g = makeGraph([
+      node('P', { verification: 'partial' }),
+      node('U', { verification: 'unverified' }),
+    ]);
+    const md = formatVerificationDigest(g);
+    expect(md).toContain('**Why 1 partial · 1 unverified?**');
+    expect(md).toContain('⚠ `P`');
+    expect(md).toContain('✗ `U`');
   });
 });
 

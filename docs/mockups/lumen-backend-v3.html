@@ -312,6 +312,59 @@
       padding: 8px 12px; margin-bottom: 12px;
       line-height: 1.6; color: #fff; font-size: 13px;
     }
+    /* collapsible class-level source-comment block — default closed so
+       long docstrings don't dominate the right panel; user opens on demand */
+    .card .doc-fold {
+      margin-bottom: 12px;
+      border-left: 3px solid var(--vs-border);
+      background: rgba(160, 160, 160, 0.05);
+      border-radius: 0 3px 3px 0;
+    }
+    .card .doc-fold > summary {
+      list-style: none; cursor: pointer; user-select: none;
+      padding: 6px 12px; gap: 6px;
+      color: var(--vs-text-dim); font-size: 11px;
+      letter-spacing: 0.3px; text-transform: uppercase;
+      display: flex; align-items: center;
+    }
+    .card .doc-fold > summary::-webkit-details-marker { display: none; }
+    .card .doc-fold > summary::marker { content: ''; }
+    .card .doc-fold > summary::before {
+      content: '▶'; font-size: 9px; color: var(--vs-text-dim);
+      transition: transform 0.15s; display: inline-block;
+    }
+    .card .doc-fold[open] > summary::before { transform: rotate(90deg); }
+    .card .doc-fold > summary:hover { color: var(--vs-text); }
+    .card .doc-fold-body {
+      padding: 4px 12px 10px 22px;
+      color: var(--vs-text);
+      font-family: "Consolas", monospace; font-size: 12px;
+      white-space: pre-wrap; line-height: 1.5;
+      max-height: 320px; overflow-y: auto;
+    }
+    /* method-level doc fold lives inside method-detail; smaller footprint */
+    .method-detail .md-doc-fold > summary {
+      list-style: none; cursor: pointer; user-select: none;
+      color: var(--vs-text-dim); font-size: 11px;
+    }
+    .method-detail .md-doc-fold > summary::-webkit-details-marker { display: none; }
+    .method-detail .md-doc-fold > summary::marker { content: ''; }
+    .method-detail .md-doc-fold > summary::before {
+      content: '▶'; font-size: 9px; display: inline-block;
+      margin-right: 4px; transition: transform 0.15s;
+    }
+    .method-detail .md-doc-fold[open] > summary::before { transform: rotate(90deg); }
+    .method-detail .md-doc-fold[open] > summary { color: var(--vs-text); }
+    .method-detail .md-doc {
+      margin-top: 4px;
+      background: rgba(160, 160, 160, 0.05);
+      border-left: 2px solid var(--vs-border);
+      padding: 6px 10px;
+      font-family: "Consolas", monospace; font-size: 11px;
+      color: var(--vs-text);
+      white-space: pre-wrap; line-height: 1.45;
+      max-height: 180px; overflow-y: auto;
+    }
     .card-row {
       display: flex; margin-bottom: 8px;
       font-size: 12px; line-height: 1.5;
@@ -457,6 +510,29 @@
       background: rgba(0,0,0,0.25); padding: 1px 5px;
       border-radius: 3px; color: #d4d4d4;
     }
+
+    /* YAML LLM-output highlighting */
+    .yaml-block {
+      background: var(--vs-bg-deep);
+      border: 1px solid var(--vs-border-soft);
+      padding: 10px; border-radius: 4px;
+      font-size: 10.5px; line-height: 1.55;
+      color: #d4d4d4;
+      overflow-x: auto; white-space: pre;
+      font-family: "Consolas", monospace;
+      margin: 0;
+    }
+    .yaml-block code { font-family: inherit; }
+    .yaml-key { color: #9cdcfe; }
+    .yaml-string { color: #ce9178; }
+    .yaml-number { color: #b5cea8; }
+    .yaml-literal { color: #569cd6; }
+    .yaml-comment { color: #6a9955; font-style: italic; }
+    .yaml-punct { color: #808080; }
+
+    .outline-item.hidden { display: none !important; }
+    .bc-group.hidden { display: none !important; }
+    .chip.hidden { display: none !important; }
 
     .related-list { list-style: none; padding: 0; margin: 4px 0 0; }
     .related-list li {
@@ -687,16 +763,16 @@
           <span style="color:rgba(255,255,255,0.4); cursor:pointer" title="Reset progress" id="outlineReset">↺</span>
         </div>
 
-        <div class="bc-group"><span class="bc-dot host"></span>Host (entry)</div>
+        <div class="bc-group" data-slot="host"><span class="bc-dot host"></span>Host (entry)</div>
         <div id="outlineHost"></div>
 
-        <div class="bc-group"><span class="bc-dot capture"></span>Modules.Capture</div>
+        <div class="bc-group" data-slot="capture"><span class="bc-dot capture"></span>Modules.Capture</div>
         <div id="outlineCapture"></div>
 
-        <div class="bc-group"><span class="bc-dot recall"></span>Modules.Recall</div>
+        <div class="bc-group" data-slot="recall"><span class="bc-dot recall"></span>Modules.Recall</div>
         <div id="outlineRecall"></div>
 
-        <div class="bc-group"><span class="bc-dot shared"></span>Shared.Infrastructure</div>
+        <div class="bc-group" data-slot="shared"><span class="bc-dot shared"></span>Shared.Infrastructure</div>
         <div id="outlineShared"></div>
       </div>
 
@@ -1141,18 +1217,32 @@ const edges = EDGES.map((e, i) => ({
   classes: `${e.kind}${e.verified ? '' : ' unverified-edge'}`
 }));
 
+// Layout config is kept on a module-level var so the collapse helpers
+// below can re-run the exact same layout after mutating node sizes.
+const __cmLayoutOpts = {
+  name: 'dagre',
+  // LR (left → right) is the layout users actually prefer for our class
+  // skeletons: a class node with N methods is taller than it is wide, so
+  // LR places classes in columns and lets dependency arrows flow rightward
+  // — much easier to follow than TB, where wide rows of class boxes pile
+  // up at the same rank and the edges criss-cross.
+  rankDir: 'LR',
+  nodeSep: 38,
+  rankSep: 110,
+  edgeSep: 14,
+  fit: true,
+  padding: 40,
+};
 const cy = cytoscape({
   container: document.getElementById('cy'),
   elements: { nodes, edges },
-  layout: {
-    name: 'dagre',
-    rankDir: 'LR',
-    nodeSep: 38,
-    rankSep: 110,
-    edgeSep: 14,
-    fit: true,
-    padding: 40,
-  },
+  minZoom: 0.15,
+  maxZoom: 4,
+  // Default wheelSensitivity (1) makes each tick jump ×1.5, which users
+  // complain about as "缩放跨度太大". 0.25 ≈ ×1.10 per tick, much closer to
+  // VS Code editor zoom feel. The toolbar +/- buttons step at ×1.2.
+  wheelSensitivity: 0.25,
+  layout: __cmLayoutOpts,
   style: [
     {
       selector: 'node.cls',
@@ -1300,17 +1390,30 @@ function renderOutline() {
   EXTERNAL_DEPS.forEach(d => {
     const row = document.createElement('div');
     row.className = 'outline-item';
+    // Tag with dataset.ext so selectExternal() can find this row to mark
+    // active, mirroring how class rows use dataset.id.
+    row.dataset.ext = d.name;
     row.innerHTML = `
       <span class="outline-priority" style="background:#56b6c2;">⌬</span>
       <span class="outline-name" style="color:#56b6c2;">${d.name}</span>
     `;
+    row.addEventListener('click', () => selectExternal(d.name));
     ext.appendChild(row);
   });
+
+  // Apply any active bc/search/toggle filters to the rows we just rendered
+  // so navigation, marking-as-read, etc. don't reset the user's filter state.
+  applyOutlineFilters();
 }
 
 // ---------- Card ----------
 let activeTab = 'details';
+// Tracks the currently-selected external dep (by bare name, no `ext:` prefix)
+// so that tab switches re-render the right view. Exactly one of
+// __cmSelectedExt / a selected `node.cls` is active at any time.
+let __cmSelectedExt = null;
 function selectClass(id) {
+  __cmSelectedExt = null;
   cy.$('node:selected').unselect();
   const node = cy.getElementById(id);
   if (node) node.select();
@@ -1324,6 +1427,28 @@ function selectClass(id) {
   highlightEdges(id);
   renderCard(c);
   updateRelatedCount(c);
+}
+
+// Mirror of selectClass for external-dep nodes. The graph and outline both
+// call this — previously neither did anything when the user clicked an
+// `ext:*` node, which made it look like Details was broken.
+function selectExternal(name) {
+  const fullId = 'ext:' + name;
+  cy.$('node:selected').unselect();
+  const node = cy.getElementById(fullId);
+  if (node && !node.empty()) node.select();
+  __cmSelectedExt = name;
+
+  document.querySelectorAll('.outline-item').forEach(el => el.classList.remove('active'));
+  const ol = [...document.querySelectorAll('.outline-item')].find(el => el.dataset.ext === name);
+  if (ol) ol.classList.add('active');
+
+  highlightEdges(fullId);
+  renderExtCard(name);
+  // Related count = number of inbound `external_calls` edges.
+  const cnt = EDGES.filter(e => e.to === fullId).length;
+  const tab = [...document.querySelectorAll('.card-tab')].find(t => t.dataset.tab === 'related');
+  if (tab) tab.querySelector('.count').textContent = String(cnt);
 }
 
 function updateRelatedCount(c) {
@@ -1344,6 +1469,146 @@ function renderCard(c) {
   else body.innerHTML = renderRaw(c);
 }
 
+function renderExtCard(name) {
+  const body = document.getElementById('cardBody');
+  if (activeTab === 'details') body.innerHTML = renderExtDetails(name);
+  else if (activeTab === 'related') body.innerHTML = renderExtRelated(name);
+  else body.innerHTML = renderExtRaw(name);
+}
+
+function renderExtDetails(name) {
+  const fullId = 'ext:' + name;
+  const dep = EXTERNAL_DEPS.find(d => d.name === name) || { name, kind: 'package' };
+  const callerIds = [...new Set(
+    EDGES.filter(e => e.kind === 'external_calls' && e.to === fullId).map(e => e.from)
+  )];
+
+  // Surface the specific identifiers each caller method uses against this
+  // dep. We match by exact name or dotted-prefix in either direction — this
+  // catches both `HttpClient.GetAsync` mentioned as `HttpClient` and the
+  // reverse case where the dep is `Pgvector` and the method records
+  // `Pgvector.Vector`.
+  const evidence = [];
+  callerIds.forEach(id => {
+    const c = CLASSES.find(x => x.id === id);
+    if (!c) return;
+    c.methods.forEach(m => {
+      (m.externalCalls || []).forEach(ec => {
+        if (ec === name || ec.startsWith(name + '.') || name.startsWith(ec + '.')) {
+          evidence.push({ caller: id, method: m.name, sig: m.sig, ec });
+        }
+      });
+    });
+  });
+
+  const callerRows = callerIds.length
+    ? callerIds.map(id =>
+        `<li onclick="selectClass('${id}')"><span class="arrow">←</span>${escapeAttr(id)}</li>`
+      ).join('')
+    : '<li style="color:var(--vs-text-dim);">no callers in current skeleton</li>';
+
+  const evidenceRows = evidence.length
+    ? evidence.map(ev =>
+        `<li onclick="selectClass('${ev.caller}')">` +
+        `<span class="arrow">→</span>` +
+        `<code>${escapeAttr(ev.caller)}.${escapeAttr(ev.method)}</code> ` +
+        `<span style="color:var(--vs-text-dim);">uses</span> ` +
+        `<code>${escapeAttr(ev.ec)}</code>` +
+        `</li>`
+      ).join('')
+    : '';
+
+  return `
+    <div class="card">
+      <h3>
+        ${escapeAttr(name)}
+        <span class="kind-tag">external</span>
+        <span class="bc-tag shared">${escapeAttr(dep.kind || 'package')}</span>
+      </h3>
+      <div class="file-line">⧬ defined outside the analyzed scope</div>
+
+      <div class="intent">
+        Cross-file / cross-package identifier referenced from this file.
+        Bring the owning package into scope to drill into its source.
+      </div>
+
+      <div class="card-row">
+        <span class="k">Kind</span>
+        <span class="v"><code>${escapeAttr(dep.kind || 'package')}</code></span>
+      </div>
+      <div class="card-row">
+        <span class="k">Used by</span>
+        <span class="v">${callerIds.length} class${callerIds.length === 1 ? '' : 'es'}</span>
+      </div>
+      <div class="card-row">
+        <span class="k">Call sites</span>
+        <span class="v">${evidence.length}</span>
+      </div>
+
+      <div style="font-size:11px; color:var(--vs-text-dim); margin: 14px 0 4px; text-transform:uppercase; letter-spacing:0.4px;">
+        Callers (${callerIds.length})
+      </div>
+      <ul class="related-list">${callerRows}</ul>
+
+      ${evidenceRows ? `
+        <div style="font-size:11px; color:var(--vs-text-dim); margin: 14px 0 4px; text-transform:uppercase; letter-spacing:0.4px;">
+          Call sites (${evidence.length})
+        </div>
+        <ul class="related-list">${evidenceRows}</ul>
+      ` : ''}
+
+      <div class="ver-block partial">
+        <div class="ver-title">External dependency</div>
+        <div class="ver-meta">
+          The analyzer does not own this symbol. “Jump to source” is
+          unavailable until the package's source is added to the workspace.
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn ghost" disabled style="background:var(--vs-border); color:var(--vs-text-dim); cursor:not-allowed;">↪ Jump to file</button>
+        <button class="btn ghost">💬 Ask @codemap</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderExtRelated(name) {
+  const fullId = 'ext:' + name;
+  const inbound = EDGES.filter(e => e.to === fullId);
+  const rows = inbound.length
+    ? inbound.map(e =>
+        `<li onclick="selectClass('${e.from}')"><span class="arrow">←</span>${escapeAttr(e.from)} <span style="color:var(--vs-text-dim);font-size:10px;">(${e.kind}${e.verified ? '' : ', unverified'})</span></li>`
+      ).join('')
+    : '<li style="color:var(--vs-text-dim);">none</li>';
+  return `
+    <h3>${escapeAttr(name)} <span style="font-size:11px; color:var(--vs-text-dim); font-weight:400;">relationships</span></h3>
+    <div style="font-size:11px;color:var(--vs-text-dim);margin:10px 0 4px;text-transform:uppercase;letter-spacing:0.4px;">Called by (${inbound.length})</div>
+    <ul class="related-list">${rows}</ul>
+    <div style="font-size:11px;color:var(--vs-text-dim);margin:14px 0 4px;text-transform:uppercase;letter-spacing:0.4px;">Calls (0)</div>
+    <ul class="related-list"><li style="color:var(--vs-text-dim);">external deps are sinks — no outgoing edges in this graph</li></ul>
+  `;
+}
+
+function renderExtRaw(name) {
+  const fullId = 'ext:' + name;
+  const dep = EXTERNAL_DEPS.find(d => d.name === name) || { name, kind: 'package' };
+  const callers = EDGES.filter(e => e.to === fullId).map(e => e.from);
+  const raw = {
+    node_id: fullId,
+    kind: 'external_dep',
+    name: dep.name,
+    dep_kind: dep.kind || 'package',
+    called_by: callers,
+  };
+  return `
+    <div style="font-size:11px;color:var(--vs-text-dim);margin-bottom:6px;">
+      External dependency — aggregated from <code>external_calls</code> edges
+    </div>
+    <pre style="background:var(--vs-bg-deep); border:1px solid var(--vs-border-soft); padding:10px; border-radius:4px; font-size:10.5px; line-height:1.55; color:#d4d4d4; overflow-x:auto; white-space:pre-wrap;">${JSON.stringify(raw, null, 2)}</pre>
+  `;
+}
+
 function buildMethodDetail(c, m) {
   // Real-data path: every method object carries intent / calls /
   // externalCalls / risks straight from the LLM (calibrated where
@@ -1360,6 +1625,13 @@ function buildMethodDetail(c, m) {
   const intentHtml = m.intent
     ? `<div class="md-row"><span class="md-k">Intent</span><span class="md-v">${escapeAttr(m.intent)}</span></div>`
     : `<div class="md-row"><span class="md-k">Intent</span><span class="md-v md-empty">LLM did not emit a per-method intent for this one — see the class-level intent above</span></div>`;
+
+  // Method docstring is default-collapsed: it's verbatim source and can be
+  // long. Showing it always would push the rest of the method detail off-
+  // screen — user explicitly asked for click-to-expand.
+  const docHtml = m.docComment
+    ? `<div class="md-row"><span class="md-k">Doc</span><span class="md-v"><details class="md-doc-fold"><summary>click to view source comment</summary><div class="md-doc">${escapeAttr(m.docComment)}</div></details></span></div>`
+    : '';
 
   const calls = m.calls ?? [];
   let callsHtml = '<span class="md-empty">no in-file calls reported</span>';
@@ -1393,6 +1665,7 @@ function buildMethodDetail(c, m) {
 
   return `
     ${intentHtml}
+    ${docHtml}
     ${paramsHtml}
     <div class="md-row"><span class="md-k">Calls</span><span class="md-v">${callsHtml}</span></div>
     ${extHtml}
@@ -1463,6 +1736,12 @@ function renderDetails(c) {
       </div>
 
       <div class="intent">${c.intent}</div>
+      ${c.docComment ? `
+        <details class="doc-fold">
+          <summary>📝 Source comment</summary>
+          <div class="doc-fold-body">${escapeAttr(c.docComment)}</div>
+        </details>
+      ` : ''}
 
       <div class="card-row">
         <span class="k">Confidence</span>
@@ -1504,13 +1783,24 @@ function renderDetails(c) {
 }
 
 function renderRelated(c) {
-  const inbound = EDGES.filter(e => e.to === c.id).map(e =>
-    `<li><span class="arrow">←</span>${e.from} <span style="color:var(--vs-text-dim);font-size:10px;">(${e.kind}${e.verified ? '' : ', unverified'})</span></li>`
-  ).join('');
+  // Each related item delegates to selectClass / selectExternal so the user
+  // can navigate the call graph by clicking neighbors in the Details pane.
+  // We only attach the handler when the target actually exists in the graph
+  // (CLASSES for inbound, CLASSES or ext:* for outbound) — otherwise the row
+  // stays as a non-clickable label so we don't fail silently on stale edges.
+  const inbound = EDGES.filter(e => e.to === c.id).map(e => {
+    const exists = CLASSES.some(x => x.id === e.from);
+    const onclick = exists ? ` onclick="selectClass(${JSON.stringify(e.from).replace(/"/g,'&quot;')})"` : '';
+    return `<li${onclick}><span class="arrow">←</span>${e.from} <span style="color:var(--vs-text-dim);font-size:10px;">(${e.kind}${e.verified ? '' : ', unverified'})</span></li>`;
+  }).join('');
   const outbound = EDGES.filter(e => e.from === c.id).map(e => {
     const isExt = e.to.startsWith('ext:');
     const targetName = isExt ? e.to.slice(4) : e.to;
-    return `<li class="${isExt ? 'external' : ''}"><span class="arrow">→</span>${targetName} <span style="color:var(--vs-text-dim);font-size:10px;">(${e.kind}${e.verified ? '' : ', unverified'})</span></li>`;
+    const handler = isExt
+      ? `selectExternal(${JSON.stringify(targetName).replace(/"/g,'&quot;')})`
+      : (CLASSES.some(x => x.id === e.to) ? `selectClass(${JSON.stringify(e.to).replace(/"/g,'&quot;')})` : '');
+    const onclick = handler ? ` onclick="${handler}"` : '';
+    return `<li class="${isExt ? 'external' : ''}"${onclick}><span class="arrow">→</span>${targetName} <span style="color:var(--vs-text-dim);font-size:10px;">(${e.kind}${e.verified ? '' : ', unverified'})</span></li>`;
   }).join('');
   return `
     <h3>${c.id} <span style="font-size:11px; color:var(--vs-text-dim); font-weight:400;">relationships</span></h3>
@@ -1522,6 +1812,10 @@ function renderRelated(c) {
 }
 
 function renderRaw(c) {
+  // Render the canonical codemap-meta block as YAML (block style) rather than
+  // JSON — keys-on-the-left reads better at a glance and avoids the quote
+  // noise from JSON. We then apply a lightweight syntax-highlighting pass so
+  // keys/strings/numbers/literals are colored similarly to the VS Code editor.
   const raw = {
     node_id: c.id,
     kind: 'class',
@@ -1537,10 +1831,80 @@ function renderRaw(c) {
   };
   return `
     <div style="font-size:11px;color:var(--vs-text-dim);margin-bottom:6px;">
-      原始 <code>codemap-meta</code> 块（已经过 calibrator 校准）
+      原始 <code>codemap-meta</code> 块（已经过 calibrator 校准）· YAML
     </div>
-    <pre style="background:var(--vs-bg-deep); border:1px solid var(--vs-border-soft); padding:10px; border-radius:4px; font-size:10.5px; line-height:1.55; color:#d4d4d4; overflow-x:auto; white-space:pre-wrap;">${JSON.stringify(raw, null, 2)}</pre>
+    <pre class="yaml-block"><code>${highlightYaml(escapeYamlHtml(toYaml(raw)))}</code></pre>
   `;
+}
+
+// ---------- YAML serializer + highlighter ----------
+// Tiny block-style YAML emitter — handles the shape produced by renderRaw
+// (scalars, string/number/bool, nested objects, string/object arrays). Not a
+// general-purpose YAML library; deliberately small so the mockup stays
+// self-contained.
+function toYaml(value, indent) {
+  indent = indent || 0;
+  const pad = '  '.repeat(indent);
+  if (value === null || value === undefined) return 'null';
+  if (typeof value === 'string') return yamlScalarString(value);
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    return value.map(item => {
+      if (item !== null && typeof item === 'object') {
+        const sub = toYaml(item, indent + 1);
+        // Inline the first key onto the same line as the dash, then trim the
+        // leading pad from the rest so the YAML stays readable.
+        const lines = sub.split('\n');
+        return `${pad}- ${lines[0].replace(/^\s+/, '')}` +
+               (lines.length > 1 ? '\n' + lines.slice(1).join('\n') : '');
+      }
+      return `${pad}- ${toYaml(item, 0)}`;
+    }).join('\n');
+  }
+  if (typeof value === 'object') {
+    const keys = Object.keys(value);
+    if (keys.length === 0) return '{}';
+    return keys.map(k => {
+      const v = value[k];
+      if (v === null || v === undefined) return `${pad}${k}: null`;
+      if (Array.isArray(v)) {
+        if (v.length === 0) return `${pad}${k}: []`;
+        return `${pad}${k}:\n${toYaml(v, indent + 1)}`;
+      }
+      if (typeof v === 'object') {
+        if (Object.keys(v).length === 0) return `${pad}${k}: {}`;
+        return `${pad}${k}:\n${toYaml(v, indent + 1)}`;
+      }
+      return `${pad}${k}: ${toYaml(v, 0)}`;
+    }).join('\n');
+  }
+  return String(value);
+}
+function yamlScalarString(s) {
+  if (s === '') return '""';
+  // Quote when the value would otherwise be ambiguous (leading colon/hash/
+  // dash/bool-like, or contains characters that introduce structure).
+  if (/^(true|false|null|yes|no|on|off|~)$/i.test(s)) return JSON.stringify(s);
+  if (/^[-?:>|&*!%@`]|[:#]\s|\s$|^\s|\n|"/.test(s)) return JSON.stringify(s);
+  return s;
+}
+function escapeYamlHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function highlightYaml(html) {
+  // Order matters: comments first so trailing `# text` doesn't get re-parsed
+  // as a key, then list dashes, keys, quoted strings, numbers, and literals.
+  // Regex operates on already-HTML-escaped text — since we only wrap with
+  // <span> tags and the data has no raw < / > / & at this point, there's no
+  // double-escape risk.
+  return html
+    .replace(/(^|\s)(#[^\n]*)/g, '$1<span class="yaml-comment">$2</span>')
+    .replace(/^(\s*)(- )/gm, '$1<span class="yaml-punct">-</span> ')
+    .replace(/^(\s*)([A-Za-z_][\w\-.]*)(:)(?=$|\s)/gm, '$1<span class="yaml-key">$2</span><span class="yaml-punct">$3</span>')
+    .replace(/"([^"\\]|\\.)*"/g, m => `<span class="yaml-string">${m}</span>`)
+    .replace(/(:\s)(-?\d+(?:\.\d+)?)\b/g, '$1<span class="yaml-number">$2</span>')
+    .replace(/(:\s)(true|false|null)\b/g, '$1<span class="yaml-literal">$2</span>');
 }
 
 // ---------- Chat history (Lumen-specific narrative) ----------
@@ -1602,12 +1966,81 @@ function renderChat() {
 
 // ---------- Wire up ----------
 cy.on('tap', 'node.cls', evt => selectClass(evt.target.id()));
+// External-dep nodes use the `ext` class and an `ext:<name>` id. Without
+// this handler clicking them did nothing — user reported "External Deps这
+// 个节点点击后，右侧Details没有效果".
+cy.on('tap', 'node.ext', evt => {
+  const id = evt.target.id();
+  if (id.startsWith('ext:')) selectExternal(id.slice(4));
+});
+
+// ---------- Method-list collapse (per-class & global) ----------
+// Class node labels can get tall when a class has many methods; once a graph
+// has >10 such classes the LR layout starts feeling cluttered. Folding the
+// method list down to just `ClassName  (N methods)` makes the structural
+// view immediately readable, and the user can drill in by double-clicking a
+// node (or hit the toolbar button to fold/unfold everything at once).
+const __cmCollapsedClasses = new Set();
+let __cmAllCollapsed = false;
+
+function __cmClassLabel(c, collapsed) {
+  if (collapsed) {
+    const n = c.methods.length;
+    return `${c.id}  ${visGlyph(c.verification)}\n— ${n} method${n === 1 ? '' : 's'} —`;
+  }
+  return buildClassLabel(c);
+}
+function __cmClassHeight(c, collapsed) {
+  if (collapsed) return 52;
+  return 32 + (Math.min(c.methods.length, 5) + (c.methods.length > 5 ? 1 : 0)) * 18;
+}
+function __cmApplyNodeFold(c, collapsed) {
+  const node = cy.getElementById(c.id);
+  if (!node || node.empty()) return;
+  node.data('label', __cmClassLabel(c, collapsed));
+  node.data('height', __cmClassHeight(c, collapsed));
+}
+function __cmRerunLayout() {
+  cy.layout(__cmLayoutOpts).run();
+}
+window.__codemapCollapse = {
+  toggleAll() {
+    __cmAllCollapsed = !__cmAllCollapsed;
+    __cmCollapsedClasses.clear();
+    CLASSES.forEach(c => {
+      __cmApplyNodeFold(c, __cmAllCollapsed);
+      if (__cmAllCollapsed) __cmCollapsedClasses.add(c.id);
+    });
+    __cmRerunLayout();
+    return __cmAllCollapsed;
+  },
+  isAllCollapsed() { return __cmAllCollapsed; },
+  toggleOne(id) {
+    const c = CLASSES.find(x => x.id === id);
+    if (!c) return;
+    const willCollapse = !__cmCollapsedClasses.has(id);
+    if (willCollapse) __cmCollapsedClasses.add(id); else __cmCollapsedClasses.delete(id);
+    __cmApplyNodeFold(c, willCollapse);
+    __cmRerunLayout();
+  },
+};
+// Double-tap a class node to fold just that one. Single-tap keeps its
+// existing behaviour (select + render Details), so this is purely additive.
+cy.on('dbltap', 'node.cls', evt => {
+  window.__codemapCollapse.toggleOne(evt.target.id());
+});
 
 document.querySelectorAll('.card-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.card-tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     activeTab = tab.dataset.tab;
+    // External dep wins over class selection — selectExternal() clears
+    // class selection and sets __cmSelectedExt, so we just check that flag.
+    if (__cmSelectedExt) {
+      renderExtCard(__cmSelectedExt);
+      return;
+    }
     const sel = cy.$('node:selected')[0];
     if (sel) {
       const c = CLASSES.find(x => x.id === sel.id());
@@ -1630,7 +2063,51 @@ const filterState = {
   hideRead: false,
   onlyUnverified: false,
   hideExternal: false,
+  search: '',
 };
+function matchesSearch(c, q) {
+  if (!q) return true;
+  if (!c) return false;
+  const s = q.toLowerCase();
+  if (c.id && c.id.toLowerCase().includes(s)) return true;
+  if (c.file && c.file.toLowerCase().includes(s)) return true;
+  if (c.methods && c.methods.some(m => m.name && m.name.toLowerCase().includes(s))) return true;
+  return false;
+}
+function applyOutlineFilters() {
+  // Mirror the graph-side filters onto the left outline list so chip / search
+  // changes affect both panes. Hides empty bc-groups so the user doesn't see
+  // a row of bare section headers when a slot has no matches.
+  const q = (filterState.search || '').trim().toLowerCase();
+  document.querySelectorAll('.outline-item').forEach(row => {
+    const id = row.dataset.id;
+    const ext = row.dataset.ext;
+    let visible = true;
+    if (id) {
+      const c = CLASSES.find(x => x.id === id);
+      if (!c) { visible = false; }
+      else {
+        if (filterState.bc !== 'all' && c.bc !== filterState.bc) visible = false;
+        if (filterState.hideRead && c.readState === 'read') visible = false;
+        if (filterState.onlyUnverified && c.verification === 'verified') visible = false;
+        if (q && !matchesSearch(c, q)) visible = false;
+      }
+    } else if (ext) {
+      if (q && !ext.toLowerCase().includes(q)) visible = false;
+    }
+    row.classList.toggle('hidden', !visible);
+  });
+  ['Host', 'Capture', 'Recall', 'Shared'].forEach(name => {
+    const container = document.getElementById('outline' + name);
+    if (!container) return;
+    const group = container.previousElementSibling;
+    const anyVisible = [...container.children].some(r => !r.classList.contains('hidden'));
+    container.classList.toggle('hidden', !anyVisible);
+    if (group && group.classList && group.classList.contains('bc-group')) {
+      group.classList.toggle('hidden', !anyVisible);
+    }
+  });
+}
 function applyFilters() {
   cy.nodes('.cls').forEach(n => {
     const c = CLASSES.find(x => x.id === n.id());
@@ -1639,10 +2116,16 @@ function applyFilters() {
     if (filterState.bc !== 'all' && c.bc !== filterState.bc) show = false;
     if (filterState.hideRead && c.readState === 'read') show = false;
     if (filterState.onlyUnverified && c.verification === 'verified') show = false;
+    if (filterState.search && !matchesSearch(c, filterState.search)) show = false;
     n.style('display', show ? 'element' : 'none');
   });
   cy.nodes('.ext').forEach(n => {
-    n.style('display', filterState.hideExternal ? 'none' : 'element');
+    let show = !filterState.hideExternal;
+    if (show && filterState.search) {
+      const name = String(n.id() || '').replace(/^ext:/, '');
+      if (!name.toLowerCase().includes(filterState.search.toLowerCase())) show = false;
+    }
+    n.style('display', show ? 'element' : 'none');
   });
   // Edges: hide whenever either endpoint is hidden, so the graph never shows
   // a dangling edge into nowhere.
@@ -1653,6 +2136,7 @@ function applyFilters() {
     if (filterState.hideExternal && e.data('kind') === 'external_calls') show = false;
     e.style('display', show ? 'element' : 'none');
   });
+  applyOutlineFilters();
 }
 
 document.querySelectorAll('.chip.bc-chip').forEach(chip => {
@@ -1676,9 +2160,103 @@ document.querySelectorAll('.chip[data-filter]').forEach(chip => {
   });
 });
 
+// ---------- Header actions (Re-Analyze / Reset Progress / Search) ----------
+function postReanalyze() {
+  // Re-issues the original chat request so the user can refresh the graph
+  // without leaving the panel. We only know two flavors at this layer: a
+  // scoped run (meta.scope is a real subpath) or a workspace-wide run.
+  const m = __INJ.meta || {};
+  const prefill = (m.scope && m.scope !== 'workspace' && !m.scope.startsWith('focus:'))
+    ? `/scope ${m.scope}`
+    : 'generate codemap';
+  if (window.codemap && window.codemap.postMessage) {
+    window.codemap.postMessage({ type: 'open_chat', prefill });
+  }
+}
+function postResetProgress() {
+  // Persist + update the live in-memory view so the outline and the active
+  // card both flip back to unread immediately. Without the local mutation
+  // the UI would only refresh on the next panel reload.
+  if (window.codemap && window.codemap.postMessage) {
+    window.codemap.postMessage({ type: 'reset_progress' });
+  }
+  // Capture the currently-selected class/ext BEFORE renderOutline() wipes
+  // the outline DOM (and with it the `.active` marker). We need it to
+  // re-render the right card afterwards so the "Mark unread" button text
+  // refreshes — otherwise the card stays frozen in its pre-reset state.
+  const prevActive = document.querySelector('.outline-item.active');
+  const prevId = prevActive && prevActive.dataset.id;
+  const prevExt = prevActive && prevActive.dataset.ext;
+
+  CLASSES.forEach(c => {
+    c.readState = 'unread';
+    if (c.methods) c.methods.forEach(m => { m.read = false; });
+  });
+  renderOutline();
+  renderStats();
+
+  if (prevId) {
+    const c = CLASSES.find(x => x.id === prevId);
+    if (c) {
+      const row = [...document.querySelectorAll('.outline-item')].find(el => el.dataset.id === prevId);
+      if (row) row.classList.add('active');
+      renderCard(c);
+    }
+  } else if (prevExt) {
+    const row = [...document.querySelectorAll('.outline-item')].find(el => el.dataset.ext === prevExt);
+    if (row) row.classList.add('active');
+    // External cards don't show a Mark-read button, but re-render anyway
+    // so anything that does depend on read counts stays in sync.
+    if (typeof renderExtCard === 'function') renderExtCard(prevExt);
+  }
+}
+const analyzeBtn = document.getElementById('analyzeBtn');
+if (analyzeBtn) analyzeBtn.addEventListener('click', postReanalyze);
+const resetBtn = document.getElementById('resetBtn');
+if (resetBtn) resetBtn.addEventListener('click', postResetProgress);
+const outlineResetEl = document.getElementById('outlineReset');
+if (outlineResetEl) outlineResetEl.addEventListener('click', postResetProgress);
+const searchInputEl = document.getElementById('searchInput');
+if (searchInputEl) {
+  searchInputEl.addEventListener('input', () => {
+    filterState.search = searchInputEl.value;
+    applyFilters();
+  });
+  searchInputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const q = searchInputEl.value.trim().toLowerCase();
+      if (!q) return;
+      const hit = CLASSES.find(c => matchesSearch(c, q));
+      if (hit) selectClass(hit.id);
+    } else if (e.key === 'Escape') {
+      searchInputEl.value = '';
+      filterState.search = '';
+      applyFilters();
+    }
+  });
+}
+document.addEventListener('keydown', e => {
+  // Ctrl+Shift+A (or ⌘⇧A on mac) — advertised next to the Re-Analyze button.
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'A' || e.key === 'a')) {
+    // Don't hijack typing inside the search input or chat input.
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    e.preventDefault();
+    postReanalyze();
+  }
+});
+
 renderOutline();
 renderChat();
 renderStats();
+// Hide bc chips that map to empty slots — clicking them would just produce
+// an empty graph + empty outline, which is more confusing than helpful.
+['host', 'capture', 'recall', 'shared'].forEach(slot => {
+  const chip = document.querySelector(`.chip.bc-chip[data-bc="${slot}"]`);
+  if (!chip) return;
+  chip.classList.toggle('hidden', !CLASSES.some(c => c.bc === slot));
+});
 
 function renderStats() {
   // Bind statusbar + chat header to real data so the UI reflects the

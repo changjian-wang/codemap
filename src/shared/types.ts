@@ -23,6 +23,12 @@ export interface MethodInfo {
   calls?: string[];
   externalCalls?: string[];
   readState?: 'unread' | 'read';
+  /**
+   * Verbatim leading documentation comment (Python docstring, C# `///`,
+   * JSDoc / TSDoc) extracted from source. Empty/unset when the symbol has
+   * no doc comment.
+   */
+  docComment?: string;
 }
 
 export interface CodeNode {
@@ -38,6 +44,13 @@ export interface CodeNode {
   methods: MethodInfo[];
   readingPriority?: number;
   readState: 'unread' | 'reading' | 'read';
+
+  /**
+   * Verbatim leading documentation comment (Python docstring, C# `///`,
+   * JSDoc / TSDoc) extracted from source. Empty/unset when the class has
+   * no doc comment.
+   */
+  docComment?: string;
 
   verification: VerificationState;
   verificationDetails?: {

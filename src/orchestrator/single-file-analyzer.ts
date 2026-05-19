@@ -5,6 +5,7 @@ import { SYSTEM_PROMPT, buildUserMessage } from '../llm/prompts';
 import { CodemapMetaStreamParser, type RawBlock } from '../llm/stream-parser';
 import { Calibrator } from '../calibration/calibrator';
 import type { SymbolProvider } from '../calibration/symbol-provider';
+import { detectLang, extractDocComment } from './doc-extractor';
 
 /**
  * Per-file pipeline: stream-from-LLM → parse meta blocks → calibrate → emit.
@@ -53,6 +54,7 @@ export class SingleFileAnalyzer {
   async analyze(input: AnalyzeInput): Promise<AnalyzeResult> {
     const { file, fileText, boundedContext, token } = input;
     const userMessage = buildUserMessage(file, fileText);
+    const lang = detectLang(file);
 
     const parseErrors: AnalyzeResult['parseErrors'] = [];
     const parser = new CodemapMetaStreamParser({
@@ -83,6 +85,20 @@ export class SingleFileAnalyzer {
         boundedContext,
       });
       if (!result) return;
+      // Attach verbatim source-doc comments. The LLM-supplied `intent` stays
+      // as the one-liner; `docComment` is what the author actually wrote.
+      const classDoc = extractDocComment({
+        fileText,
+        startLine: result.node.range.startLine,
+        lang,
+      });
+      if (classDoc) result.node.docComment = classDoc;
+      for (const m of result.node.methods) {
+        if (m.line > 0) {
+          const mDoc = extractDocComment({ fileText, startLine: m.line, lang });
+          if (mDoc) m.docComment = mDoc;
+        }
+      }
       nodes.push(result.node);
       edges.push(...result.edges);
       input.onNode?.(result.node, result.edges);

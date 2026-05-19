@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { CodeMapGraph, CodeNode, MethodInfo } from '../shared/types';
 
 /**
  * Per-workspace reading progress, keyed by node id (and optionally method
@@ -61,4 +62,50 @@ export class ReadingProgressStore {
   snapshot(): ReadingProgress {
     return { ...this.current };
   }
+}
+
+/**
+ * Overlay a persisted progress snapshot onto a graph, returning a new graph
+ * with node/method `readState` flipped to `'read'` wherever the snapshot says
+ * so. Pure — does not mutate the input graph.
+ *
+ * Used by the WebView panel to restore "mark as read" across reloads: the
+ * orchestrator always emits fresh nodes with `readState: 'unread'`, but the
+ * user's prior marks should still surface on the next render.
+ */
+export function applyReadingProgress(
+  graph: CodeMapGraph,
+  progress: ReadingProgress,
+): CodeMapGraph {
+  if (Object.keys(progress).length === 0) return graph;
+
+  const nodes: Record<string, CodeNode> = {};
+  for (const [id, node] of Object.entries(graph.nodes)) {
+    const nodeRead = progress[`n:${id}`] === true;
+    let methods: MethodInfo[] = node.methods;
+    let methodsChanged = false;
+    for (let i = 0; i < node.methods.length; i++) {
+      const m = node.methods[i]!;
+      const methodRead = progress[`m:${id}.${m.name}`] === true;
+      const currentlyRead = m.readState === 'read';
+      if (methodRead && !currentlyRead) {
+        if (!methodsChanged) {
+          methods = [...node.methods];
+          methodsChanged = true;
+        }
+        methods[i] = { ...m, readState: 'read' };
+      }
+    }
+    const wantsRead = nodeRead && node.readState !== 'read';
+    if (wantsRead || methodsChanged) {
+      nodes[id] = {
+        ...node,
+        ...(wantsRead ? { readState: 'read' as const } : {}),
+        ...(methodsChanged ? { methods } : {}),
+      };
+    } else {
+      nodes[id] = node;
+    }
+  }
+  return { ...graph, nodes };
 }

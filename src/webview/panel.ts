@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { adaptGraphForMockup, type MockupChatTurn, type MockupStats, type MockupMeta } from './graph-adapter';
-import { ReadingProgressStore } from '../persistence/reading-progress';
+import { ReadingProgressStore, applyReadingProgress } from '../persistence/reading-progress';
 import { jumpToSource } from '../editor/jump-to-source';
 import type { ClientEvent, CodeMapGraph } from '../shared/types';
 
@@ -49,7 +49,12 @@ export async function showGraph(
   }
 
   currentGraph = graph;
-  currentPanel.webview.html = renderHtml(context, currentPanel.webview, graph, chatTurns, stats, meta);
+  // Overlay persisted "mark as read" state — the orchestrator always emits
+  // fresh nodes with readState='unread', but the user's prior marks (stored
+  // in workspaceState) should still surface on this render.
+  const progressSnapshot = new ReadingProgressStore(context.workspaceState).snapshot();
+  const overlaidGraph = applyReadingProgress(graph, progressSnapshot);
+  currentPanel.webview.html = renderHtml(context, currentPanel.webview, overlaidGraph, chatTurns, stats, meta);
 }
 
 function handleClientMessage(msg: ClientEvent, context: vscode.ExtensionContext): void {
@@ -148,13 +153,44 @@ function renderHtml(
         vscodeApi.postMessage({ type: 'ready' });
       });
     </script>
+    <style nonce="${nonce}">
+      /* Slash command autocomplete popup — sits on top of the chat input row.
+         The mockup's .chat-input-row needs position: relative so the popup
+         anchors correctly; we set that on the row itself at runtime too. */
+      .slash-popup {
+        position: absolute;
+        left: 14px; right: 14px; bottom: 100%;
+        margin-bottom: 4px;
+        background: var(--vs-bg-panel);
+        border: 1px solid var(--vs-border);
+        border-radius: 4px;
+        box-shadow: 0 -4px 14px rgba(0,0,0,0.35);
+        z-index: 50;
+        max-height: 240px;
+        overflow-y: auto;
+      }
+      .slash-popup .si {
+        padding: 6px 12px;
+        font-size: 12px;
+        border-bottom: 1px solid var(--vs-border-soft);
+        cursor: pointer;
+        color: var(--vs-text);
+      }
+      .slash-popup .si:last-child { border-bottom: 0; }
+      .slash-popup .si.active { background: rgba(78, 161, 255, 0.14); }
+      .slash-popup .si-cmd  { color: var(--vs-accent); font-family: Consolas, monospace; font-weight: 600; }
+      .slash-popup .si-args { color: var(--vs-text-dim); font-family: Consolas, monospace; margin-left: 4px; }
+      .slash-popup .si-desc { color: var(--vs-text-dim); font-size: 11px; margin-top: 2px; }
+    </style>
   `;
   html = html.replace('</head>', `${injection}</head>`);
 
   // Post-mockup script: wires the bottom chat input + quick-chips to the
-  // real Copilot Chat panel, and tightens the chip filter so external nodes
-  // hide when all of their callers are filtered out. Runs after the mockup
-  // has built cytoscape, so cy / applyFilters / CHAT_TURNS exist.
+  // real Copilot Chat panel, tightens the chip filter so external nodes
+  // hide when all of their callers are filtered out, relabels the 4 fixed
+  // chip slots with real bounded-context names, and draws a real minimap.
+  // Runs after the mockup has built cytoscape, so `cy`, `applyFilters`,
+  // `CHAT_TURNS` exist on the global scope.
   const isFixture = (meta?.modelLabel ?? '').toLowerCase().includes('fixture');
   const postMockup = `
     <script nonce="${nonce}">
@@ -163,16 +199,148 @@ function renderHtml(
           if (window.codemap && window.codemap.postMessage) window.codemap.postMessage(msg);
         }
 
-        // --- chat input: Enter submits to @codemap ---
+        // --- chat input: Enter submits to @codemap, with slash autocomplete ---
+        // The popup mirrors the participant.ts "Try one of" fallback so the
+        // user never has to remember the exact command name. Picking a command
+        // also rewrites the placeholder into an example string so the user
+        // sees what argument to type next.
+        var SLASH_COMMANDS = [
+          { cmd: '/scope',   args: '<path>',     desc: 'Limit analysis to a subpath',
+            example: '/scope <path>  \u2014 e.g. /scope sdk/storage' },
+          { cmd: '/focus',   args: '<Class>',    desc: 'Re-center the graph on a class',
+            example: '/focus <Class>  \u2014 e.g. /focus IngestUrlHandler' },
+          { cmd: '/why',     args: '<Class>',    desc: 'Explain partial / unverified state',
+            example: '/why <Class>  \u2014 e.g. /why AskByQueryHandler' },
+          { cmd: '/explain', args: 'unverified', desc: 'List all unverified nodes',
+            example: '/explain unverified' },
+        ];
+        var DEFAULT_PLACEHOLDER = 'Type a follow-up \u2014 Enter sends. Type / for commands.';
+
         var input = document.getElementById('chatInput');
         if (input) {
-          input.placeholder = 'Type a follow-up — Enter sends to @codemap in Copilot Chat';
+          input.placeholder = DEFAULT_PLACEHOLDER;
+
+          var row = input.parentElement; // .chat-input-row
+          if (row) row.style.position = 'relative';
+          var popup = document.createElement('div');
+          popup.className = 'slash-popup';
+          popup.style.display = 'none';
+          if (row) row.appendChild(popup);
+          var activeIdx = 0;
+
+          function commandFor(value) {
+            var head = (value || '').trim().split(/\s+/)[0];
+            for (var i = 0; i < SLASH_COMMANDS.length; i++) {
+              if (SLASH_COMMANDS[i].cmd === head) return SLASH_COMMANDS[i];
+            }
+            return null;
+          }
+          function filterList(value) {
+            var v = (value || '').trim();
+            if (!v || v.charAt(0) !== '/') return [];
+            var head = v.split(/\s+/)[0];
+            // Once the user has typed past the command (added a space + arg),
+            // we stop offering suggestions — the popup would just be noise.
+            if (v.length > head.length && /\s/.test(v.charAt(head.length))) return [];
+            var lower = head.toLowerCase();
+            return SLASH_COMMANDS.filter(function (s) { return s.cmd.indexOf(lower) === 0; });
+          }
+          function renderPopup(items) {
+            if (!items.length) { popup.style.display = 'none'; return; }
+            if (activeIdx >= items.length) activeIdx = 0;
+            var html = '';
+            for (var i = 0; i < items.length; i++) {
+              var s = items[i];
+              html += '<div class="si' + (i === activeIdx ? ' active' : '') + '" data-cmd="' + s.cmd + '">' +
+                '<span class="si-cmd">' + s.cmd + '</span>' +
+                '<span class="si-args">' + s.args + '</span>' +
+                '<div class="si-desc">' + s.desc + '</div>' +
+                '</div>';
+            }
+            popup.innerHTML = html;
+            popup.style.display = 'block';
+            Array.prototype.forEach.call(popup.querySelectorAll('.si'), function (el, i) {
+              el.addEventListener('mouseenter', function () {
+                activeIdx = i;
+                Array.prototype.forEach.call(popup.children, function (c, j) {
+                  c.classList.toggle('active', j === activeIdx);
+                });
+              });
+              // mousedown (not click) so it fires before blur hides the popup.
+              el.addEventListener('mousedown', function (ev) {
+                ev.preventDefault();
+                insertCommand(el.getAttribute('data-cmd'));
+              });
+            });
+          }
+          function insertCommand(cmd) {
+            var entry = null;
+            for (var i = 0; i < SLASH_COMMANDS.length; i++) {
+              if (SLASH_COMMANDS[i].cmd === cmd) { entry = SLASH_COMMANDS[i]; break; }
+            }
+            if (!entry) return;
+            // /explain only accepts a single fixed arg today, so we just fill
+            // the whole canonical form. Everything else needs the user to add
+            // their own argument, so we append a trailing space.
+            input.value = entry.cmd === '/explain' ? '/explain unverified' : entry.cmd + ' ';
+            popup.style.display = 'none';
+            input.placeholder = entry.example;
+            input.focus();
+            // Move caret to end so the user can type their arg immediately.
+            try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) {}
+          }
+          function refreshPlaceholder() {
+            var entry = commandFor(input.value);
+            input.placeholder = entry ? entry.example : DEFAULT_PLACEHOLDER;
+          }
+
+          input.addEventListener('input', function () {
+            activeIdx = 0;
+            renderPopup(filterList(input.value));
+            refreshPlaceholder();
+          });
+          input.addEventListener('focus', function () {
+            var items = filterList(input.value);
+            if (items.length) renderPopup(items);
+          });
+          input.addEventListener('blur', function () {
+            // Delay so an item mousedown still wins the race.
+            setTimeout(function () { popup.style.display = 'none'; }, 120);
+          });
           input.addEventListener('keydown', function (ev) {
+            var items = filterList(input.value);
+            var open = popup.style.display !== 'none' && items.length > 0;
+            if (open && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp')) {
+              ev.preventDefault();
+              activeIdx = (activeIdx + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+              renderPopup(items);
+              return;
+            }
+            if (open && ev.key === 'Tab') {
+              ev.preventDefault();
+              insertCommand(items[activeIdx].cmd);
+              return;
+            }
+            if (ev.key === 'Escape') {
+              popup.style.display = 'none';
+              return;
+            }
             if (ev.key !== 'Enter') return;
+            // Enter while popup is open and the user has only typed a slash
+            // prefix (no argument yet) means "accept the highlighted command";
+            // otherwise Enter submits the full line.
+            if (open) {
+              ev.preventDefault();
+              insertCommand(items[activeIdx].cmd);
+              return;
+            }
             ev.preventDefault();
             var v = input.value.trim();
+            if (!v) return;
             send({ type: 'open_chat', prefill: v });
             input.value = '';
+            input.placeholder = DEFAULT_PLACEHOLDER;
+            popup.style.display = 'none';
           });
         }
 
@@ -221,8 +389,6 @@ function renderHtml(
         document.querySelectorAll('.chip').forEach(function (chip) {
           chip.addEventListener('click', refineExternals);
         });
-        // Initial pass once layout is ready.
-        window.addEventListener('load', function () { setTimeout(refineExternals, 50); });
 
         // --- relabel chips + outline sections with the real bc names ---
         // The mockup hardcodes 4 slots (Host/Capture/Recall/Shared) tied to
@@ -257,6 +423,225 @@ function renderHtml(
             }
           });
         }
+
+        // --- minimap (real rendering; plan W5.3) ---
+        // The mockup ships an empty <div class="minimap"> placeholder. We
+        // mount a <canvas> inside it that mirrors cytoscape's world: each
+        // node becomes a colored dot (bc color), the current viewport is a
+        // hollow rectangle, and a click on the canvas pans cytoscape so the
+        // clicked world point becomes the center.
+        function initMinimap() {
+          if (typeof cy === 'undefined') return false;
+          var box = document.getElementById('minimap');
+          if (!box) return false;
+          // Don't double-init across re-layouts.
+          if (box.querySelector('canvas')) return true;
+          var W = box.clientWidth || 200;
+          var H = box.clientHeight || 130;
+          var canvas = document.createElement('canvas');
+          canvas.width = W;
+          canvas.height = H;
+          canvas.style.position = 'absolute';
+          canvas.style.inset = '0';
+          canvas.style.width = W + 'px';
+          canvas.style.height = H + 'px';
+          canvas.style.cursor = 'crosshair';
+          box.appendChild(canvas);
+          var ctx = canvas.getContext('2d');
+          if (!ctx) return true;
+
+          // Resolve bc colors from the live mockup CSS so any theme change
+          // here is reflected. Falls back to neutral grey on miss.
+          var bcSwatchEl = {};
+          ['host', 'capture', 'recall', 'shared'].forEach(function (slot) {
+            var probe = document.querySelector('.chip.bc-chip[data-bc="' + slot + '"] .bc-marker');
+            bcSwatchEl[slot] = probe ? getComputedStyle(probe).backgroundColor : '#888';
+          });
+          function colorForNode(n) {
+            var c = n.data('classes') || '';
+            var m = c.match(/bc-(host|capture|recall|shared|ext)/);
+            if (!m) return '#888';
+            if (m[1] === 'ext') return '#666';
+            return bcSwatchEl[m[1]] || '#888';
+          }
+
+          function compute() {
+            var nodes = cy.nodes().filter(function (n) { return n.style('display') !== 'none'; });
+            if (nodes.length === 0) return null;
+            var bb = nodes.boundingBox();
+            var pad = 12;
+            var bw = Math.max(1, bb.w + pad * 2);
+            var bh = Math.max(1, bb.h + pad * 2);
+            var scale = Math.min((W - 8) / bw, (H - 8) / bh);
+            var offX = (W - bw * scale) / 2 - (bb.x1 - pad) * scale;
+            var offY = (H - bh * scale) / 2 - (bb.y1 - pad) * scale;
+            return { nodes: nodes, scale: scale, offX: offX, offY: offY };
+          }
+
+          function draw() {
+            ctx.clearRect(0, 0, W, H);
+            var f = compute();
+            if (!f) return;
+            // dots
+            f.nodes.forEach(function (n) {
+              var p = n.position();
+              var x = p.x * f.scale + f.offX;
+              var y = p.y * f.scale + f.offY;
+              ctx.fillStyle = colorForNode(n);
+              ctx.beginPath();
+              ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+              ctx.fill();
+            });
+            // viewport rectangle
+            var ext = cy.extent(); // {x1, y1, x2, y2}
+            var rx = ext.x1 * f.scale + f.offX;
+            var ry = ext.y1 * f.scale + f.offY;
+            var rw = (ext.x2 - ext.x1) * f.scale;
+            var rh = (ext.y2 - ext.y1) * f.scale;
+            ctx.strokeStyle = 'rgba(120,200,255,0.85)';
+            ctx.lineWidth = 1.2;
+            ctx.strokeRect(rx, ry, rw, rh);
+          }
+
+          function panFromCanvas(ev) {
+            var rect = canvas.getBoundingClientRect();
+            var cx = ev.clientX - rect.left;
+            var cy_ = ev.clientY - rect.top;
+            var f = compute();
+            if (!f) return;
+            var wx = (cx - f.offX) / f.scale;
+            var wy = (cy_ - f.offY) / f.scale;
+            // Center cytoscape's viewport on (wx, wy).
+            var z = cy.zoom();
+            var Wc = cy.width(), Hc = cy.height();
+            cy.pan({ x: Wc / 2 - wx * z, y: Hc / 2 - wy * z });
+          }
+
+          var dragging = false;
+          canvas.addEventListener('mousedown', function (ev) { dragging = true; panFromCanvas(ev); });
+          canvas.addEventListener('mousemove', function (ev) { if (dragging) panFromCanvas(ev); });
+          canvas.addEventListener('mouseup', function () { dragging = false; });
+          canvas.addEventListener('mouseleave', function () { dragging = false; });
+
+          cy.on('viewport pan zoom layoutstop', draw);
+          cy.on('style', function () { /* node display toggled by chips */ draw(); });
+          // Throttled redraw on chip clicks too, since style events fire late.
+          document.querySelectorAll('.chip').forEach(function (chip) {
+            chip.addEventListener('click', function () { setTimeout(draw, 60); });
+          });
+          draw();
+          return true;
+        }
+
+        // Initial pass once layout is ready. cytoscape's 'ready' fires on
+        // page load; we also retry after a short delay in case the mockup's
+        // own load handler runs later.
+        function bootstrapAfterCy() {
+          refineExternals();
+          if (!initMinimap()) setTimeout(initMinimap, 120);
+          if (!initZoomToolbar()) setTimeout(initZoomToolbar, 120);
+        }
+        if (typeof cy !== 'undefined') {
+          bootstrapAfterCy();
+        } else {
+          window.addEventListener('load', function () { setTimeout(bootstrapAfterCy, 60); });
+        }
+
+        // --- zoom toolbar ---
+        // Cytoscape's wheel zoom is configured in the layout block; this
+        // adds discrete +/-/fit/1:1 buttons for users who want predictable
+        // stepping rather than wheel-trackpad scrubbing. Step factor 1.2
+        // matches "noticeable but not jarring" — VS Code's editor zoom uses
+        // ~1.1, code maps benefit from a slightly larger step since cards
+        // are bigger than glyphs.
+        function initZoomToolbar() {
+          if (typeof cy === 'undefined') return false;
+          var host = document.getElementById('cy');
+          if (!host) return false;
+          if (document.getElementById('zoomToolbar')) return true;
+          var bar = document.createElement('div');
+          bar.id = 'zoomToolbar';
+          bar.style.cssText = [
+            'position:absolute',
+            'left:14px',
+            'bottom:14px',
+            'display:flex',
+            'gap:4px',
+            'background:rgba(30,30,30,0.78)',
+            'border:1px solid #3a3a3a',
+            'border-radius:4px',
+            'padding:3px',
+            'z-index:5',
+            'font-family:Segoe UI, sans-serif',
+            'font-size:12px',
+            'color:#cccccc',
+          ].join(';');
+          host.style.position = host.style.position || 'relative';
+
+          function btn(label, title, handler) {
+            var b = document.createElement('button');
+            b.textContent = label;
+            b.title = title;
+            b.style.cssText = [
+              'background:transparent',
+              'border:none',
+              'color:inherit',
+              'font:inherit',
+              'cursor:pointer',
+              'padding:3px 8px',
+              'border-radius:3px',
+              'min-width:24px',
+            ].join(';');
+            b.addEventListener('mouseenter', function () { b.style.background = '#3a3a3a'; });
+            b.addEventListener('mouseleave', function () { b.style.background = 'transparent'; });
+            b.addEventListener('click', handler);
+            return b;
+          }
+
+          function stepZoom(factor) {
+            var z = cy.zoom();
+            var ext = cy.extent();
+            var cx = (ext.x1 + ext.x2) / 2;
+            var cy2 = (ext.y1 + ext.y2) / 2;
+            var rendered = { x: cy.width() / 2, y: cy.height() / 2 };
+            cy.zoom({
+              level: Math.max(0.15, Math.min(4, z * factor)),
+              renderedPosition: rendered,
+            });
+          }
+
+          bar.appendChild(btn('−', 'Zoom out', function () { stepZoom(1 / 1.2); }));
+          bar.appendChild(btn('+', 'Zoom in', function () { stepZoom(1.2); }));
+          bar.appendChild(btn('Fit', 'Fit graph to viewport', function () { cy.fit(undefined, 40); }));
+          bar.appendChild(btn('1:1', 'Reset zoom to 100%', function () {
+            cy.zoom(1);
+            cy.center();
+          }));
+
+          // Separator between zoom controls and fold control. Two unrelated
+          // groups of actions, keep them visually distinct.
+          var sep = document.createElement('span');
+          sep.style.cssText = 'width:1px;background:#3a3a3a;margin:2px 4px;';
+          bar.appendChild(sep);
+
+          // "Fold methods" toggles all class nodes between the full method
+          // list and a compact ClassName + "(N methods)" header. Default is
+          // expanded; clicking switches global state and the button label
+          // reflects the next action.
+          var foldBtn = btn('Fold', 'Hide method lists in graph nodes', function () {
+            if (!window.__codemapCollapse) return;
+            var nowCollapsed = window.__codemapCollapse.toggleAll();
+            foldBtn.textContent = nowCollapsed ? 'Unfold' : 'Fold';
+            foldBtn.title = nowCollapsed
+              ? 'Show method lists in graph nodes'
+              : 'Hide method lists in graph nodes';
+          });
+          bar.appendChild(foldBtn);
+
+          host.appendChild(bar);
+          return true;
+        }
+      })();
     </script>
   `;
   html = html.replace('</body>', `${postMockup}</body>`);

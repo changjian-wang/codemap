@@ -261,3 +261,51 @@ function reasonForNode(n: CodeNode): string {
   if (bits.length === 0) return 'unknown';
   return bits.join('; ');
 }
+
+/**
+ * Compact markdown digest of every `⚠ partial` and `✗ unverified` node in the
+ * graph, used directly under the `Calibration:` summary line. Returns
+ * `undefined` when there is nothing to surface so the caller can skip emitting
+ * an empty section.
+ *
+ * Renders as a bold heading + bulleted list. We intentionally do **not** use
+ * `<details>` — the VS Code chat markdown renderer strips raw HTML, so the
+ * tags would leak as literal text. Capped at `maxItems` per bucket
+ * (default 10) with a truncation hint.
+ */
+export function formatVerificationDigest(
+  graph: CodeMapGraph,
+  maxItems = 10,
+): string | undefined {
+  const all = Object.values(graph.nodes);
+  const partial = all.filter(n => n.verification === 'partial');
+  const unverified = all.filter(n => n.verification === 'unverified');
+  if (partial.length + unverified.length === 0) return undefined;
+
+  const lines: string[] = [];
+  const summaryBits: string[] = [];
+  if (partial.length > 0) summaryBits.push(`${partial.length} partial`);
+  if (unverified.length > 0) summaryBits.push(`${unverified.length} unverified`);
+  lines.push(`**Why ${summaryBits.join(' · ')}?**`);
+  lines.push('');
+
+  if (partial.length > 0) {
+    for (const n of partial.slice(0, maxItems)) {
+      lines.push(`- ⚠ \`${n.id}\` (\`${n.file}\`) — ${reasonForNode(n)}`);
+    }
+    if (partial.length > maxItems) {
+      lines.push(`- _…and ${partial.length - maxItems} more partial_`);
+    }
+  }
+  if (unverified.length > 0) {
+    for (const n of unverified.slice(0, maxItems)) {
+      lines.push(`- ✗ \`${n.id}\` (\`${n.file}\`) — ${reasonForNode(n)}`);
+    }
+    if (unverified.length > maxItems) {
+      lines.push(`- _…and ${unverified.length - maxItems} more unverified_`);
+    }
+  }
+  lines.push('');
+  lines.push('_Use `@codemap /why <Class>` for a per-node breakdown._');
+  return lines.join('\n');
+}

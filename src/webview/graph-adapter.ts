@@ -22,6 +22,8 @@ export interface MockupClass {
   confidence: number;
   readState: 'unread' | 'read';
   intent: string;
+  /** Verbatim source-doc comment for the class itself. */
+  docComment?: string;
   methods: {
     name: string;
     sig: string;
@@ -31,6 +33,8 @@ export interface MockupClass {
     intent?: string;
     calls?: string[];
     externalCalls?: string[];
+    /** Verbatim source-doc comment for the method. */
+    docComment?: string;
   }[];
   risks: { type: string; desc: string }[];
   verificationDetails?: {
@@ -87,6 +91,8 @@ export interface MockupStats {
   unverifiedCount: number;
   filesAnalyzed?: number;
   filesFailed?: number;
+  /** Files served by the analyzer cache (no LM call). */
+  filesFromCache?: number;
   durationMs?: number;
   eval?: {
     nodes: { precision: number; recall: number; f1: number };
@@ -169,6 +175,7 @@ export function adaptGraphForMockup(
     confidence: n.confidence,
     readState: n.readState === 'read' ? 'read' : 'unread',
     intent: n.intent,
+    docComment: n.docComment,
     methods: n.methods.map(m => ({
       name: m.name,
       sig: m.signature,
@@ -178,6 +185,7 @@ export function adaptGraphForMockup(
       intent: m.intent,
       calls: m.calls,
       externalCalls: m.externalCalls,
+      docComment: m.docComment,
     })),
     risks: n.risks ?? [],
     verificationDetails: n.verificationDetails,

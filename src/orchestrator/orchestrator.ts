@@ -8,6 +8,10 @@ import { bucketAll } from './bc-classifier';
 import { SingleFileAnalyzer, type AnalyzeResult } from './single-file-analyzer';
 import { runParallel } from './parallel-runner';
 import { aggregate } from './aggregator';
+import type { AnalyzerCache } from '../persistence/analyzer-cache';
+import { AnalyzerCache as AnalyzerCacheClass } from '../persistence/analyzer-cache';
+import { PROMPT_VERSION } from '../llm/prompts';
+import { hydrateDocComments } from './doc-extractor';
 
 /**
  * End-to-end orchestrator: chat request → final {@link CodeMapGraph}.
@@ -31,6 +35,8 @@ export interface OrchestratorDeps {
   reader: FileReader;
   symbols: SymbolProvider;
   llm: LlmClient;
+  /** Optional cache for per-file analyzer results. When omitted, every file is re-analyzed. */
+  cache?: AnalyzerCache;
 }
 
 export interface OrchestratorOptions {
@@ -45,7 +51,7 @@ export interface OrchestratorOptions {
 export interface OrchestratorEvents {
   onStep?: (step: string) => void;
   onSkeleton?: (info: { entryPoints: string[]; skeleton: string[]; overflow: string[] }) => void;
-  onFileDone?: (info: { file: string; result?: AnalyzeResult; error?: Error; doneCount: number; total: number }) => void;
+  onFileDone?: (info: { file: string; result?: AnalyzeResult; error?: Error; doneCount: number; total: number; cached?: boolean }) => void;
   onWarning?: (msg: string) => void;
 }
 
@@ -55,6 +61,7 @@ export interface OrchestratorResult {
     filesScanned: number;
     filesAnalyzed: number;
     filesFailed: number;
+    filesFromCache: number;
     nodeCount: number;
     edgeCount: number;
     verifiedCount: number;
@@ -76,6 +83,9 @@ export async function runOrchestrator(
   const scopePrefix = options.scopePrefix?.replace(/\\/g, '/').replace(/\/+$/, '');
   const scanOptions: ScanOptions = {
     ...DEFAULT_SCAN_OPTIONS,
+    // Production code path: rank skeleton by graph centrality, not raw BFS
+    // order. Tests opt back into `'bfs'` via `options.scan` for determinism.
+    rankBy: 'centrality',
     ...options.scan,
     ...(scopePrefix ? { pathPrefix: scopePrefix } : {}),
   };
@@ -96,9 +106,10 @@ export async function runOrchestrator(
   if (skeleton.length === 0) {
     // Distinguish "scope killed all candidates" from "wrong language" from
     // "no entry point matched". The first two have actionable user fixes.
+    const extList = scanOptions.extensions.join('/');
     if (scopePrefix) {
       throw new Error(
-        `Scope '${scopePrefix}' contained no analyzable .cs/.ts/.tsx/.js/.jsx ` +
+        `Scope '${scopePrefix}' contained no analyzable ${extList} ` +
           `files. Check the path (workspace-relative, forward slashes ok) or ` +
           `drop /scope to analyze the whole workspace.`,
       );
@@ -106,9 +117,8 @@ export async function runOrchestrator(
     const sawAnyFile = scan.entryPoints.length + scan.overflow.length > 0;
     if (!sawAnyFile) {
       throw new Error(
-        'No supported source files found. CodeMap currently analyzes ' +
-          '.cs/.ts/.tsx/.js/.jsx only — Python/Go/Rust/Java workspaces are ' +
-          'not yet supported. (Tracking issue: extend WorkspaceScanner.extensions.)',
+        `No supported source files found. CodeMap currently analyzes ` +
+          `${extList} only — other languages need WorkspaceScanner.extensions extended.`,
       );
     }
     throw new Error(
@@ -140,10 +150,11 @@ export async function runOrchestrator(
   }
   if (token.isCancellationRequested) throw new CancelledError();
 
-  // ---- Step 3: analyze in parallel ----
+  // ---- Step 3: analyze in parallel (with optional cache) ----
   events.onStep?.(`Analyzing ${skeleton.length} files via vscode.lm (≤ ${concurrency} concurrent)`);
   const analyzer = new SingleFileAnalyzer(deps.llm, deps.symbols);
   let doneCount = 0;
+  let filesFromCache = 0;
   const total = classified.length;
 
   const poolResults = await runParallel(
@@ -152,17 +163,51 @@ export async function runOrchestrator(
       if (token.isCancellationRequested) throw new CancelledError();
       const fileText = await deps.reader.readText(file);
       if (fileText === undefined) throw new Error(`could not read ${file}`);
+
+      // ---- Cache lookup ----
+      // The cache is keyed on (PROMPT_VERSION, file, fileText) so:
+      //  - bumping PROMPT_VERSION invalidates everything,
+      //  - editing the file invalidates that file,
+      //  - renaming the file invalidates because file path is part of key.
+      const cacheKey = deps.cache
+        ? AnalyzerCacheClass.key(PROMPT_VERSION, file, fileText)
+        : '';
+      const cached = deps.cache?.get(cacheKey);
+      if (cached) {
+        // Older cache entries pre-date docComment extraction. Re-running
+        // the extractor is purely a string operation; cheap enough to do on
+        // every hit so users see verbatim source comments even without an
+        // LLM call. Mutates the cached object in place; that's fine — the
+        // cache stores references and the next read will see the same enrichment.
+        hydrateDocComments(cached.nodes, cached.file, fileText);
+        doneCount++;
+        filesFromCache++;
+        events.onFileDone?.({ file, result: cached, doneCount, total, cached: true });
+        return cached;
+      }
+
       const result = await analyzer.analyze({
         file,
         fileText,
         boundedContext: bucket,
         token,
       });
+      if (deps.cache && cacheKey) {
+        // Fire-and-forget the write; the cache itself dedupes pending writes.
+        void deps.cache.set(cacheKey, result);
+      }
       doneCount++;
-      events.onFileDone?.({ file, result, doneCount, total });
+      events.onFileDone?.({ file, result, doneCount, total, cached: false });
       return result;
     },
     concurrency,
+    {
+      adaptiveBackoff: { failureThreshold: 3, cooldownMs: 1500 },
+      onBackoff: (n) =>
+        events.onWarning?.(
+          `${n} consecutive analyzer failures — slowing down remaining requests to avoid rate-limit cascade.`,
+        ),
+    },
   );
   if (token.isCancellationRequested) throw new CancelledError();
 
@@ -211,6 +256,7 @@ export async function runOrchestrator(
       filesScanned: scan.skeleton.length,
       filesAnalyzed: analyses.length,
       filesFailed,
+      filesFromCache,
       nodeCount: nodes.length,
       edgeCount: agg.graph.edges.length,
       verifiedCount,

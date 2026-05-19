@@ -1,12 +1,30 @@
 import type { CodeMapGraph, CodeNode } from '../shared/types';
 
 /**
+ * Identifies test classes by file convention. Test entry nodes are demoted
+ * below production entries in the reading order — a reviewer wants to see
+ * `FileSearchBackend` before `TestFileSearchIntegration`.
+ *
+ * Conservative: only matches directory segments (`/test(s)/`, `/__tests__/`,
+ * `/spec(s)/`) and well-known filename patterns. Avoids matching `testing.py`
+ * or other utility files that happen to contain "test" in the name.
+ */
+export function isTestNode(node: CodeNode): boolean {
+  const file = node.file.replace(/\\/g, '/').toLowerCase();
+  if (/(^|\/)(tests?|__tests__|specs?)\//.test(file)) return true;
+  const base = file.slice(file.lastIndexOf('/') + 1);
+  // Python: test_foo.py / foo_test.py; JS/TS: foo.test.ts / foo.spec.ts;
+  // .NET / Java: FooTests.cs / FooTest.java.
+  return /(^test_|_test\.|\.test\.|\.spec\.|tests?\.[a-z]+$)/.test(base);
+}
+
+/**
  * Computes a recommended reading order for the merged graph.
  *
  * Strategy (v3 §5):
  *   1. Pick entry nodes — anything with `layer === 'entry'` or with no inbound
- *      `calls` edges. Sort entries by descending confidence so the most-trusted
- *      one is read first.
+ *      `calls` edges. Sort entries by (production-first, descending confidence)
+ *      so trusted production code leads and test classes follow.
  *   2. DFS from each entry; when expanding children, visit lower-confidence
  *      and higher-risk children first so reviewers see the "scary" code early.
  *   3. Append any node not reachable from an entry (orphans / cycles) at the
@@ -29,7 +47,13 @@ export function computeReadingOrder(graph: CodeMapGraph): string[] {
 
   const entries = nodes
     .filter(n => n.layer === 'entry' || (inboundCalls.get(n.id) ?? 0) === 0)
-    .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
+    .sort((a, b) => {
+      // Production first, test classes last.
+      const aTest = isTestNode(a) ? 1 : 0;
+      const bTest = isTestNode(b) ? 1 : 0;
+      if (aTest !== bTest) return aTest - bTest;
+      return (b.confidence ?? 0) - (a.confidence ?? 0);
+    })
     .map(n => n.id);
 
   const order: string[] = [];

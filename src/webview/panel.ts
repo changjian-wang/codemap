@@ -129,23 +129,35 @@ function handleClientMessage(msg: ClientEvent, context: vscode.ExtensionContext)
 }
 
 async function pickScopeAndRegenerate(currentScope: string | undefined): Promise<void> {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
     vscode.window.showWarningMessage('No workspace folder open.');
     return;
   }
+  // Re-analyze should start from the folder the visible graph belongs to,
+  // not blindly from workspaceFolders[0]. `currentWorkspaceRoot` is set by
+  // `showGraph` and points at whichever root the orchestrator just ran on.
+  const activeRootFs = currentWorkspaceRoot?.fsPath;
+  const workspaceFolder =
+    folders.find(f => f.uri.fsPath === activeRootFs) ?? folders[0]!;
   const rootFs = workspaceFolder.uri.fsPath;
+  // Multi-root only: when the active folder is NOT the first one, we must
+  // prefix the produced scope with `<folderName>/` so the chat-side
+  // `resolveScope` lands on the right root (bare relative paths still fall
+  // back to the first folder).
+  const needsRootPrefix = folders.length > 1 && workspaceFolder !== folders[0];
+  const rootPrefix = needsRootPrefix ? `${workspaceFolder.name}/` : '';
 
   type ScopeAction = 'workspace' | 'folder' | 'file' | 'type';
   interface ScopeItem extends vscode.QuickPickItem { action: ScopeAction; }
   const items: ScopeItem[] = [
     { label: '$(root-folder) Whole workspace', detail: workspaceFolder.name, action: 'workspace' },
-    { label: '$(folder-opened) Pick folder…', detail: 'Browse for a folder under this workspace', action: 'folder' },
-    { label: '$(file) Pick file…', detail: 'Browse for a single file under this workspace', action: 'file' },
+    { label: '$(folder-opened) Pick folder…', detail: `Browse for a folder under ${workspaceFolder.name}`, action: 'folder' },
+    { label: '$(file) Pick file…', detail: `Browse for a single file under ${workspaceFolder.name}`, action: 'file' },
     { label: '$(edit) Type path…', detail: currentScope ? `Current: ${currentScope}` : 'Workspace-relative path', action: 'type' },
   ];
   const pick = await vscode.window.showQuickPick(items, {
-    title: 'Re-analyze with scope',
+    title: `Re-analyze with scope (${workspaceFolder.name})`,
     placeHolder: 'Choose the scope for the next @codemap run',
   });
   if (!pick) return;
@@ -153,7 +165,9 @@ async function pickScopeAndRegenerate(currentScope: string | undefined): Promise
   let scope: string | undefined;
   switch (pick.action) {
     case 'workspace':
-      scope = undefined;
+      // Whole-folder re-analysis: address the active root explicitly so we
+      // don't accidentally retarget the first root.
+      scope = needsRootPrefix ? workspaceFolder.name : undefined;
       break;
     case 'folder': {
       const picked = await vscode.window.showOpenDialog({
@@ -164,11 +178,14 @@ async function pickScopeAndRegenerate(currentScope: string | undefined): Promise
         openLabel: 'Use as scope',
       });
       if (!picked || picked.length === 0) return;
-      scope = toWorkspaceRelative(picked[0].fsPath, rootFs);
-      if (scope === undefined) {
-        vscode.window.showWarningMessage('Selected folder is outside the workspace.');
+      const rel = toWorkspaceRelative(picked[0].fsPath, rootFs);
+      if (rel === undefined) {
+        vscode.window.showWarningMessage(
+          `Selected folder is outside \`${workspaceFolder.name}\`.`,
+        );
         return;
       }
+      scope = rel === '' ? (needsRootPrefix ? workspaceFolder.name : undefined) : `${rootPrefix}${rel}`;
       break;
     }
     case 'file': {
@@ -180,23 +197,39 @@ async function pickScopeAndRegenerate(currentScope: string | undefined): Promise
         openLabel: 'Use as scope',
       });
       if (!picked || picked.length === 0) return;
-      scope = toWorkspaceRelative(picked[0].fsPath, rootFs);
-      if (scope === undefined) {
-        vscode.window.showWarningMessage('Selected file is outside the workspace.');
+      const rel = toWorkspaceRelative(picked[0].fsPath, rootFs);
+      if (rel === undefined) {
+        vscode.window.showWarningMessage(
+          `Selected file is outside \`${workspaceFolder.name}\`.`,
+        );
         return;
       }
+      scope = `${rootPrefix}${rel}`;
       break;
     }
     case 'type': {
       const typed = await vscode.window.showInputBox({
-        title: 'Scope path',
-        prompt: 'Workspace-relative path (folder or file). Leave empty for the whole workspace.',
+        title: `Scope path (${workspaceFolder.name})`,
+        prompt: 'Workspace-relative path (folder or file). Leave empty for the whole folder.',
         value: currentScope ?? '',
         placeHolder: 'e.g. sdk/storage  or  src/main.ts',
       });
       if (typed === undefined) return;
       const trimmed = typed.trim();
-      scope = trimmed.length === 0 ? undefined : trimmed;
+      if (trimmed.length === 0) {
+        scope = needsRootPrefix ? workspaceFolder.name : undefined;
+      } else if (
+        // Already absolute, or already prefixed with the folder name — trust
+        // the user verbatim. Otherwise prepend the folder prefix so the
+        // re-analysis stays on the active root.
+        /^[a-zA-Z]:[\\\/]/.test(trimmed) ||
+        trimmed.startsWith('/') ||
+        trimmed.split(/[\\\/]/, 1)[0]!.toLowerCase() === workspaceFolder.name.toLowerCase()
+      ) {
+        scope = trimmed;
+      } else {
+        scope = `${rootPrefix}${trimmed}`;
+      }
       break;
     }
   }

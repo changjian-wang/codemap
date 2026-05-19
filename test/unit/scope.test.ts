@@ -79,10 +79,15 @@ describe('resolveScope (multi-root)', () => {
     expect(r?.prefix).toBe('apps');
   });
 
-  it('falls back to the first folder for a bare relative path (legacy behavior)', () => {
-    const r = resolveScope('apps/api/src', folders);
+  it('falls back to the first folder for a bare relative path when single-root', () => {
+    const single = [{ name: 'dawning', uri: { fsPath: 'C:\\github\\dawning' } }];
+    const r = resolveScope('apps/api/src', single);
     expect(r?.folder.name).toBe('dawning');
     expect(r?.prefix).toBe('apps/api/src');
+  });
+
+  it('refuses bare relative paths in multi-root workspaces (ambiguous)', () => {
+    expect(resolveScope('apps/api/src', folders)).toBeUndefined();
   });
 
   it('returns empty prefix when the path equals a folder root', () => {

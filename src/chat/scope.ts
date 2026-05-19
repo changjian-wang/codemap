@@ -80,7 +80,12 @@ export function resolveScope<F extends ScopeFolderLike>(
     }
   }
 
-  // Legacy: bare relative path. Assume the first folder (matches the old
-  // single-root behavior so existing prompts keep working).
-  return { folder: folders[0]!, prefix: s };
+  // Bare relative path. In a single-root workspace this is unambiguous, so
+  // we keep the old behavior. In a multi-root workspace it is ambiguous —
+  // we refuse rather than silently picking the first root (which has
+  // historically caused the scanner to scan the wrong repo).
+  if (folders.length === 1) {
+    return { folder: folders[0]!, prefix: s };
+  }
+  return undefined;
 }

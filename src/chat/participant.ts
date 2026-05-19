@@ -83,13 +83,28 @@ async function handleGenerate(
     : fallbackFamily;
 
   // Multi-root aware scope resolution. `/scope` may name any folder by
-  // absolute path or by `<folderName>/<sub>`. Falls back to the first folder
-  // for bare relative paths (legacy single-root behavior).
+  // absolute path or by `<folderName>/<sub>`. In a multi-root workspace,
+  // a bare relative path is ambiguous and we refuse rather than silently
+  // pick the first folder.
   const resolved =
     intent.kind === 'scope' && intent.target
       ? resolveScope(intent.target, folders)
       : undefined;
-  const scopeUnresolved = intent.kind === 'scope' && !!intent.target && !resolved;
+  if (intent.kind === 'scope' && intent.target && !resolved) {
+    const folderList = folders.map(f => `\`${f.name}\``).join(', ');
+    response.markdown(
+      [
+        `⚠ Scope \`${intent.target}\` is ambiguous in this multi-root workspace.`,
+        '',
+        `Open folders: ${folderList}.`,
+        '',
+        'Disambiguate with one of:',
+        ...folders.map(f => `- \`@codemap /scope ${f.name}/${intent.target}\``),
+        `- \`@codemap /scope "<absolute path>"\``,
+      ].join('\n'),
+    );
+    return;
+  }
   const workspaceFolder = resolved?.folder ?? folders[0]!;
   const scopePrefix = resolved?.prefix || undefined; // empty string → undefined (whole folder)
   const rootRequest =
@@ -99,12 +114,6 @@ async function handleGenerate(
 
   response.markdown(`Analyzing workspace **\`${workspaceFolder.name}\`** with \`${modelLabel}\`...\n\n`);
   if (scopePrefix) response.markdown(`Scope filter: \`${scopePrefix}\` in \`${workspaceFolder.name}\`\n\n`);
-  else if (scopeUnresolved)
-    response.markdown(
-      `⚠ Scope \`${intent.target}\` did not match any open workspace folder (${folders
-        .map(f => `\`${f.name}\``)
-        .join(', ')}) — analyzing \`${workspaceFolder.name}\` in full instead.\n\n`,
-    );
 
   const chatTurns: MockupChatTurn[] = [
     {

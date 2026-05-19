@@ -4,7 +4,7 @@
 
 **Status:** v0.0.1 — first public release.
 
-> Screenshots / demo GIF: _coming soon._ 
+![CodeMap UI](https://raw.githubusercontent.com/changjian-wang/codemap/main/docs/media/screenshot.png)
 
 ---
 

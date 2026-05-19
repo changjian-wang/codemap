@@ -73,7 +73,12 @@ export async function runOrchestrator(
   token: vscode.CancellationToken,
 ): Promise<OrchestratorResult> {
   const t0 = Date.now();
-  const scanOptions: ScanOptions = { ...DEFAULT_SCAN_OPTIONS, ...options.scan };
+  const scopePrefix = options.scopePrefix?.replace(/\\/g, '/').replace(/\/+$/, '');
+  const scanOptions: ScanOptions = {
+    ...DEFAULT_SCAN_OPTIONS,
+    ...options.scan,
+    ...(scopePrefix ? { pathPrefix: scopePrefix } : {}),
+  };
   const concurrency = options.maxParallelAnalyzers ?? 6;
 
   // ---- Step 1: scan ----
@@ -81,11 +86,7 @@ export async function runOrchestrator(
   const scan = await scanWorkspace(deps.reader, scanOptions);
   if (token.isCancellationRequested) throw new CancelledError();
 
-  let skeleton = scan.skeleton;
-  if (options.scopePrefix) {
-    const prefix = options.scopePrefix.replace(/\\/g, '/');
-    skeleton = skeleton.filter(f => f.startsWith(prefix));
-  }
+  const skeleton = scan.skeleton;
   events.onSkeleton?.({
     entryPoints: scan.entryPoints,
     skeleton,
@@ -93,6 +94,23 @@ export async function runOrchestrator(
   });
 
   if (skeleton.length === 0) {
+    // Distinguish "scope killed all candidates" from "wrong language" from
+    // "no entry point matched". The first two have actionable user fixes.
+    if (scopePrefix) {
+      throw new Error(
+        `Scope '${scopePrefix}' contained no analyzable .cs/.ts/.tsx/.js/.jsx ` +
+          `files. Check the path (workspace-relative, forward slashes ok) or ` +
+          `drop /scope to analyze the whole workspace.`,
+      );
+    }
+    const sawAnyFile = scan.entryPoints.length + scan.overflow.length > 0;
+    if (!sawAnyFile) {
+      throw new Error(
+        'No supported source files found. CodeMap currently analyzes ' +
+          '.cs/.ts/.tsx/.js/.jsx only — Python/Go/Rust/Java workspaces are ' +
+          'not yet supported. (Tracking issue: extend WorkspaceScanner.extensions.)',
+      );
+    }
     throw new Error(
       'No analyzable entry points found in the workspace. ' +
         'CodeMap looks for Program.cs / *Endpoints.cs / index.ts and friends.',

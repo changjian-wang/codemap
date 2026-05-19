@@ -21,8 +21,7 @@
     "GitHub.copilot-chat"
   ],
   "activationEvents": [
-    "onChatParticipant:codemap.codemap",
-    "onCommand:codemap.showDemoGraph"
+    "onChatParticipant:codemap.codemap"
   ],
   "contributes": {
     "chatParticipants": [
@@ -53,10 +52,6 @@
       }
     ],
     "commands": [
-      {
-        "command": "codemap.showDemoGraph",
-        "title": "CodeMap: Show Demo Graph (fixture data)"
-      },
       {
         "command": "codemap.resetReadingProgress",
         "title": "CodeMap: Reset Reading Progress"
@@ -106,8 +101,9 @@
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package": "vsce package",
-    "test": "vitest",
-    "eval": "ts-node eval/score.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "eval": "ts-node --project eval/tsconfig.json eval/score-cli.ts",
     "lint": "tsc --noEmit"
   },
   "devDependencies": {

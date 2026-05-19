@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { routeChatIntent, type ChatIntent } from './intent-router';
-import { showGraph, showDemoGraph } from '../webview/panel';
+import { normalizeScopePath } from './scope';
+import { showGraph } from '../webview/panel';
 import { runOrchestrator, CancelledError } from '../orchestrator/orchestrator';
 import { createVscodeFileReader } from '../orchestrator/vscode-file-reader';
 import { VscodeSymbolProvider } from '../calibration/vscode-symbol-provider';
@@ -9,6 +10,8 @@ import { loadGoldenForWorkspace } from '../eval/golden-loader';
 import { scoreGraph } from '../eval/score';
 import { DEFAULT_SCAN_OPTIONS } from '../orchestrator/workspace-scanner';
 import type { MockupChatTurn } from '../webview/graph-adapter';
+import { GraphStore, currentWorkspaceRevHash, type StoredGraph } from '../persistence/graph-store';
+import { explainNode, explainUnverified, focusSubgraph } from './chat-responders';
 
 const PARTICIPANT_ID = 'codemap.codemap';
 
@@ -21,20 +24,16 @@ export function registerChatParticipant(context: vscode.ExtensionContext): vscod
     switch (intent.kind) {
       case 'generate_workspace':
       case 'scope':
-      case 'focus':
         await handleGenerate(context, intent, request.model, response, token);
         return;
+      case 'focus':
+        await handleFocus(context, intent, request.model, response, token);
+        return;
       case 'why':
-        response.markdown(
-          intent.target
-            ? `_Stub_: would explain why \`${intent.target}\` is partial/unverified. (W4 task 4.8: translate node.verificationDetails into prose.)`
-            : '_Stub_: pass a class name, e.g. `/why AskByQueryHandler`.',
-        );
+        await handleWhy(context, intent, response);
         return;
       case 'explain':
-        response.markdown(
-          '_Stub_: would list all unverified nodes in the current graph with their reasons. (W4 task 4.8.)',
-        );
+        await handleExplain(context, response);
         return;
       case 'unknown':
         response.markdown(
@@ -42,9 +41,9 @@ export function registerChatParticipant(context: vscode.ExtensionContext): vscod
             'Try one of:',
             '- `@codemap generate codemap` — analyze the whole workspace',
             '- `@codemap /scope <path>` — limit to a subpath',
-            '- `@codemap /focus <Class>` — re-center on a class (W4)',
-            '- `@codemap /why <Class>` — explain partial/unverified state (W4)',
-            '- `@codemap /explain unverified` — explain all unverified nodes (W4)',
+            '- `@codemap /focus <Class>` — re-center the graph on a class',
+            '- `@codemap /why <Class>` — explain partial/unverified state',
+            '- `@codemap /explain unverified` — list all unverified nodes in the current graph',
           ].join('\n'),
         );
         return;
@@ -81,16 +80,21 @@ async function handleGenerate(
     ? `${pickedModel.name ?? pickedModel.family}${pickedModel.vendor ? ` (${pickedModel.vendor})` : ''}`
     : fallbackFamily;
 
-  const scopePrefix = intent.kind === 'scope' && intent.target ? intent.target : undefined;
+  const scopePrefix =
+    intent.kind === 'scope' && intent.target
+      ? normalizeScopePath(intent.target, workspaceFolder.uri.fsPath)
+      : undefined;
   const rootRequest =
     intent.kind === 'scope' && intent.target
       ? `@codemap /scope ${intent.target}`
-      : intent.kind === 'focus' && intent.target
-        ? `@codemap /focus ${intent.target}`
-        : `@codemap ${intent.prompt}`;
+      : `@codemap ${intent.prompt}`;
 
   response.markdown(`Analyzing workspace **\`${workspaceFolder.name}\`** with \`${modelLabel}\`...\n\n`);
-  if (scopePrefix) response.markdown(`Scope filter: \`${scopePrefix}\`\n\n`);
+  if (scopePrefix) response.markdown(`Scope filter: \`${scopePrefix}\` (workspace-relative)\n\n`);
+  else if (intent.kind === 'scope' && intent.target)
+    response.markdown(
+      `⚠ Scope \`${intent.target}\` is outside this workspace — analyzing the entire workspace instead.\n\n`,
+    );
 
   const chatTurns: MockupChatTurn[] = [
     {
@@ -168,7 +172,9 @@ async function handleGenerate(
 
     // ---- Optional eval against a golden sample ----
     const golden = await loadGoldenForWorkspace(workspaceFolder.uri);
-    let evalScore: { nodes: { precision: number; recall: number; f1: number }; edges: { precision: number; recall: number; f1: number } } | undefined;
+    let evalScore:
+      | { nodes: { precision: number; recall: number; f1: number }; edges: { precision: number; recall: number; f1: number } }
+      | undefined;
     if (golden) {
       const sc = scoreGraph(result.graph, golden);
       evalScore = { nodes: sc.nodes, edges: sc.edges };
@@ -184,40 +190,166 @@ async function handleGenerate(
           sc.diff.missingEdges.length > 0
             ? `- Missing edges: ${sc.diff.missingEdges.slice(0, 5).map(e => `\`${e.from}→${e.to}\``).join(', ')}${sc.diff.missingEdges.length > 5 ? ` (+${sc.diff.missingEdges.length - 5} more)` : ''}`
             : '',
-        ].filter(Boolean).join('\n'),
+        ]
+          .filter(Boolean)
+          .join('\n'),
       );
     }
 
-    await showGraph(
-      context,
-      result.graph,
+    const stats = {
+      verifiedCount: result.stats.verifiedCount,
+      partialCount: result.stats.partialCount,
+      unverifiedCount: result.stats.unverifiedCount,
+      filesAnalyzed: result.stats.filesAnalyzed,
+      filesFailed: result.stats.filesFailed,
+      durationMs: result.stats.durationMs,
+      eval: evalScore,
+    };
+
+    await showGraph(context, result.graph, chatTurns, stats, {
+      modelLabel,
+      repoName: workspaceFolder.name,
+      scope: scopePrefix,
+      fileCountText: `${result.stats.filesAnalyzed} files analyzed`,
+      scopePill: scopePrefix ? '📦 SCOPED' : '📦 WORKSPACE',
+    });
+
+    // ---- Persist for /why, /explain, /focus and reloads. ----
+    await new GraphStore(context.workspaceState).save({
+      graph: result.graph,
       chatTurns,
-      {
-        verifiedCount: result.stats.verifiedCount,
-        partialCount: result.stats.partialCount,
-        unverifiedCount: result.stats.unverifiedCount,
-        filesAnalyzed: result.stats.filesAnalyzed,
-        filesFailed: result.stats.filesFailed,
-        durationMs: result.stats.durationMs,
-        eval: evalScore,
-      },
-      {
-        modelLabel,
-        repoName: workspaceFolder.name,
-        scope: scopePrefix,
-        fileCountText: `${result.stats.filesAnalyzed} files analyzed`,
-        scopePill: scopePrefix ? '📦 SCOPED' : '📦 WORKSPACE',
-      },
-    );
+      revHash: currentWorkspaceRevHash(),
+      savedAt: Date.now(),
+      stats,
+    });
   } catch (err) {
     if (err instanceof CancelledError) {
       response.markdown('\n_Cancelled._');
       return;
     }
     const e = err as Error;
-    response.markdown(`\n\n⚠ **Error**: ${e.message}\n\n_Falling back to the demo graph._`);
-    await showDemoGraph(context);
+    response.markdown(
+      [
+        '',
+        `⚠ **Error**: ${e.message}`,
+        '',
+        'Common causes:',
+        '- Copilot Chat not signed in (the LLM call needs `vscode.lm`).',
+        '- Workspace has no `.cs/.ts/.tsx/.js/.jsx` files (scanner extension whitelist).',
+        '- C# Dev Kit / TS LSP not finished indexing yet — try again in a moment.',
+      ].join('\n'),
+    );
   }
+}
+
+async function handleWhy(
+  context: vscode.ExtensionContext,
+  intent: ChatIntent,
+  response: vscode.ChatResponseStream,
+): Promise<void> {
+  if (!intent.target) {
+    response.markdown(
+      'Usage: `@codemap /why <Class>`. Example: `@codemap /why AskByQueryHandler`.',
+    );
+    return;
+  }
+  const stored = loadCurrentGraph(context);
+  if (!stored) {
+    response.markdown(noGraphHint());
+    return;
+  }
+  response.markdown(explainNode(stored.graph, intent.target).markdown);
+}
+
+async function handleExplain(
+  context: vscode.ExtensionContext,
+  response: vscode.ChatResponseStream,
+): Promise<void> {
+  const stored = loadCurrentGraph(context);
+  if (!stored) {
+    response.markdown(noGraphHint());
+    return;
+  }
+  response.markdown(explainUnverified(stored.graph).markdown);
+}
+
+async function handleFocus(
+  context: vscode.ExtensionContext,
+  intent: ChatIntent,
+  pickedModel: vscode.LanguageModelChat | undefined,
+  response: vscode.ChatResponseStream,
+  token: vscode.CancellationToken,
+): Promise<void> {
+  if (!intent.target) {
+    response.markdown(
+      'Usage: `@codemap /focus <Class>`. Example: `@codemap /focus IngestUrlHandler`.',
+    );
+    return;
+  }
+  const stored = loadCurrentGraph(context);
+  if (!stored) {
+    response.markdown(
+      '_No current graph in this workspace yet. Running a full analysis first; ' +
+        'then re-issue `/focus` to narrow down._',
+    );
+    // Fall back to a fresh generate so the user isn't stuck. We pass the
+    // original prompt body so /focus <Class> still results in a workspace
+    // generation rather than crashing.
+    await handleGenerate(
+      context,
+      { kind: 'generate_workspace', prompt: intent.prompt },
+      pickedModel,
+      response,
+      token,
+    );
+    return;
+  }
+
+  const focus = focusSubgraph(stored.graph, intent.target);
+  response.markdown(focus.markdown);
+  if (!focus.found || !focus.subgraph) return;
+
+  await showGraph(
+    context,
+    focus.subgraph,
+    [
+      ...stored.chatTurns,
+      {
+        role: 'user',
+        name: 'You',
+        time: nowHHMM(),
+        content: escapeHtml(`@codemap /focus ${intent.target}`),
+      },
+      {
+        role: 'assistant',
+        name: '@codemap',
+        time: nowHHMM(),
+        content: `Re-centered on <code>${escapeHtml(intent.target)}</code>: ${focus.includedIds.length} nodes (target + ${focus.includedIds.length - 1} neighbors).`,
+      },
+    ],
+    stored.stats,
+    {
+      modelLabel: 'focus (no model call)',
+      repoName: vscode.workspace.workspaceFolders?.[0]?.name ?? 'workspace',
+      scope: `focus:${intent.target}`,
+      fileCountText: `${focus.includedIds.length} classes in focus`,
+      scopePill: '🎯 FOCUS',
+    },
+  );
+
+  // /focus is transient: don't overwrite the persisted full graph so /why
+  // and /explain still see the complete picture.
+}
+
+function loadCurrentGraph(context: vscode.ExtensionContext): StoredGraph | undefined {
+  return new GraphStore(context.workspaceState).load(currentWorkspaceRevHash());
+}
+
+function noGraphHint(): string {
+  return (
+    '_No graph available for this workspace yet._ ' +
+    'Run `@codemap generate codemap` first, then re-issue this command.'
+  );
 }
 
 function nowHHMM(): string {

@@ -170,18 +170,32 @@ export class Calibrator {
     const droppedCalls: string[] = [];
 
     // ---- 3. Soft-validate `external_calls` against the workspace. ----
-    // W2 scope: we keep every external_call as an edge candidate but try a
-    // workspace symbol lookup so the partial flag can fire if too many fail.
-    // W3 splits these into "package import" vs "missing symbol" once we
-    // start reading project manifests; for now we accept all.
+    // Every external_call still becomes an `ext:*` edge (workspace symbol
+    // search can't see BCL / NuGet types that are not source-indexed, so
+    // a miss is not proof of hallucination). What the lookup *does* give
+    // us is a soft "I cannot see this anywhere" signal: when it fires we
+    // (a) record the target on `droppedExternalCalls` so `/why` can surface
+    // it, and (b) downgrade the node to `partial` so the user sees the
+    // warning badge.
+    // When the LSP is not ready we cannot tell anything, so every entry is
+    // accepted at face value.
     const verifiedExternal: string[] = [];
+    const droppedExternal: string[] = [];
     for (const t of asArray(data, 'external_calls')) {
       if (typeof t !== 'string') continue;
-      const last = t.split('.').pop()!;
-      await this.symbols.findInWorkspace(last, 1);
       verifiedExternal.push(t);
+      if (lspNotReady) continue;
+      const last = t.split('.').pop()!;
+      try {
+        const hits = await this.symbols.findInWorkspace(last, 1);
+        if (hits.length === 0) droppedExternal.push(t);
+      } catch {
+        // Treat lookup failure as "no signal" rather than a drop.
+      }
     }
-    const droppedExternal: string[] = [];
+    if (verification === 'verified' && droppedExternal.length > 0) {
+      verification = 'partial';
+    }
 
     // ---- 4. Build methods (no per-method calibration in W2; that's W3). ----
     const methods: MethodInfo[] = asArray(data, 'methods').map(m => ({

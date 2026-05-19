@@ -106,4 +106,86 @@ describe('adaptGraphForMockup', () => {
     };
     expect(adaptGraphForMockup(GRAPH, [], stats).stats).toBe(stats);
   });
+
+  describe('bc remap onto mockup slots', () => {
+    const mkNode = (id: string, bc: string) => ({
+      id,
+      kind: 'class' as const,
+      file: `src/${id}.ts`,
+      range: { startLine: 1, endLine: 10 },
+      boundedContext: bc,
+      intent: '',
+      confidence: 0.9,
+      risks: [],
+      methods: [],
+      readingPriority: 1,
+      readState: 'unread' as const,
+      verification: 'verified' as const,
+    });
+
+    it('is a no-op when every bc already matches a mockup slot', () => {
+      const g: CodeMapGraph = {
+        ...GRAPH,
+        nodes: {
+          A: mkNode('A', 'host'),
+          B: mkNode('B', 'capture'),
+          C: mkNode('C', 'shared'),
+        },
+      };
+      const out = adaptGraphForMockup(g);
+      expect(out.classes.map(c => [c.id, c.bc])).toEqual([
+        ['A', 'host'],
+        ['B', 'capture'],
+        ['C', 'shared'],
+      ]);
+      expect(out.meta?.bcLabels).toEqual({
+        host: 'Host',
+        capture: 'Capture',
+        recall: 'Recall',
+        shared: 'Shared',
+      });
+    });
+
+    it('remaps arbitrary bc names onto host/capture/recall/shared slots by frequency', () => {
+      const g: CodeMapGraph = {
+        ...GRAPH,
+        nodes: {
+          A: mkNode('A', 'microsoft.agents.ai.azureai'),
+          B: mkNode('B', 'microsoft.agents.ai.azureai'),
+          C: mkNode('C', 'microsoft.agents.ai.openai'),
+          D: mkNode('D', 'microsoft.agents.ai.core'),
+        },
+      };
+      const out = adaptGraphForMockup(g);
+      // azureai (2 nodes) → host (most populous)
+      expect(out.classes.find(c => c.id === 'A')?.bc).toBe('host');
+      expect(out.classes.find(c => c.id === 'B')?.bc).toBe('host');
+      // openai vs core both have 1 node → alphabetical tie-break: 'core' < 'openai',
+      // so core gets capture (slot 1) and openai gets recall (slot 2).
+      expect(out.classes.find(c => c.id === 'D')?.bc).toBe('capture'); // core
+      expect(out.classes.find(c => c.id === 'C')?.bc).toBe('recall'); // openai
+      // Labels reflect the real bucket names (prettified).
+      expect(out.meta?.bcLabels?.host.toLowerCase()).toContain('azureai');
+      // Shared falls back since only 3 distinct buckets exist.
+      expect(out.meta?.bcLabels?.shared).toBe('Shared');
+    });
+
+    it('collapses 5+ distinct bc names into the shared slot with "Other" label', () => {
+      const g: CodeMapGraph = {
+        ...GRAPH,
+        nodes: {
+          A: mkNode('A', 'one'),
+          B: mkNode('B', 'two'),
+          C: mkNode('C', 'three'),
+          D: mkNode('D', 'four'),
+          E: mkNode('E', 'five'),
+        },
+      };
+      const out = adaptGraphForMockup(g);
+      const sharedSlotMembers = out.classes.filter(c => c.bc === 'shared');
+      // Top-3 go to host/capture/recall; remaining 2 collapse into shared.
+      expect(sharedSlotMembers).toHaveLength(2);
+      expect(out.meta?.bcLabels?.shared).toBe('Other');
+    });
+  });
 });

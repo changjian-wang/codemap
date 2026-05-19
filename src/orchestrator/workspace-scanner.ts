@@ -23,6 +23,14 @@ export interface ScanOptions {
   maxFiles: number;
   /** Glob-ish extensions we care about. */
   extensions: string[];
+  /**
+   * Workspace-relative path prefix (forward slashes). When set, the scanner
+   * only considers files whose path starts with this prefix as eligible.
+   * This ensures the `maxFiles` cap is applied within the scope, not before
+   * it (otherwise an out-of-scope entry-point heavy area can starve the
+   * scope of skeleton slots).
+   */
+  pathPrefix?: string;
 }
 
 export const DEFAULT_SCAN_OPTIONS: ScanOptions = {
@@ -83,9 +91,12 @@ export async function scanWorkspace(
   options: ScanOptions = DEFAULT_SCAN_OPTIONS,
 ): Promise<ScanResult> {
   const allFiles = await reader.listFiles();
-  const eligible = allFiles.filter(f =>
-    options.extensions.some(ext => f.toLowerCase().endsWith(ext)),
-  );
+  const extOk = (f: string) =>
+    options.extensions.some(ext => f.toLowerCase().endsWith(ext));
+  const prefix = options.pathPrefix?.replace(/\\/g, '/').replace(/\/+$/, '') ?? '';
+  const inScope = (f: string) =>
+    !prefix || f === prefix || f.startsWith(prefix + '/');
+  const eligible = allFiles.filter(f => extOk(f) && inScope(f));
 
   const entryPoints = eligible.filter(isEntryPoint);
 
@@ -98,9 +109,20 @@ export async function scanWorkspace(
     return a.length - b.length;
   });
 
+  // When a scope is set but it contains no recognized entry-points, fall
+  // back to seeding BFS with the eligible files themselves (shortest path
+  // first). Without this, scoping to e.g. `dotnet/src/Microsoft.Agents.AI`
+  // — which is a library, not an app — yields an empty skeleton even
+  // though there are plenty of analyzable .cs files.
+  const seeds = entryPoints.length > 0
+    ? entryPoints
+    : prefix
+      ? [...eligible].sort((a, b) => a.length - b.length)
+      : [];
+
   const skeleton: string[] = [];
   const seen = new Set<string>();
-  const queue: { file: string; depth: number }[] = entryPoints.map(f => ({ file: f, depth: 0 }));
+  const queue: { file: string; depth: number }[] = seeds.map(f => ({ file: f, depth: 0 }));
 
   while (queue.length > 0 && skeleton.length < options.maxFiles) {
     const { file, depth } = queue.shift()!;

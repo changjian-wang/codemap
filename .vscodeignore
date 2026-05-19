@@ -1,0 +1,30 @@
+# Sources & build inputs — not needed at runtime
+src/**
+test/**
+eval/**
+examples/**
+docs/plan/**
+docs/mockups/generic-repo-v3.html
+.vscode/**
+.vscode-test/**
+.github/**
+node_modules/**
+
+# Build / tool config
+esbuild.js
+tsconfig.json
+vitest.config.ts
+.gitignore
+.eslintrc*
+.prettierrc*
+
+# Test artifacts
+coverage/**
+*.log
+
+# Source maps (the runtime bundle ships, but we don't need raw maps in the .vsix)
+dist/**/*.map
+
+# Misc
+**/.DS_Store
+**/Thumbs.db

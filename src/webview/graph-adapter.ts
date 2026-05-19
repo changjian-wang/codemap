@@ -72,6 +72,13 @@ export interface MockupMeta {
   fileCountText?: string;
   /** Big colored pill (e.g. "📦 WORKSPACE" or "📦 SCOPED"). */
   scopePill?: string;
+  /**
+   * Human-readable label for each of the mockup's 4 fixed bc slots. The data
+   * layer remaps the real `boundedContext` strings onto `host/capture/recall/
+   * shared` (the mockup's hardcoded chip data-attrs); this map lets the UI
+   * display the real bucket name on each chip and outline section.
+   */
+  bcLabels?: { host: string; capture: string; recall: string; shared: string };
 }
 
 export interface MockupStats {
@@ -103,9 +110,58 @@ export function adaptGraphForMockup(
   stats?: MockupStats,
   meta?: MockupMeta,
 ): MockupData {
+  // ---- bc remap ----
+  // The mockup's chip filter + outline use the hardcoded slots
+  // `host/capture/recall/shared`. Real classifier output is usually arbitrary
+  // (e.g. `microsoftagentsaiazureaicontentunderstanding`). We assign the top
+  // 3 most populous real buckets to host/capture/recall slots, collapse
+  // everything else into the shared slot, and emit a label map so the UI can
+  // show the real bucket name on each chip.
+  //
+  // Identity short-circuit: if every real bc is already one of the 4 mockup
+  // slots (the demo fixture and our golden tests), skip the remap so the
+  // chip labels stay as their canonical "Host" / "Capture" / etc. names.
+  const SLOTS = ['host', 'capture', 'recall', 'shared'] as const;
+  type Slot = (typeof SLOTS)[number];
+  const counts = new Map<string, number>();
+  for (const n of Object.values(graph.nodes)) {
+    counts.set(n.boundedContext, (counts.get(n.boundedContext) ?? 0) + 1);
+  }
+  const realBcs = [...counts.keys()];
+  const allAreSlots = realBcs.every(bc => (SLOTS as readonly string[]).includes(bc));
+
+  const slotForBc = new Map<string, Slot>();
+  const labelForSlot: Record<Slot, string> = {
+    host: 'Host',
+    capture: 'Capture',
+    recall: 'Recall',
+    shared: 'Shared',
+  };
+
+  if (allAreSlots) {
+    for (const bc of realBcs) slotForBc.set(bc, bc as Slot);
+  } else {
+    const sorted = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([bc]) => bc);
+    for (let i = 0; i < sorted.length; i++) {
+      slotForBc.set(sorted[i]!, i < 3 ? SLOTS[i]! : 'shared');
+    }
+    if (sorted[0]) labelForSlot.host = prettifyBc(sorted[0]);
+    if (sorted[1]) labelForSlot.capture = prettifyBc(sorted[1]);
+    if (sorted[2]) labelForSlot.recall = prettifyBc(sorted[2]);
+    if (sorted.length > 4) {
+      labelForSlot.shared = 'Other';
+    } else if (sorted.length === 4 && sorted[3]) {
+      labelForSlot.shared = prettifyBc(sorted[3]);
+    } else if (sorted.length <= 3) {
+      labelForSlot.shared = 'Shared';
+    }
+  }
+
   const classes: MockupClass[] = Object.values(graph.nodes).map(n => ({
     id: n.id,
-    bc: n.boundedContext,
+    bc: slotForBc.get(n.boundedContext) ?? 'shared',
     file: n.file,
     layer: n.layer,
     verification: n.verification,
@@ -148,5 +204,29 @@ export function adaptGraphForMockup(
     unverifiedCount: classes.filter(c => c.verification === 'unverified').length,
   };
 
-  return { classes, externalDeps, edges, chatTurns, stats: derivedStats, meta };
+  return {
+    classes,
+    externalDeps,
+    edges,
+    chatTurns,
+    stats: derivedStats,
+    meta: { ...(meta ?? {}), bcLabels: labelForSlot },
+  };
+}
+
+/**
+ * Turn a classifier bucket like `microsoftagentsaiazureaicontentunderstanding`
+ * into something a human can read on a chip. Heuristic only — keeps it short
+ * and recognizably tied to the real bucket name.
+ */
+function prettifyBc(raw: string): string {
+  if (!raw) return 'Shared';
+  const trimmed = raw.replace(/_/g, '.');
+  // Take last two segments if dotted (e.g. `microsoft.agents.ai.azureai` →
+  // `azureai`). Capitalize first letter.
+  const parts = trimmed.split('.').filter(Boolean);
+  const tail = parts[parts.length - 1] ?? trimmed;
+  // Cap at 18 chars so the chip stays one line.
+  const capped = tail.length > 18 ? tail.slice(0, 17) + '…' : tail;
+  return capped.charAt(0).toUpperCase() + capped.slice(1);
 }

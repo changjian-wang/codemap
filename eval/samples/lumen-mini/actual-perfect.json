@@ -1,0 +1,78 @@
+{
+  "rootRequest": "@codemap generate codemap",
+  "scope": "workspace",
+  "nodes": {
+    "IngestUrlHandler": {
+      "id": "IngestUrlHandler",
+      "kind": "class",
+      "file": "src/Lumen.Capture/IngestUrlHandler.cs",
+      "range": { "startLine": 12, "endLine": 80 },
+      "boundedContext": "capture",
+      "intent": "Fetch a URL and split it into chunks.",
+      "confidence": 0.9,
+      "risks": [],
+      "methods": [],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "WebContentExtractor": {
+      "id": "WebContentExtractor",
+      "kind": "class",
+      "file": "src/Lumen.Capture/WebContentExtractor.cs",
+      "range": { "startLine": 5, "endLine": 60 },
+      "boundedContext": "capture",
+      "intent": "HTTP fetch and HTML→text.",
+      "confidence": 0.85,
+      "risks": [],
+      "methods": [],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "ChunkStore": {
+      "id": "ChunkStore",
+      "kind": "class",
+      "file": "src/Lumen.Capture/ChunkStore.cs",
+      "range": { "startLine": 1, "endLine": 40 },
+      "boundedContext": "capture",
+      "intent": "Persist text chunks with vector embeddings.",
+      "confidence": 0.9,
+      "risks": [],
+      "methods": [],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "AskByQueryHandler": {
+      "id": "AskByQueryHandler",
+      "kind": "class",
+      "file": "src/Lumen.Capture/AskByQueryHandler.cs",
+      "range": { "startLine": 10, "endLine": 75 },
+      "boundedContext": "capture",
+      "intent": "Answer questions against stored chunks.",
+      "confidence": 0.88,
+      "risks": [],
+      "methods": [],
+      "readState": "unread",
+      "verification": "partial"
+    },
+    "OpenAIEmbedder": {
+      "id": "OpenAIEmbedder",
+      "kind": "class",
+      "file": "src/Lumen.Capture/OpenAIEmbedder.cs",
+      "range": { "startLine": 1, "endLine": 30 },
+      "boundedContext": "capture",
+      "intent": "Call OpenAI embeddings API.",
+      "confidence": 0.7,
+      "risks": [],
+      "methods": [],
+      "readState": "unread",
+      "verification": "partial"
+    }
+  },
+  "edges": [
+    { "from": "IngestUrlHandler", "to": "WebContentExtractor", "kind": "calls", "verified": true },
+    { "from": "IngestUrlHandler", "to": "ChunkStore", "kind": "calls", "verified": true },
+    { "from": "AskByQueryHandler", "to": "ChunkStore", "kind": "calls", "verified": true },
+    { "from": "AskByQueryHandler", "to": "OpenAIEmbedder", "kind": "calls", "verified": false }
+  ],
+  "externalDeps": []
+}

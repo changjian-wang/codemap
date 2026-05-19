@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { routeChatIntent, type ChatIntent } from './intent-router';
-import { normalizeScopePath } from './scope';
+import { resolveScope } from './scope';
 import { showGraph } from '../webview/panel';
 import { runOrchestrator, CancelledError } from '../orchestrator/orchestrator';
 import { createVscodeFileReader } from '../orchestrator/vscode-file-reader';
@@ -63,8 +63,8 @@ async function handleGenerate(
   response: vscode.ChatResponseStream,
   token: vscode.CancellationToken,
 ): Promise<void> {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
     response.markdown('⚠ No workspace folder open. Open a folder first, then try again.');
     return;
   }
@@ -82,20 +82,28 @@ async function handleGenerate(
     ? `${pickedModel.name ?? pickedModel.family}${pickedModel.vendor ? ` (${pickedModel.vendor})` : ''}`
     : fallbackFamily;
 
-  const scopePrefix =
+  // Multi-root aware scope resolution. `/scope` may name any folder by
+  // absolute path or by `<folderName>/<sub>`. Falls back to the first folder
+  // for bare relative paths (legacy single-root behavior).
+  const resolved =
     intent.kind === 'scope' && intent.target
-      ? normalizeScopePath(intent.target, workspaceFolder.uri.fsPath)
+      ? resolveScope(intent.target, folders)
       : undefined;
+  const scopeUnresolved = intent.kind === 'scope' && !!intent.target && !resolved;
+  const workspaceFolder = resolved?.folder ?? folders[0]!;
+  const scopePrefix = resolved?.prefix || undefined; // empty string → undefined (whole folder)
   const rootRequest =
     intent.kind === 'scope' && intent.target
       ? `@codemap /scope ${intent.target}`
       : `@codemap ${intent.prompt}`;
 
   response.markdown(`Analyzing workspace **\`${workspaceFolder.name}\`** with \`${modelLabel}\`...\n\n`);
-  if (scopePrefix) response.markdown(`Scope filter: \`${scopePrefix}\` (workspace-relative)\n\n`);
-  else if (intent.kind === 'scope' && intent.target)
+  if (scopePrefix) response.markdown(`Scope filter: \`${scopePrefix}\` in \`${workspaceFolder.name}\`\n\n`);
+  else if (scopeUnresolved)
     response.markdown(
-      `⚠ Scope \`${intent.target}\` is outside this workspace — analyzing the entire workspace instead.\n\n`,
+      `⚠ Scope \`${intent.target}\` did not match any open workspace folder (${folders
+        .map(f => `\`${f.name}\``)
+        .join(', ')}) — analyzing \`${workspaceFolder.name}\` in full instead.\n\n`,
     );
 
   const chatTurns: MockupChatTurn[] = [

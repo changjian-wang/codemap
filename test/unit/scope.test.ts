@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeScopePath } from '../../src/chat/scope';
+import { normalizeScopePath, resolveScope } from '../../src/chat/scope';
 
 const WS = 'C:\\github\\forks\\agent-framework';
 
@@ -47,5 +47,52 @@ describe('normalizeScopePath', () => {
     expect(normalizeScopePath('/home/me/proj/sub', '/home/me/proj')).toBe('sub');
     expect(normalizeScopePath('/home/me/proj', '/home/me/proj')).toBe('');
     expect(normalizeScopePath('/other/path', '/home/me/proj')).toBeUndefined();
+  });
+});
+
+describe('resolveScope (multi-root)', () => {
+  const folders = [
+    { name: 'dawning', uri: { fsPath: 'C:\\github\\dawning' } },
+    { name: 'lumen',   uri: { fsPath: 'C:\\github\\lumen' } },
+    { name: 'codemap', uri: { fsPath: 'C:\\github\\codemap' } },
+  ];
+
+  it('picks the matching folder when an absolute path lives in a non-first root', () => {
+    const r = resolveScope('C:\\github\\lumen\\apps\\api\\src', folders);
+    expect(r?.folder.name).toBe('lumen');
+    expect(r?.prefix).toBe('apps/api/src');
+  });
+
+  it('returns undefined when an absolute path is outside every root', () => {
+    expect(resolveScope('C:\\some\\other\\repo', folders)).toBeUndefined();
+  });
+
+  it('resolves `<folderName>/<sub>` relative form to that folder', () => {
+    const r = resolveScope('lumen/apps/api/src', folders);
+    expect(r?.folder.name).toBe('lumen');
+    expect(r?.prefix).toBe('apps/api/src');
+  });
+
+  it('matches folder name case-insensitively', () => {
+    const r = resolveScope('LUMEN/apps', folders);
+    expect(r?.folder.name).toBe('lumen');
+    expect(r?.prefix).toBe('apps');
+  });
+
+  it('falls back to the first folder for a bare relative path (legacy behavior)', () => {
+    const r = resolveScope('apps/api/src', folders);
+    expect(r?.folder.name).toBe('dawning');
+    expect(r?.prefix).toBe('apps/api/src');
+  });
+
+  it('returns empty prefix when the path equals a folder root', () => {
+    const r = resolveScope('C:\\github\\lumen', folders);
+    expect(r?.folder.name).toBe('lumen');
+    expect(r?.prefix).toBe('');
+  });
+
+  it('returns undefined for empty input', () => {
+    expect(resolveScope('', folders)).toBeUndefined();
+    expect(resolveScope('   ', folders)).toBeUndefined();
   });
 });

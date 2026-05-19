@@ -34,10 +34,10 @@ describe('splitFirstToken', () => {
 
   it('handles absolute Windows paths', () => {
     expect(
-      splitFirstToken('C:\\github\\forks\\agent-framework\\python\\packages 生成codemap'),
+      splitFirstToken('C:\\github\\forks\\agent-framework\\python\\packages generate codemap'),
     ).toEqual({
       target: 'C:\\github\\forks\\agent-framework\\python\\packages',
-      rest: '生成codemap',
+      rest: 'generate codemap',
     });
   });
 

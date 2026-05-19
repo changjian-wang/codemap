@@ -3,6 +3,7 @@ src/**
 test/**
 eval/**
 docs/plan/**
+docs/adrs/**
 .vscode/**
 .vscode-test/**
 .github/**

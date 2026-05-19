@@ -170,13 +170,15 @@ export class Calibrator {
     const droppedCalls: string[] = [];
 
     // ---- 3. Soft-validate `external_calls` against the workspace. ----
-    // Every external_call still becomes an `ext:*` edge (workspace symbol
-    // search can't see BCL / NuGet types that are not source-indexed, so
-    // a miss is not proof of hallucination). What the lookup *does* give
-    // us is a soft "I cannot see this anywhere" signal: when it fires we
-    // (a) record the target on `droppedExternalCalls` so `/why` can surface
-    // it, and (b) downgrade the node to `partial` so the user sees the
-    // warning badge.
+    // Every external_call still becomes an `ext:*` edge. Workspace symbol
+    // search cannot see BCL / NuGet / pip / Maven types that are not
+    // source-indexed, so a miss is *not* proof of hallucination — it just
+    // means "the language server cannot locate this name in workspace
+    // source". We record those misses on `droppedExternalCalls` for the
+    // details panel, but we do NOT downgrade verification, because that
+    // would mark virtually every SDK wrapper node as `partial` (NuGet
+    // dependencies dominate `external_calls` and almost never resolve
+    // through the workspace symbol provider).
     // When the LSP is not ready we cannot tell anything, so every entry is
     // accepted at face value.
     const verifiedExternal: string[] = [];
@@ -192,9 +194,6 @@ export class Calibrator {
       } catch {
         // Treat lookup failure as "no signal" rather than a drop.
       }
-    }
-    if (verification === 'verified' && droppedExternal.length > 0) {
-      verification = 'partial';
     }
 
     // ---- 4. Build methods (no per-method calibration in W2; that's W3). ----

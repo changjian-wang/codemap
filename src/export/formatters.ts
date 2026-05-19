@@ -1,11 +1,20 @@
+import * as YAML from 'yaml';
 import type { CodeMapGraph } from '../shared/types';
+import type { MockupData } from '../webview/graph-adapter';
 
 /**
- * Pure formatters for the three export targets. Kept side-effect free so
- * the host module just picks one + writes the returned string to disk.
+ * Pure formatters for the export targets.
+ *
+ *   - YAML : full graph, human-readable + machine-parsable, lossless
+ *   - HTML : standalone interactive snapshot built from the mockup template
+ *
+ * Markdown + Mermaid were dropped in favor of HTML: a self-contained HTML
+ * file reproduces the right-panel UI offline, so consumers get the same
+ * cytoscape graph + outline + cards + search experience without VS Code.
+ * Anyone who needs structured data can read the YAML.
  */
 
-export type ExportFormat = 'json' | 'markdown' | 'mermaid';
+export type ExportFormat = 'yaml' | 'html';
 
 export interface ExportSpec {
   format: ExportFormat;
@@ -18,213 +27,127 @@ export interface ExportSpec {
 }
 
 export const EXPORT_SPECS: Record<ExportFormat, ExportSpec> = {
-  json: {
-    format: 'json',
-    extension: 'json',
-    label: 'JSON',
-    description: 'Full graph (lossless, for LLM / programmatic re-consumption)',
+  html: {
+    format: 'html',
+    extension: 'html',
+    label: 'HTML (interactive snapshot)',
+    description: 'Self-contained page — open in any browser to inspect the graph offline',
   },
-  markdown: {
-    format: 'markdown',
-    extension: 'md',
-    label: 'Markdown',
-    description: 'Human-readable reading guide ordered by priority',
-  },
-  mermaid: {
-    format: 'mermaid',
-    extension: 'mmd',
-    label: 'Mermaid',
-    description: 'classDiagram for embedding in docs',
+  yaml: {
+    format: 'yaml',
+    extension: 'yaml',
+    label: 'YAML (structured data)',
+    description: 'Lossless dump of the graph for scripts / LLM re-consumption',
   },
 };
 
-export function formatGraph(graph: CodeMapGraph, format: ExportFormat): string {
-  switch (format) {
-    case 'json':
-      return formatJson(graph);
-    case 'markdown':
-      return formatMarkdown(graph);
-    case 'mermaid':
-      return formatMermaid(graph);
-  }
-}
+// ---------- YAML ----------
 
-// ---------- JSON ----------
-
-function formatJson(graph: CodeMapGraph): string {
-  return JSON.stringify(graph, null, 2);
-}
-
-// ---------- Markdown ----------
-
-function formatMarkdown(graph: CodeMapGraph): string {
-  const lines: string[] = [];
-  lines.push(`# CodeMap — ${graph.scope}`);
-  lines.push('');
-  lines.push(`> Request: \`${graph.rootRequest}\``);
-  if (graph.rootIntent) {
-    lines.push('');
-    lines.push(`_${graph.rootIntent}_`);
-  }
-  lines.push('');
-
-  const nodes = Object.values(graph.nodes);
-  const verified = nodes.filter(n => n.verification === 'verified').length;
-  const partial = nodes.filter(n => n.verification === 'partial').length;
-  const unverified = nodes.filter(n => n.verification === 'unverified').length;
-  lines.push('## Summary');
-  lines.push('');
-  lines.push(`- **${nodes.length}** classes, **${graph.edges.length}** call edges`);
-  lines.push(`- Verification: ✓ ${verified} verified · ⚠ ${partial} partial · ✗ ${unverified} unverified`);
-  if (graph.externalDeps.length > 0) {
-    lines.push(`- External deps: ${graph.externalDeps.map(d => `\`${d.name}\``).join(', ')}`);
-  }
-  if (graph.eval) {
-    const en = graph.eval.nodes;
-    const ee = graph.eval.edges;
-    lines.push(
-      `- Eval: nodes F1=${en.f1.toFixed(2)} (P=${en.precision.toFixed(2)} R=${en.recall.toFixed(2)}) · ` +
-        `edges F1=${ee.f1.toFixed(2)} (P=${ee.precision.toFixed(2)} R=${ee.recall.toFixed(2)})`,
-    );
-  }
-  lines.push('');
-
-  // Reading order section: sort by readingPriority then by id for stability.
-  lines.push('## Reading Order');
-  lines.push('');
-  const sortedNodes = [...nodes].sort((a, b) => {
-    const ap = a.readingPriority ?? 99;
-    const bp = b.readingPriority ?? 99;
-    if (ap !== bp) return ap - bp;
-    return a.id.localeCompare(b.id);
+export function formatYaml(graph: CodeMapGraph): string {
+  // Block-style YAML with sane defaults. lineWidth=0 disables auto-wrap so
+  // multi-line intent/risk strings stay readable instead of getting hard-
+  // wrapped in odd places.
+  return YAML.stringify(graph, {
+    lineWidth: 0,
+    blockQuote: 'literal',
   });
-  for (const n of sortedNodes) {
-    const order = n.readingPriority === undefined || n.readingPriority === 99 ? '—' : `#${n.readingPriority}`;
-    const verIcon = n.verification === 'verified' ? '✓' : n.verification === 'partial' ? '⚠' : '✗';
-    lines.push(`### ${order} ${verIcon} \`${n.id}\``);
-    lines.push('');
-    lines.push(`- **File**: \`${n.file}\` (L${n.range.startLine}–L${n.range.endLine})`);
-    lines.push(`- **Bounded context**: \`${n.boundedContext}\``);
-    if (n.layer) lines.push(`- **Layer**: \`${n.layer}\``);
-    lines.push(`- **Confidence**: ${(n.confidence * 100).toFixed(0)}%`);
-    if (n.intent) {
-      lines.push('');
-      lines.push(n.intent);
-    }
-    if (n.risks.length > 0) {
-      lines.push('');
-      lines.push(`**Risks**:`);
-      for (const r of n.risks) lines.push(`- \`${r.type}\` — ${r.desc}`);
-    }
-    if (n.methods.length > 0) {
-      lines.push('');
-      lines.push('**Methods**:');
-      for (const m of n.methods) {
-        const tag = (m.risks ?? []).length > 0 ? ` _(${m.risks.join(', ')})_` : '';
-        lines.push(`- \`${m.signature}\`${tag}`);
-        if (m.intent) lines.push(`  - ${m.intent}`);
-      }
-    }
-    lines.push('');
-  }
-
-  // Edges section: grouped by from-node so it reads like an outline.
-  if (graph.edges.length > 0) {
-    lines.push('## Call Graph');
-    lines.push('');
-    const byFrom = new Map<string, typeof graph.edges>();
-    for (const e of graph.edges) {
-      const arr = byFrom.get(e.from) ?? [];
-      arr.push(e);
-      byFrom.set(e.from, arr);
-    }
-    const fromIds = [...byFrom.keys()].sort();
-    for (const from of fromIds) {
-      lines.push(`- \`${from}\``);
-      for (const e of byFrom.get(from)!) {
-        const arrow = e.kind === 'external_calls' ? '⇢' : '→';
-        const verMark = e.verified ? '' : ' _(unverified)_';
-        lines.push(`  - ${arrow} \`${e.to}\`${verMark}`);
-      }
-    }
-    lines.push('');
-  }
-
-  return lines.join('\n');
 }
 
-// ---------- Mermaid ----------
+// ---------- HTML (standalone snapshot) ----------
 
 /**
- * Mermaid `classDiagram` output. Node names are sanitized to a Mermaid-safe
- * identifier (alphanumeric + `_`); the original id is preserved via a label
- * stereotype so the diagram round-trips back to the source classes.
+ * Inject the supplied MockupData into the mockup template so it boots up
+ * offline. Strips features that need the VS Code bridge (re-analyze / reset
+ * progress / chat input / file-jump etc.) so the page doesn't appear broken
+ * when the user clicks them outside the extension.
  *
- * Edges:
- *   - `calls`           → solid arrow `-->`
- *   - `external_calls`  → dashed arrow `..>`
- *
- * Unverified nodes are tagged with the `<<unverified>>` stereotype so they
- * stay visually distinct after copy-paste into docs that don't carry CSS.
+ * The mockup itself defensively no-ops on missing `window.codemap.postMessage`,
+ * so a "minimum viable" injection of just `__CODEMAP_DATA__` would technically
+ * work — we still hide the dead buttons so a recipient who opens the file in
+ * Chrome doesn't get confused by buttons that flash but do nothing.
  */
-function formatMermaid(graph: CodeMapGraph): string {
-  const lines: string[] = [];
-  lines.push('classDiagram');
-  if (graph.rootIntent) {
-    lines.push(`%% ${graph.rootIntent.replace(/\r?\n/g, ' ')}`);
+export function formatStandaloneHtml(
+  mockupTemplate: string,
+  mockupData: MockupData,
+): string {
+  const payload = JSON.stringify(mockupData).replace(/</g, '\\u003c');
+
+  const repoName = mockupData.meta?.repoName ?? 'workspace';
+  const scope = mockupData.meta?.scope ?? '';
+  const title = scope
+    ? `CodeMap — ${repoName} · ${scope}`
+    : `CodeMap — ${repoName}`;
+
+  const bootstrap = `
+    <script>
+      window.__CODEMAP_DATA__ = JSON.parse(${JSON.stringify(payload)});
+      window.codemap = window.codemap || {};
+      window.__CODEMAP_STANDALONE__ = true;
+    </script>
+    <style>
+      body.codemap-standalone #analyzeBtn,
+      body.codemap-standalone #resetBtn,
+      body.codemap-standalone #exportBtn,
+      body.codemap-standalone .chat-input-row,
+      body.codemap-standalone .quick-chip-row {
+        display: none !important;
+      }
+      body.codemap-standalone .repo-pill { cursor: default !important; }
+      body.codemap-standalone .file-jump { cursor: default !important; text-decoration: none !important; }
+    </style>
+    <script>
+      window.addEventListener('DOMContentLoaded', function () {
+        document.body.classList.add('codemap-standalone');
+        var data = window.__CODEMAP_DATA__;
+        var bcLabels = data && data.meta && data.meta.bcLabels;
+        if (bcLabels) {
+          ['host', 'capture', 'recall', 'shared'].forEach(function (slot) {
+            var label = bcLabels[slot];
+            if (!label) return;
+            var chip = document.querySelector('.chip.bc-chip[data-bc="' + slot + '"]');
+            if (chip) {
+              var marker = chip.querySelector('.bc-marker');
+              chip.textContent = '';
+              if (marker) chip.appendChild(marker);
+              chip.appendChild(document.createTextNode(label));
+            }
+            var outlineEl = document.getElementById('outline' + slot.charAt(0).toUpperCase() + slot.slice(1));
+            if (outlineEl) {
+              var group = outlineEl.previousElementSibling;
+              if (group && group.classList && group.classList.contains('bc-group')) {
+                var dot = group.querySelector('.bc-dot');
+                group.textContent = '';
+                if (dot) group.appendChild(dot);
+                group.appendChild(document.createTextNode(label));
+              }
+            }
+          });
+        }
+        var footer = document.createElement('div');
+        footer.style.cssText = 'position:fixed;left:8px;bottom:6px;font:11px Consolas,monospace;color:rgba(255,255,255,0.35);pointer-events:none;z-index:9999;';
+        footer.textContent = 'CodeMap offline snapshot — ${escapeHtmlAttr(title)}';
+        document.body.appendChild(footer);
+      });
+    </script>
+  `;
+
+  let out = mockupTemplate;
+  if (out.includes('</head>')) {
+    out = out.replace('</head>', `${bootstrap}</head>`);
+  } else {
+    out = `${bootstrap}\n${out}`;
   }
-  lines.push(`%% scope: ${graph.scope}`);
-
-  const nodes = Object.values(graph.nodes);
-  const idMap = new Map<string, string>();
-  for (const n of nodes) idMap.set(n.id, mermaidSafe(n.id));
-
-  for (const n of nodes) {
-    const safe = idMap.get(n.id)!;
-    const stereotype =
-      n.verification === 'unverified'
-        ? ' <<unverified>>'
-        : n.verification === 'partial'
-          ? ' <<partial>>'
-          : '';
-    if (n.id !== safe) {
-      // Mermaid label syntax `class Foo["Foo.Bar"]` preserves the real id.
-      lines.push(`class ${safe}["${escapeMermaidLabel(n.id)}"]${stereotype}`);
-    } else if (stereotype) {
-      lines.push(`class ${safe}${stereotype}`);
-    } else {
-      lines.push(`class ${safe}`);
-    }
-    // Up to first 6 methods to keep the diagram readable.
-    const ms = n.methods.slice(0, 6);
-    for (const m of ms) {
-      lines.push(`${safe} : +${escapeMermaidLabel(m.signature)}`);
-    }
-    if (n.methods.length > ms.length) {
-      lines.push(`${safe} : +… ${n.methods.length - ms.length} more`);
-    }
+  if (/<title>[^<]*<\/title>/i.test(out)) {
+    out = out.replace(/<title>[^<]*<\/title>/i, `<title>${escapeHtmlAttr(title)}</title>`);
   }
-
-  for (const e of graph.edges) {
-    const from = idMap.get(e.from);
-    const to = idMap.get(e.to);
-    if (!from || !to) continue; // Unknown endpoint — skip rather than render a ghost.
-    const arrow = e.kind === 'external_calls' ? '..>' : '-->';
-    const verLabel = e.verified ? '' : ' : unverified';
-    lines.push(`${from} ${arrow} ${to}${verLabel}`);
-  }
-
-  return lines.join('\n');
+  return out;
 }
 
-function mermaidSafe(id: string): string {
-  // Mermaid class ids must be `[A-Za-z][A-Za-z0-9_]*`. Replace anything else
-  // with `_`. The original id is preserved in the label.
-  const cleaned = id.replace(/[^A-Za-z0-9_]/g, '_');
-  if (/^[A-Za-z]/.test(cleaned)) return cleaned;
-  return `n_${cleaned}`;
-}
-
-function escapeMermaidLabel(s: string): string {
-  return s.replace(/"/g, "'");
+function escapeHtmlAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

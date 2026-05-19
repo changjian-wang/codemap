@@ -4,7 +4,7 @@ import * as path from 'path';
 import { adaptGraphForMockup, type MockupChatTurn, type MockupStats, type MockupMeta } from './graph-adapter';
 import { ReadingProgressStore, applyReadingProgress } from '../persistence/reading-progress';
 import { jumpToSource } from '../editor/jump-to-source';
-import { formatGraph, EXPORT_SPECS, type ExportFormat } from '../export/formatters';
+import { formatYaml, formatStandaloneHtml, EXPORT_SPECS, type ExportFormat } from '../export/formatters';
 import type { ClientEvent, CodeMapGraph } from '../shared/types';
 
 let currentPanel: vscode.WebviewPanel | undefined;
@@ -12,6 +12,11 @@ let currentPanel: vscode.WebviewPanel | undefined;
 // (jump_to_source, mark_read, etc.) can resolve nodeId → CodeNode without
 // re-fetching from the orchestrator.
 let currentGraph: CodeMapGraph | undefined;
+// Render-time context kept so 'export_graph' can produce a snapshot that
+// matches what the user is currently looking at (chat turns, stats, meta).
+let currentChatTurns: MockupChatTurn[] = [];
+let currentStats: MockupStats | undefined;
+let currentMeta: MockupMeta | undefined;
 // The workspace folder the current graph was generated against. Multi-root
 // workspaces need this so `jump_to_source` doesn't resolve `node.file` against
 // the first folder when the graph actually came from another.
@@ -56,6 +61,9 @@ export async function showGraph(
 
   currentGraph = graph;
   currentWorkspaceRoot = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+  currentChatTurns = chatTurns;
+  currentStats = stats;
+  currentMeta = meta;
   // Overlay persisted "mark as read" state — the orchestrator always emits
   // fresh nodes with readState='unread', but the user's prior marks (stored
   // in workspaceState) should still surface on this render.
@@ -127,12 +135,15 @@ function handleClientMessage(msg: ClientEvent, context: vscode.ExtensionContext)
       void pickScopeAndRegenerate(msg.currentScope, msg.rootName);
       return;
     case 'export_graph':
-      void exportCurrentGraph(msg.format);
+      void exportCurrentGraph(context, msg.format);
       return;
   }
 }
 
-async function exportCurrentGraph(preferred?: ExportFormat): Promise<void> {
+async function exportCurrentGraph(
+  context: vscode.ExtensionContext,
+  preferred?: ExportFormat,
+): Promise<void> {
   if (!currentGraph) {
     vscode.window.showWarningMessage('No graph in the panel yet — run @codemap first.');
     return;
@@ -170,7 +181,23 @@ async function exportCurrentGraph(preferred?: ExportFormat): Promise<void> {
   if (!saveAs) return;
 
   try {
-    const body = formatGraph(currentGraph, format);
+    let body: string;
+    if (format === 'yaml') {
+      body = formatYaml(currentGraph);
+    } else {
+      // HTML standalone snapshot: read the same mockup template the panel
+      // uses and inject the current MockupData (graph + chat turns + stats
+      // + meta). The mockup's own scripts handle rendering offline.
+      const mockupPath = path.join(context.extensionPath, 'docs', 'mockups', 'lumen-backend-v3.html');
+      const mockupTemplate = fs.readFileSync(mockupPath, 'utf8');
+      const mockupData = adaptGraphForMockup(
+        currentGraph,
+        currentChatTurns,
+        currentStats,
+        currentMeta,
+      );
+      body = formatStandaloneHtml(mockupTemplate, mockupData);
+    }
     await vscode.workspace.fs.writeFile(saveAs, Buffer.from(body, 'utf8'));
     const open = 'Open File';
     const reveal = 'Reveal in Explorer';

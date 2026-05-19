@@ -130,4 +130,4 @@ export type ClientEvent =
   | { type: 'request_focus'; nodeId: string }
   | { type: 'open_chat'; prefill?: string }
   | { type: 'pick_scope'; currentScope?: string; rootName?: string }
-  | { type: 'export_graph'; format?: 'json' | 'markdown' | 'mermaid' };
+  | { type: 'export_graph'; format?: 'yaml' | 'html' };

@@ -196,6 +196,24 @@ describe('Calibrator', () => {
     expect(out?.node.verification).toBe('verified');
   });
 
+  it('strips generic parameters from LSP symbol names too (Foo → Foo<T>)', async () => {
+    // C# omnisharp / csharp LSP reports DocumentSymbol.name with type
+    // parameters baked in, so `ValidationFilter<T>` is the LSP name even
+    // when the LLM (which sees the source as a class declaration without
+    // angle-brackets in the visible identifier) emits plain
+    // `ValidationFilter`. The match must be symmetric.
+    const c = new Calibrator(
+      makeProvider({ inFile: { 'a.cs': [sym('ValidationFilter<T>', 'a.cs', 8, 33)] } }),
+    );
+    const out = await c.calibrate({
+      data: { node_id: 'ValidationFilter', range: { startLine: 8, endLine: 33 } },
+      file: 'a.cs',
+      boundedContext: 'shared',
+    });
+    expect(out?.node.verification).toBe('verified');
+    expect(out?.node.range).toEqual({ startLine: 8, endLine: 33 });
+  });
+
   it('keeps verified state when LSP returns undefined (not ready), and flags lspNotReady', async () => {
     // "no signal" ≠ "negative signal". If the LSP hasn't indexed yet, we
     // must not silently mark every node unverified — that would lie to the

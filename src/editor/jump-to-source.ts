@@ -37,7 +37,8 @@ export async function jumpToSource(
 ): Promise<boolean> {
   if (req.verification === 'unverified') {
     vscode.window.showWarningMessage(
-      `${req.nodeId} is unverified — refusing to jump (the location is not trusted).`,
+      `${req.nodeId} is unverified — refusing to jump because the LLM-supplied location is not trusted. ` +
+        `Try Re-Analyze after the language server finishes indexing.`,
     );
     return false;
   }

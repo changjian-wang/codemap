@@ -96,9 +96,12 @@ function parseRiskTags(raw: unknown[]): RiskType[] {
 function bestSymbolMatch(name: string, hits: SymbolHit[]): SymbolHit | undefined {
   const exact = hits.find(h => h.name === name);
   if (exact) return exact;
-  // Generic-stripped match: `Foo<T>` → `Foo`.
-  const stripped = name.replace(/<.*>$/, '');
-  return hits.find(h => h.name === stripped);
+  // Generic-stripped match — bidirectional because the LLM may emit `Foo<T>`
+  // (and LSP returns `Foo`) OR the LLM may emit `Foo` (and the C# LSP returns
+  // `Foo<T>` with type parameters baked into the DocumentSymbol name).
+  const strip = (s: string) => s.replace(/<.*>$/, '');
+  const strippedName = strip(name);
+  return hits.find(h => strip(h.name) === strippedName);
 }
 
 export class Calibrator {

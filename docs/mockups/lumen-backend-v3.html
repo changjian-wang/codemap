@@ -1848,7 +1848,9 @@ function renderDetails(c) {
         <span class="bc-tag ${c.bc}">${c.bc}</span>
       </h3>
       <div class="file-line">
-        📄 <a class="file-jump" title="Jump to file" data-node-id="${escapeAttr(c.id)}">${c.file}</a>
+        📄 ${c.verification === 'unverified'
+          ? `<span style="color:var(--vs-text-dim); cursor:not-allowed;" title="Unverified — refusing to jump (the LLM-supplied location is not trusted). Try Re-Analyze.">${c.file}</span>`
+          : `<a class="file-jump" title="Jump to file" data-node-id="${escapeAttr(c.id)}">${c.file}</a>`}
       </div>
 
       <div class="intent">${c.intent}</div>

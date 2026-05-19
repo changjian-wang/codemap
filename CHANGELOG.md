@@ -48,6 +48,18 @@ First public release.
   Without it a .NET solution would BFS-stop at the 5 entry points and the
   remaining files would be silently dropped.
 
+### Fixed
+- C# generic classes (e.g. `ValidationFilter<T>`) were marked `unverified`
+  and jump-to-file silently no-op'd, because the calibrator only stripped
+  `<...>` from the LLM side of the comparison while the C# LSP returns
+  `DocumentSymbol.name` with type parameters baked in. The match is now
+  symmetric.
+- Card file-line now renders as a dim, non-clickable `<span>` (with
+  cursor: not-allowed) when the node is `unverified`, instead of a styled
+  anchor that posted a request the host would silently refuse.
+- Jump-to-source warning now points the user at Re-Analyze instead of
+  just saying "refusing to jump".
+
 ### Tests
-- 200/200 unit tests passing across orchestrator, scanner, calibrator,
+- 201/201 unit tests passing across orchestrator, scanner, calibrator,
   aggregator, chat responders, eval scoring, and export formatters.

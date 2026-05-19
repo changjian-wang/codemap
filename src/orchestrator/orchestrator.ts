@@ -86,6 +86,11 @@ export async function runOrchestrator(
     // Production code path: rank skeleton by graph centrality, not raw BFS
     // order. Tests opt back into `'bfs'` via `options.scan` for determinism.
     rankBy: 'centrality',
+    // Production code path: if BFS can't expand (C# `using` is a namespace,
+    // not a path; Python absolute imports are external), fall back to
+    // filling the skeleton with the remaining eligible files so a .NET
+    // solution doesn't get analyzed as "just the 5 entry points".
+    fillToMaxFiles: true,
     ...options.scan,
     ...(scopePrefix ? { pathPrefix: scopePrefix } : {}),
   };

@@ -160,6 +160,23 @@ async function pickScopeAndRegenerate(
   const needsRootPrefix = folders.length > 1 && workspaceFolder !== folders[0];
   const rootPrefix = needsRootPrefix ? `${workspaceFolder.name}/` : '';
 
+  // Default the OS file dialog to the current scope subfolder when one is
+  // active, so re-analyzing typically means "pick something nearby" rather
+  // than navigating back from the workspace root every time. Falls back to
+  // the workspace folder if the scope path doesn't resolve to a real dir.
+  const dialogDefaultUri = (() => {
+    if (!currentScope) return workspaceFolder.uri;
+    const candidatePath = path.join(rootFs, ...currentScope.split('/'));
+    try {
+      const st = fs.statSync(candidatePath);
+      if (st.isDirectory()) return vscode.Uri.file(candidatePath);
+      // For file scopes, open the parent directory.
+      return vscode.Uri.file(path.dirname(candidatePath));
+    } catch {
+      return workspaceFolder.uri;
+    }
+  })();
+
   type ScopeAction = 'workspace' | 'folder' | 'file' | 'type';
   interface ScopeItem extends vscode.QuickPickItem { action: ScopeAction; }
   const items: ScopeItem[] = [
@@ -186,7 +203,7 @@ async function pickScopeAndRegenerate(
         canSelectFiles: false,
         canSelectFolders: true,
         canSelectMany: false,
-        defaultUri: workspaceFolder.uri,
+        defaultUri: dialogDefaultUri,
         openLabel: 'Use as scope',
       });
       if (!picked || picked.length === 0) return;
@@ -205,7 +222,7 @@ async function pickScopeAndRegenerate(
         canSelectFiles: true,
         canSelectFolders: false,
         canSelectMany: false,
-        defaultUri: workspaceFolder.uri,
+        defaultUri: dialogDefaultUri,
         openLabel: 'Use as scope',
       });
       if (!picked || picked.length === 0) return;

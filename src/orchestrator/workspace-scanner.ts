@@ -46,6 +46,18 @@ export interface ScanOptions {
    * passes `'centrality'` explicitly for the production code path.
    */
   rankBy?: 'bfs' | 'centrality';
+  /**
+   * After BFS+rerank, if the skeleton is still smaller than {@link maxFiles},
+   * top it up with the remaining eligible files (shortest path first). This
+   * is the practical fix for languages whose imports can't be resolved back
+   * to files — C# `using` is a namespace, not a path, so BFS would otherwise
+   * stop at the entry points and silently leave most of the project
+   * un-analyzed.
+   *
+   * Default `false` so unit tests that pin BFS-cap semantics stay
+   * deterministic; the orchestrator passes `true` explicitly.
+   */
+  fillToMaxFiles?: boolean;
 }
 
 export const DEFAULT_SCAN_OPTIONS: ScanOptions = {
@@ -210,6 +222,33 @@ export async function scanWorkspace(
       return a.file.localeCompare(b.file);
     });
     finalSkeleton = scored.slice(0, options.maxFiles).map(s => s.file);
+  }
+
+  // ---- Fallback fill (opt-in) ----
+  // BFS-by-import can severely under-cover languages where the scanner
+  // cannot resolve imports back to files. C# `using` clauses are
+  // namespaces, not paths, so a typical .NET solution produces a skeleton
+  // that only contains the entry-point files (Program.cs, *Endpoints.cs).
+  // To avoid silently analyzing 5 files out of 100, callers can opt in to
+  // topping up the skeleton with the remaining eligible files (shortest
+  // path first → closer to the project root, generally more central)
+  // until `maxFiles` is reached.
+  //
+  // Only runs when BFS already had something to do (i.e. seeds were found).
+  // An empty-seed workspace still surfaces the orchestrator's "no entry
+  // points found" friendly error.
+  if (options.fillToMaxFiles && seeds.length > 0 && finalSkeleton.length < options.maxFiles) {
+    const taken = new Set(finalSkeleton);
+    const remaining = eligible
+      .filter(f => !taken.has(f))
+      .sort((a, b) => {
+        if (a.length !== b.length) return a.length - b.length;
+        return a.localeCompare(b);
+      });
+    for (const f of remaining) {
+      if (finalSkeleton.length >= options.maxFiles) break;
+      finalSkeleton.push(f);
+    }
   }
 
   const finalSet = new Set(finalSkeleton);

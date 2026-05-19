@@ -419,6 +419,8 @@
       user-select: none;
       font-family: "Consolas", monospace;
     }
+    .method-row .m-toggle::before { content: '+'; }
+    .method-item.expanded .m-toggle::before { content: '−'; }
     .method-row .m-toggle:hover {
       background: rgba(0,122,204,0.2);
       color: #fff; border-color: var(--vs-accent);
@@ -1488,6 +1490,28 @@ let activeTab = 'details';
 // so that tab switches re-render the right view. Exactly one of
 // __cmSelectedExt / a selected `node.cls` is active at any time.
 let __cmSelectedExt = null;
+// Pan + zoom the camera so the given node is centered and comfortably sized.
+// Uses `fit` with generous padding so the node occupies roughly a third of
+// the viewport (instead of zooming in so far that surrounding context is
+// lost). Clamped to a sensible zoom range so very large class nodes don't
+// render at zoom < 0.5 and tiny external nodes don't blow up past zoom 1.6.
+function focusNodeOnGraph(node) {
+  if (!node || node.empty()) return;
+  const bb = node.boundingBox();
+  const w = cy.width(), h = cy.height();
+  if (w === 0 || h === 0) return;
+  // Aim for ~25% viewport coverage so surrounding nodes / edges stay in view.
+  // Larger padding here = smaller resulting zoom = more context visible.
+  const desired = Math.min(w / (bb.w + 600), h / (bb.h + 400));
+  const targetZoom = Math.max(0.4, Math.min(1.0, desired));
+  cy.stop(true);
+  cy.animate({
+    center: { eles: node },
+    zoom: targetZoom,
+    duration: 280,
+    easing: 'ease-out-quad',
+  });
+}
 function selectClass(id) {
   __cmSelectedExt = null;
   cy.$('node:selected').unselect();
@@ -1503,6 +1527,7 @@ function selectClass(id) {
   highlightEdges(id);
   renderCard(c);
   updateRelatedCount(c);
+  focusNodeOnGraph(node);
 }
 
 // Mirror of selectClass for external-dep nodes. The graph and outline both
@@ -1521,6 +1546,7 @@ function selectExternal(name) {
 
   highlightEdges(fullId);
   renderExtCard(name);
+  if (node && !node.empty()) focusNodeOnGraph(node);
   // Related count = number of inbound `external_calls` edges.
   const cnt = EDGES.filter(e => e.to === fullId).length;
   const tab = [...document.querySelectorAll('.card-tab')].find(t => t.dataset.tab === 'related');
@@ -1772,7 +1798,7 @@ function renderDetails(c) {
     return `
       <div class="method-item ${c.verification === 'unverified' ? 'unverified' : ''}">
         <div class="method-row" onclick="this.parentElement.classList.toggle('expanded')">
-          <span class="m-toggle" title="Expand / collapse">+</span>
+          <span class="m-toggle" title="Expand / collapse"></span>
           <span class="m-name ${nameCls}">${m.name}<span style="color:var(--vs-text-dim);">${m.sig}</span></span>
           <span class="m-icons">${riskIcons}</span>
           <span class="m-line">${lineLabel}</span>
@@ -1839,6 +1865,12 @@ function renderDetails(c) {
         <span class="v">${riskPills}</span>
       </div>
 
+      <div class="actions">
+        <button class="btn" ${c.verification === 'unverified' ? 'disabled style="background:var(--vs-border); color:var(--vs-text-dim); cursor:not-allowed;"' : `onclick="postJump('${c.id}')"`}>↪ Jump to file</button>
+        <button class="btn ghost" onclick="postMarkRead('${c.id}', ${c.readState !== 'read'})">${c.readState === 'read' ? '↺ Mark unread' : '✓ Mark read'}</button>
+        <button class="btn ghost">💬 Ask @codemap</button>
+      </div>
+
       <div style="font-size:11px; color:var(--vs-text-dim); margin: 14px 0 4px; text-transform:uppercase; letter-spacing:0.4px;">
         Methods (${c.methods.length})
       </div>
@@ -1847,12 +1879,6 @@ function renderDetails(c) {
       <div class="ver-block ${verBlockCls}">
         <div class="ver-title">${verTitleText}</div>
         ${verDetail || `<div class="ver-meta">All symbols and call targets resolved against current workspace.</div>`}
-      </div>
-
-      <div class="actions">
-        <button class="btn" ${c.verification === 'unverified' ? 'disabled style="background:var(--vs-border); color:var(--vs-text-dim); cursor:not-allowed;"' : `onclick="postJump('${c.id}')"`}>↪ Jump to file</button>
-        <button class="btn ghost" onclick="postMarkRead('${c.id}', ${c.readState !== 'read'})">${c.readState === 'read' ? '↺ Mark unread' : '✓ Mark read'}</button>
-        <button class="btn ghost">💬 Ask @codemap</button>
       </div>
     </div>
   `;

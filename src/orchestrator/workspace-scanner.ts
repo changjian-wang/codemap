@@ -239,8 +239,14 @@ export async function scanWorkspace(
   // points found" friendly error.
   if (options.fillToMaxFiles && seeds.length > 0 && finalSkeleton.length < options.maxFiles) {
     const taken = new Set(finalSkeleton);
+    // Skip "marker" files that contain only an empty assembly-scanning
+    // anchor class (e.g. .NET `AssemblyMarker.cs`, `*Marker.cs`,
+    // `*ModuleAnchor.cs`). They burn one of the limited skeleton slots and
+    // an LLM round-trip to produce a node with no methods / no calls / no
+    // signal — the user is better served by giving that slot to a real
+    // handler / repository / endpoint file instead.
     const remaining = eligible
-      .filter(f => !taken.has(f))
+      .filter(f => !taken.has(f) && !isMarkerFile(f))
       .sort((a, b) => {
         if (a.length !== b.length) return a.length - b.length;
         return a.localeCompare(b);
@@ -254,5 +260,21 @@ export async function scanWorkspace(
   const finalSet = new Set(finalSkeleton);
   const overflow = eligible.filter(f => !finalSet.has(f));
   return { entryPoints, skeleton: finalSkeleton, overflow };
+}
+
+/** Heuristic: files whose basename is a common assembly-scanning anchor
+ *  type (e.g. .NET's `AssemblyMarker`, `ModuleAnchor`, `PluginAnchor`) hold
+ *  no real code-map information — they're empty `public class X {}`
+ *  declarations used by reflection to find an assembly. Skipping them in
+ *  the fill phase keeps the limited skeleton slots focused on actual
+ *  handlers / repositories / endpoints.
+ *
+ *  Pattern is intentionally conservative: only exact matches against the
+ *  short list below. Anything like `EventMarker` or `UserSchemaAnchor`
+ *  could be domain code, so we don't touch it. */
+function isMarkerFile(relPath: string): boolean {
+  const base = relPath.split(/[\/\\]/).pop() ?? relPath;
+  const stem = base.replace(/\.[^.]+$/, '');
+  return /^(AssemblyMarker|ModuleAnchor|PluginAnchor|AssemblyAnchor|PackageMarker)$/.test(stem);
 }
 

@@ -62,9 +62,11 @@ describe('aggregate', () => {
     expect(graph.nodes['eval.AssemblyMarker']!.file).toBe('src/eval/AssemblyMarker.ts');
     expect(graph.nodes['memory.AssemblyMarker']!.file).toBe('src/memory/AssemblyMarker.ts');
     expect(graph.nodes.AssemblyMarker).toBeUndefined();
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/AssemblyMarker.*2 files/);
-    expect(warnings[0]).toMatch(/disambiguated/);
+    // We used to emit an informational warning listing every collision; it
+    // cluttered the chat output without giving users anything to act on, so
+    // the disambiguation is now silent. The visible signal is the qualified
+    // ids in `graph.nodes` themselves.
+    expect(warnings.filter(w => /disambiguated/.test(w))).toHaveLength(0);
   });
 
   it('upgrades to a verified copy when the same file appears twice (streaming dedupe)', async () => {

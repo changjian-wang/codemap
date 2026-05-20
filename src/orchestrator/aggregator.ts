@@ -113,13 +113,11 @@ export async function aggregate(input: AggregateInput): Promise<AggregateResult>
       nodesById.set(finalId, renamed);
       recordRemap(e.file, shortId, finalId);
     }
-    const qualifiedList = group
-      .map(g => qualifierFromFile(g.file) || g.file)
-      .join(', ');
-    warnings.push(
-      `class id "${shortId}" was defined in ${group.length} files (${qualifiedList}) ` +
-        `— disambiguated via parent-folder qualifier`,
-    );
+    // Note: we used to emit an informational warning here listing every
+    // collision (e.g. "AssemblyMarker was defined in 7 files"). It cluttered
+    // the chat output every run without giving the user anything to act on —
+    // the disambiguation already produced unique ids. If a real collision
+    // bug ever surfaces, it shows up as a `Module.Foo` id in the graph itself.
   }
 
   // Index ids of in-graph nodes for fast lookup.

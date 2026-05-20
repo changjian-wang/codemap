@@ -235,4 +235,36 @@ describe('scanWorkspace', () => {
     expect(r.skeleton).not.toContain('other-app/src/Misc.cs');
     expect(r.skeleton.length).toBe(3);
   });
+
+  it('fillToMaxFiles skips assembly-marker / anchor files (noise reduction)', async () => {
+    // Marker classes burn skeleton slots + an LLM call to produce an empty
+    // node. We exclude common .NET-style anchors from fill candidates so
+    // real handler / endpoint files get those slots instead.
+    const fs: Record<string, string> = {
+      'src/Lumen.Host/Program.cs': '',
+      'src/Lumen.Modules.Memory/AssemblyMarker.cs': '',   // marker
+      'src/Lumen.Modules.Notify/AssemblyMarker.cs': '',   // marker
+      'src/Lumen.Modules.Recall/ModuleAnchor.cs': '',     // marker
+      'src/Lumen.Modules.Capture/Handlers/IngestUrlHandler.cs': '',
+      'src/Lumen.Shared.Contracts/EventMarker.cs': '',    // NOT a marker (domain type)
+    };
+    const reader: FileReader = {
+      async listFiles() { return Object.keys(fs); },
+      async readText(rel) { return fs[rel]; },
+      async resolveImport() { return undefined; },
+    };
+    const r = await scanWorkspace(reader, {
+      maxDepth: 3,
+      maxFiles: 80,
+      extensions: ['.cs'],
+      rankBy: 'centrality',
+      fillToMaxFiles: true,
+    });
+    expect(r.skeleton).toContain('src/Lumen.Host/Program.cs');
+    expect(r.skeleton).toContain('src/Lumen.Modules.Capture/Handlers/IngestUrlHandler.cs');
+    expect(r.skeleton).toContain('src/Lumen.Shared.Contracts/EventMarker.cs');
+    expect(r.skeleton).not.toContain('src/Lumen.Modules.Memory/AssemblyMarker.cs');
+    expect(r.skeleton).not.toContain('src/Lumen.Modules.Notify/AssemblyMarker.cs');
+    expect(r.skeleton).not.toContain('src/Lumen.Modules.Recall/ModuleAnchor.cs');
+  });
 });

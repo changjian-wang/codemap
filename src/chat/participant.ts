@@ -10,9 +10,10 @@ import { loadGoldenForWorkspace } from '../eval/golden-loader';
 import { scoreGraph } from '../eval/score';
 import { DEFAULT_SCAN_OPTIONS } from '../orchestrator/workspace-scanner';
 import type { MockupChatTurn } from '../webview/graph-adapter';
-import { GraphStore, currentWorkspaceRevHash, type StoredGraph } from '../persistence/graph-store';
+import { GraphStore, currentWorkspaceRevHash, loadLatestGraph, type StoredGraph } from '../persistence/graph-store';
 import { AnalyzerCache } from '../persistence/analyzer-cache';
 import { explainNode, explainUnverified, focusSubgraph, formatVerificationDigest } from './chat-responders';
+import { shouldDeepFocus, runDeepFocus } from '../orchestrator/deep-focus';
 
 const PARTICIPANT_ID = 'codemap.codemap';
 
@@ -36,6 +37,9 @@ export function registerChatParticipant(context: vscode.ExtensionContext): vscod
       case 'explain':
         await handleExplain(context, response);
         return;
+      case 'eval':
+        await handleEval(context, response);
+        return;
       case 'unknown':
         response.markdown(
           [
@@ -45,6 +49,7 @@ export function registerChatParticipant(context: vscode.ExtensionContext): vscod
             '- `@codemap /focus <Class>` — re-center the graph on a class',
             '- `@codemap /why <Class>` — explain partial/unverified state',
             '- `@codemap /explain unverified` — list all unverified nodes in the current graph',
+            '- `@codemap /eval` — score the current graph against `.codemap/golden.json`',
           ].join('\n'),
         );
         return;
@@ -229,12 +234,25 @@ async function handleGenerate(
     if (golden) {
       const sc = scoreGraph(result.graph, golden);
       evalScore = { nodes: sc.nodes, edges: sc.edges };
+      // Compare against the previously stored eval (same folder) so the user
+      // can see at a glance whether this generate run regressed vs the last
+      // baseline run. Trends are conservative (±0.005) to avoid flagging
+      // floating-point noise.
+      const prevStored = new GraphStore(context.workspaceState, workspaceFolder.uri).load();
+      const prevEval = prevStored?.stats?.eval;
+      const trend = (curr: number, prev: number | undefined): string => {
+        if (prev === undefined) return '';
+        const d = curr - prev;
+        if (Math.abs(d) < 0.005) return ' (·)';
+        const sign = d > 0 ? '↑' : '↓';
+        return ` (${sign}${d >= 0 ? '+' : ''}${d.toFixed(2)})`;
+      };
       response.markdown(
         [
           '',
-          `**Eval against \`${golden.name}\`**:`,
-          `- Nodes: P=${sc.nodes.precision.toFixed(2)} · R=${sc.nodes.recall.toFixed(2)} · F1=${sc.nodes.f1.toFixed(2)}`,
-          `- Edges: P=${sc.edges.precision.toFixed(2)} · R=${sc.edges.recall.toFixed(2)} · F1=${sc.edges.f1.toFixed(2)}`,
+          `**Eval against \`${golden.name}\`**${prevEval ? ' _(vs last run)_' : ''}:`,
+          `- Nodes: P=${sc.nodes.precision.toFixed(2)} · R=${sc.nodes.recall.toFixed(2)} · F1=${sc.nodes.f1.toFixed(2)}${trend(sc.nodes.f1, prevEval?.nodes.f1)}`,
+          `- Edges: P=${sc.edges.precision.toFixed(2)} · R=${sc.edges.recall.toFixed(2)} · F1=${sc.edges.f1.toFixed(2)}${trend(sc.edges.f1, prevEval?.edges.f1)}`,
           sc.diff.missingNodes.length > 0
             ? `- Missing nodes: ${sc.diff.missingNodes.map(n => '`' + n + '`').join(', ')}`
             : '',
@@ -267,10 +285,11 @@ async function handleGenerate(
     }, workspaceFolder.uri);
 
     // ---- Persist for /why, /explain, /focus and reloads. ----
-    await new GraphStore(context.workspaceState).save({
+    // Per-folder key so multi-root workspaces don't overwrite each other.
+    await new GraphStore(context.workspaceState, workspaceFolder.uri).save({
       graph: result.graph,
       chatTurns,
-      revHash: currentWorkspaceRevHash(),
+      revHash: currentWorkspaceRevHash(workspaceFolder),
       savedAt: Date.now(),
       stats,
     });
@@ -326,6 +345,59 @@ async function handleExplain(
   response.markdown(explainUnverified(stored.graph).markdown);
 }
 
+async function handleEval(
+  context: vscode.ExtensionContext,
+  response: vscode.ChatResponseStream,
+): Promise<void> {
+  const latest = loadLatestGraph(context.workspaceState, vscode.workspace.workspaceFolders);
+  if (!latest) {
+    response.markdown(noGraphHint());
+    return;
+  }
+  const { stored, folder } = latest;
+  if (!folder) {
+    response.markdown(
+      '_No workspace folder is associated with the current graph; cannot locate `.codemap/golden.json`._',
+    );
+    return;
+  }
+  const golden = await loadGoldenForWorkspace(folder.uri);
+  if (!golden) {
+    response.markdown(
+      [
+        `_No golden file found for \`${folder.name}\`._`,
+        '',
+        'To create one:',
+        '1. Run `@codemap /scope <path>` (or `generate codemap`) to produce a graph.',
+        '2. Open the Command Palette → **CodeMap: Save Current Graph as Golden**.',
+        '3. Re-run `@codemap /eval` to get scores.',
+      ].join('\n'),
+    );
+    return;
+  }
+  const sc = scoreGraph(stored.graph, golden);
+  const lines = [
+    `**Eval against \`${golden.name}\`** (${folder.name}):`,
+    '',
+    `- Nodes: P=${sc.nodes.precision.toFixed(2)} · R=${sc.nodes.recall.toFixed(2)} · F1=${sc.nodes.f1.toFixed(2)}  (intersection: ${golden.nodes.length - sc.diff.missingNodes.length}/${golden.nodes.length})`,
+    `- Edges: P=${sc.edges.precision.toFixed(2)} · R=${sc.edges.recall.toFixed(2)} · F1=${sc.edges.f1.toFixed(2)}  (intersection: ${golden.edges.length - sc.diff.missingEdges.length}/${golden.edges.length})`,
+  ];
+  if (sc.diff.missingNodes.length > 0) {
+    lines.push('', `**Missing nodes (${sc.diff.missingNodes.length}):**`, sc.diff.missingNodes.map(n => `- \`${n}\``).join('\n'));
+  }
+  if (sc.diff.extraNodes.length > 0) {
+    const showN = sc.diff.extraNodes.slice(0, 10);
+    const tail = sc.diff.extraNodes.length > 10 ? ` _(+${sc.diff.extraNodes.length - 10} more)_` : '';
+    lines.push('', `**Extra nodes (${sc.diff.extraNodes.length}):**`, showN.map(n => `- \`${n}\``).join('\n') + tail);
+  }
+  if (sc.diff.missingEdges.length > 0) {
+    const showE = sc.diff.missingEdges.slice(0, 10);
+    const tail = sc.diff.missingEdges.length > 10 ? ` _(+${sc.diff.missingEdges.length - 10} more)_` : '';
+    lines.push('', `**Missing edges (${sc.diff.missingEdges.length}):**`, showE.map(e => `- \`${e.from}\` → \`${e.to}\``).join('\n') + tail);
+  }
+  response.markdown(lines.join('\n'));
+}
+
 async function handleFocus(
   context: vscode.ExtensionContext,
   intent: ChatIntent,
@@ -339,7 +411,8 @@ async function handleFocus(
     );
     return;
   }
-  const stored = loadCurrentGraph(context);
+  const latest = loadLatestGraph(context.workspaceState, vscode.workspace.workspaceFolders);
+  const stored = latest?.stored;
   if (!stored) {
     response.markdown(
       '_No current graph in this workspace yet. Running a full analysis first; ' +
@@ -358,6 +431,93 @@ async function handleFocus(
     return;
   }
 
+  const activeFolder =
+    latest?.folder ?? vscode.workspace.workspaceFolders?.[0];
+
+  // ---- Deep-focus path: the target is an external dep / unverified ghost
+  //      that we should actually analyze rather than just filter. -----------
+  if (activeFolder && shouldDeepFocus(stored.graph, intent.target)) {
+    response.markdown(
+      `🔎 Deep-focus on \`${intent.target}\`: locating defining file and analyzing…\n\n`,
+    );
+    const config = vscode.workspace.getConfiguration('codemap');
+    const fallbackFamily = config.get<string>('preferredModelFamily', 'gpt-4o');
+    const enableCache = config.get<boolean>('enableAnalyzerCache', true);
+    const cache = enableCache ? new AnalyzerCache(context.workspaceState) : undefined;
+
+    const deep = await runDeepFocus({
+      targetClass: intent.target,
+      baseGraph: stored.graph,
+      deps: {
+        reader: createVscodeFileReader(activeFolder.uri, {
+          ...DEFAULT_SCAN_OPTIONS,
+          maxFiles: config.get<number>('maxSkeletonFiles', 30),
+        }),
+        symbols: new VscodeSymbolProvider(activeFolder.uri),
+        llm: new VscodeLmClient(fallbackFamily, pickedModel),
+        cache,
+      },
+      token,
+    });
+
+    if (deep.ok) {
+      response.markdown(
+        [
+          `✓ Analyzed \`${deep.file}\`${deep.fromCache ? ' _(cached)_' : ''}.`,
+          deep.upgradedIds.length > 0
+            ? `Promoted ${deep.upgradedIds.length} node(s): ${deep.upgradedIds.map(id => '`' + id + '`').join(', ')}.`
+            : '',
+        ].filter(Boolean).join(' '),
+      );
+      // Persist the expanded graph so subsequent /why /explain see the new
+      // nodes. Stats are preserved from the original generate run; only the
+      // node / edge counts visibly change.
+      const expandedStored = {
+        ...stored,
+        graph: deep.graph,
+        savedAt: Date.now(),
+      };
+      await new GraphStore(context.workspaceState, activeFolder.uri).save(expandedStored);
+
+      // Render the freshly-expanded subgraph centred on the target.
+      const focus = focusSubgraph(deep.graph, intent.target);
+      if (focus.found && focus.subgraph) {
+        await showGraph(
+          context,
+          focus.subgraph,
+          [
+            ...stored.chatTurns,
+            { role: 'user',      name: 'You',      time: nowHHMM(), content: escapeHtml(`@codemap /focus ${intent.target}`) },
+            { role: 'assistant', name: '@codemap', time: nowHHMM(),
+              content: `Deep-focus on <code>${escapeHtml(intent.target)}</code>: analyzed <code>${escapeHtml(deep.file)}</code>${deep.fromCache ? ' (cached)' : ''}, now showing ±1-hop neighborhood (${focus.includedIds.length} nodes).` },
+          ],
+          stored.stats,
+          {
+            modelLabel: deep.fromCache ? 'deep-focus (cached)' : 'deep-focus',
+            repoName: activeFolder.name,
+            scope: `focus:${intent.target}`,
+            fileCountText: `${focus.includedIds.length} classes in focus`,
+            scopePill: '🎯 DEEP-FOCUS',
+            selectedNodeId: focus.includedIds[0],
+          },
+          activeFolder.uri,
+        );
+      }
+      return;
+    }
+
+    // Failure paths -- explain and fall through to subgraph filter so the
+    // user still gets something useful.
+    const failMsg = {
+      symbol_not_found: `⚠ Could not find \`${intent.target}\` via the workspace symbol provider. The class may be in a file the language server hasn't indexed yet.`,
+      file_not_found: `⚠ Found the symbol but couldn't read the defining file${deep.detail ? ' (`' + deep.detail + '`)' : ''}.`,
+      no_nodes_emitted: `⚠ Analyzer ran but emitted no nodes for \`${intent.target}\`. The file may have parse errors or be empty.`,
+    }[deep.reason];
+    response.markdown(`${failMsg}\n\n_Falling back to the existing graph's ±1-hop view._\n\n`);
+  }
+
+  // ---- Subgraph path: target is already a verified node, or deep focus
+  //      failed. Pure filter over the stored graph. ------------------------
   const focus = focusSubgraph(stored.graph, intent.target);
   response.markdown(focus.markdown);
   if (!focus.found || !focus.subgraph) return;
@@ -383,20 +543,25 @@ async function handleFocus(
     stored.stats,
     {
       modelLabel: 'focus (no model call)',
-      repoName: vscode.workspace.workspaceFolders?.[0]?.name ?? 'workspace',
+      repoName: activeFolder?.name ?? 'workspace',
       scope: `focus:${intent.target}`,
       fileCountText: `${focus.includedIds.length} classes in focus`,
       scopePill: '🎯 FOCUS',
+      selectedNodeId: focus.includedIds[0],
     },
-    vscode.workspace.workspaceFolders?.[0]?.uri,
+    activeFolder?.uri,
   );
 
-  // /focus is transient: don't overwrite the persisted full graph so /why
-  // and /explain still see the complete picture.
+  // Subgraph path is transient: don't overwrite the persisted full graph so
+  // /why and /explain still see the complete picture.
 }
 
 function loadCurrentGraph(context: vscode.ExtensionContext): StoredGraph | undefined {
-  return new GraphStore(context.workspaceState).load(currentWorkspaceRevHash());
+  // /why /explain /focus have no scope argument, so "current graph" means
+  // "whichever root the user most recently analyzed". loadLatestGraph picks
+  // the freshest entry across all open folders.
+  const latest = loadLatestGraph(context.workspaceState, vscode.workspace.workspaceFolders);
+  return latest?.stored;
 }
 
 function noGraphHint(): string {

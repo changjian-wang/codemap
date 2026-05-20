@@ -7,7 +7,7 @@ vi.mock('vscode', () => ({
   workspace: { workspaceFolders: undefined },
 }));
 
-import { GraphStore, type StoredGraph } from '../../src/persistence/graph-store';
+import { GraphStore, loadLatestGraph, type StoredGraph } from '../../src/persistence/graph-store';
 import type { CodeMapGraph } from '../../src/shared/types';
 
 function makeMemento(initial: Record<string, unknown> = {}) {
@@ -83,5 +83,64 @@ describe('GraphStore', () => {
     await store.save(makeStored('hash-A'));
     await store.clear();
     expect(store.load()).toBeUndefined();
+  });
+});
+
+describe('GraphStore multi-root', () => {
+  const uriA = { fsPath: '/repo/a' } as never;
+  const uriB = { fsPath: '/repo/b' } as never;
+  const folderA = { name: 'a', uri: uriA } as never;
+  const folderB = { name: 'b', uri: uriB } as never;
+
+  it('keeps graphs from different folders in separate keys', async () => {
+    const m = makeMemento();
+    const a = new GraphStore(m.memento as never, uriA);
+    const b = new GraphStore(m.memento as never, uriB);
+    await a.save({ ...makeStored('/repo/a'), savedAt: 100 });
+    await b.save({ ...makeStored('/repo/b'), savedAt: 200 });
+    expect(a.load()?.revHash).toBe('/repo/a');
+    expect(b.load()?.revHash).toBe('/repo/b');
+  });
+
+  it('clear() on one folder leaves the other intact', async () => {
+    const m = makeMemento();
+    const a = new GraphStore(m.memento as never, uriA);
+    const b = new GraphStore(m.memento as never, uriB);
+    await a.save(makeStored('/repo/a'));
+    await b.save(makeStored('/repo/b'));
+    await a.clear();
+    expect(a.load()).toBeUndefined();
+    expect(b.load()?.revHash).toBe('/repo/b');
+  });
+
+  it('migrates legacy single-key storage on first load', async () => {
+    const m = makeMemento({ 'codemap.lastGraph': makeStored('/repo/a') });
+    const a = new GraphStore(m.memento as never, uriA);
+    expect(a.load()?.revHash).toBe('/repo/a');
+  });
+
+  it('legacy fallback only kicks in when revHash matches the folder', async () => {
+    // Legacy single-key entry from folder B should NOT surface for folder A.
+    const m = makeMemento({ 'codemap.lastGraph': makeStored('/repo/b') });
+    const a = new GraphStore(m.memento as never, uriA);
+    expect(a.load()).toBeUndefined();
+  });
+
+  it('loadLatestGraph picks the freshest entry across folders', async () => {
+    const m = makeMemento();
+    const a = new GraphStore(m.memento as never, uriA);
+    const b = new GraphStore(m.memento as never, uriB);
+    await a.save({ ...makeStored('/repo/a'), savedAt: 100 });
+    await b.save({ ...makeStored('/repo/b'), savedAt: 200 });
+    const latest = loadLatestGraph(m.memento as never, [folderA, folderB]);
+    expect(latest?.stored.revHash).toBe('/repo/b');
+    expect((latest?.folder as { name: string } | undefined)?.name).toBe('b');
+  });
+
+  it('loadLatestGraph falls back to legacy entry when no per-root keys exist', async () => {
+    const m = makeMemento({ 'codemap.lastGraph': makeStored('/repo/a') });
+    const latest = loadLatestGraph(m.memento as never, [folderA]);
+    expect(latest?.stored.revHash).toBe('/repo/a');
+    expect((latest?.folder as { name: string } | undefined)?.name).toBe('a');
   });
 });

@@ -64,3 +64,67 @@ export interface SymbolProvider {
    */
   findInWorkspace(name: string, limit?: number): Promise<SymbolHit[]>;
 }
+
+/**
+ * Minimal tree-shaped input for {@link flattenSymbolTree}. Stays decoupled
+ * from `vscode.DocumentSymbol` so this module — and its tests — can run
+ * under vitest without the extension host.
+ */
+export interface SymbolTreeNode {
+  name: string;
+  /**
+   * Stringified `vscode.SymbolKind` (e.g. `'Class'`, `'Namespace'`).
+   * Optional because some providers (workspace lookup, regex fallback)
+   * don't surface kind information.
+   */
+  kind?: string;
+  /** 1-based start line in the source file. */
+  startLine: number;
+  /** 1-based end line in the source file. */
+  endLine: number;
+  children?: SymbolTreeNode[];
+}
+
+/**
+ * Kinds that wrap nested members. A symbol whose ancestor chain passes
+ * through one of these is NOT a top-level type — the v3 prompt has the LLM
+ * emit only top-level types as graph nodes, so the calibrator must filter
+ * these out before matching `calls` targets.
+ *
+ * Crucially `Namespace` and `Module` are NOT in this set: C# Dev Kit and
+ * some TS configurations wrap file contents in a namespace/module symbol,
+ * so a class declared at "namespace scope" is the actual top-level type
+ * we care about.
+ */
+const TYPE_CONTAINER_KINDS = new Set<string>([
+  'Class',
+  'Struct',
+  'Interface',
+  'Enum',
+]);
+
+/**
+ * Walk a `DocumentSymbol`-like tree and flatten it into {@link SymbolHit}s,
+ * tagging each with `topLevel`. Pure: no `vscode` dependency, fully unit
+ * testable.
+ *
+ * `topLevel === true` iff no ancestor in {@link TYPE_CONTAINER_KINDS}.
+ */
+export function flattenSymbolTree(roots: SymbolTreeNode[], file: string): SymbolHit[] {
+  const out: SymbolHit[] = [];
+  const walk = (s: SymbolTreeNode, insideType: boolean): void => {
+    out.push({
+      name: s.name,
+      file,
+      startLine: s.startLine,
+      endLine: s.endLine,
+      kind: s.kind,
+      topLevel: !insideType,
+    });
+    const childInsideType =
+      insideType || (s.kind !== undefined && TYPE_CONTAINER_KINDS.has(s.kind));
+    s.children?.forEach(c => walk(c, childInsideType));
+  };
+  roots.forEach(s => walk(s, false));
+  return out;
+}

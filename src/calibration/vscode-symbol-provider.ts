@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import type { SymbolProvider, SymbolHit } from './symbol-provider';
+import type { SymbolProvider, SymbolHit, SymbolTreeNode } from './symbol-provider';
+import { flattenSymbolTree } from './symbol-provider';
 
 /**
  * VS Code-backed {@link SymbolProvider}.
@@ -113,18 +114,12 @@ function escapeRegex(s: string): string {
 }
 
 function flatten(symbols: vscode.DocumentSymbol[], file: string): SymbolHit[] {
-  const out: SymbolHit[] = [];
-  const walk = (s: vscode.DocumentSymbol, depth: number): void => {
-    out.push({
-      name: s.name,
-      file,
-      startLine: s.range.start.line + 1,
-      endLine: s.range.end.line + 1,
-      kind: vscode.SymbolKind[s.kind],
-      topLevel: depth === 0,
-    });
-    s.children?.forEach(c => walk(c, depth + 1));
-  };
-  symbols.forEach(s => walk(s, 0));
-  return out;
+  const toNode = (s: vscode.DocumentSymbol): SymbolTreeNode => ({
+    name: s.name,
+    kind: vscode.SymbolKind[s.kind],
+    startLine: s.range.start.line + 1,
+    endLine: s.range.end.line + 1,
+    children: s.children?.map(toNode),
+  });
+  return flattenSymbolTree(symbols.map(toNode), file);
 }

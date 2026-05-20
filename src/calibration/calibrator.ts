@@ -18,8 +18,12 @@ import type { SymbolProvider, SymbolHit } from './symbol-provider';
  *   v3 — filter to top-level symbols when matching node_id / calls targets,
  *        so nested types (private records / inner classes) returned by the
  *        LSP no longer produce verified=true edges with no node target
+ *   v4 — fix top-level detection to use "no type-container ancestor" instead
+ *        of depth=0; v3 broke verification for every C# type because C# Dev
+ *        Kit wraps file contents in a namespace symbol so all classes sit
+ *        at depth 1
  */
-export const CALIBRATOR_VERSION = 'v3';
+export const CALIBRATOR_VERSION = 'v4';
 
 /**
  * Calibrator: LLM raw output → validated CodeNode + CodeEdge[].

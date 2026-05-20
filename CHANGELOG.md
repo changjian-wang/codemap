@@ -4,6 +4,31 @@ All notable changes to this extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.4 — 2026-05-20
+
+Hotfix on v0.0.3. The v3 calibrator change shipped a regression that
+flagged every C# type as `unverified` because the new "top-level"
+detection used recursion depth (`depth === 0`) — but C# Dev Kit wraps a
+file's contents in a `namespace` DocumentSymbol, putting every actual
+class at depth 1. The eval round on `lumen/apps/api/src` returned 119/119
+unverified and Edges F1=0.88. Pure recommended upgrade from 0.0.3.
+
+### Fixed
+- **"Top-level type" is now defined by ancestry, not depth.** A symbol is
+  top-level iff no ancestor in the DocumentSymbol tree is a type
+  container (`Class`, `Struct`, `Interface`, `Enum`); namespaces and
+  modules are explicitly NOT type containers, so types declared inside a
+  C# `namespace` block, a TypeScript `namespace`, etc. correctly come
+  through as top-level. `CALIBRATOR_VERSION` bumped v3 → v4 so the
+  AnalyzerCache invalidates entries produced under the buggy v3 logic.
+- **`flatten()` is now a thin adapter around a pure helper**
+  (`flattenSymbolTree`) that has no `vscode` import. This makes the
+  top-level detection unit-testable without the extension host; the
+  fix ships with 7 regression tests covering the C# namespace pattern,
+  nested types inside `Class` / `Struct` / `Interface`, nested
+  namespaces, file-root types (TS / Python / JS), and the kind / line
+  passthrough.
+
 ## 0.0.3 — 2026-05-20
 
 Hardening release: closes a render-blanking crash triggered by nested

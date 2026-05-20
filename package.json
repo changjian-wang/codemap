@@ -132,7 +132,8 @@
   "scripts": {
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
-    "package": "vsce package",
+    "vscode:prepublish": "node esbuild.js",
+    "package": "npm run build && vsce package",
     "test": "vitest run",
     "test:watch": "vitest",
     "eval": "ts-node --project eval/tsconfig.json eval/score-cli.ts",

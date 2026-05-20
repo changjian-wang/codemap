@@ -2,21 +2,43 @@
   "name": "codemap",
   "displayName": "CodeMap",
   "description": "Interactive call graph + reading guidance for AI-generated code. Repo-level UML class graph with LSP-calibrated verification.",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "changjian-wang",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/changjian-wang/codemap.git"
   },
+  "bugs": {
+    "url": "https://github.com/changjian-wang/codemap/issues"
+  },
+  "homepage": "https://github.com/changjian-wang/codemap#readme",
+  "keywords": [
+    "call graph",
+    "uml",
+    "code map",
+    "architecture",
+    "copilot",
+    "chat participant",
+    "language model",
+    "code reading",
+    "code review",
+    "visualization"
+  ],
+  "galleryBanner": {
+    "color": "#0b0d12",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Visualization",
-    "Other"
+    "AI",
+    "Chat",
+    "Visualization"
   ],
   "main": "./dist/extension.js",
+  "icon": "media/icon.png",
   "extensionDependencies": [
     "GitHub.copilot-chat"
   ],

@@ -100,7 +100,7 @@ export async function runDeepFocus(input: DeepFocusInput): Promise<DeepFocusResu
   const classKinds = new Set(['Class', 'Interface', 'Struct', 'Enum']);
   const exact = hits.filter(h => h.name === targetClass);
   const pool = exact.length > 0 ? exact : hits;
-  const best = pool.find(h => classKinds.has(h.kind)) ?? pool[0];
+  const best = pool.find(h => h.kind !== undefined && classKinds.has(h.kind)) ?? pool[0];
   if (!best) {
     return { ok: false, reason: 'symbol_not_found' };
   }
@@ -121,7 +121,7 @@ export async function runDeepFocus(input: DeepFocusInput): Promise<DeepFocusResu
   if (analysis) {
     hydrateDocComments(analysis.nodes, analysis.file, fileText);
   } else {
-    const bucket = classify(best.file).boundedContext;
+    const bucket = classify(best.file).bucket;
     const analyzer = new SingleFileAnalyzer(deps.llm, deps.symbols);
     analysis = await analyzer.analyze({
       file: best.file,

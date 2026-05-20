@@ -22,7 +22,7 @@ Open the folder in VS Code and press **F5** to launch the Extension Development 
 ## Run tests
 
 ```powershell
-npm test                # vitest run (181 tests, ~4s)
+npm test                # vitest run (247 tests, ~1.5s)
 npm run test:watch      # vitest watch mode
 npm run lint            # tsc --noEmit
 ```
@@ -90,6 +90,6 @@ Product shape is locked by the [v3 mockup](docs/mockups/lumen-backend-v3.html) a
 ## Pull requests
 
 - Run `npm test` and `npm run build` before pushing.
-- Keep ESLint and the `@azure/eslint-plugin-azure-sdk` plugin happy — do **not** disable rules.
+- Keep `npm run lint` (`tsc --noEmit`) clean — the build step does **not** type-check.
 - For UI changes, update the mockup in `docs/mockups/lumen-backend-v3.html` so the spec stays in sync with the implementation.
 - New verification logic should land with a calibrator test under `test/unit/`.

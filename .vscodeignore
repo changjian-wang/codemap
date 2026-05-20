@@ -5,6 +5,7 @@ eval/**
 docs/plan/**
 docs/adrs/**
 docs/media/**
+docs/mockups/**
 .vscode/**
 .vscode-test/**
 .github/**
@@ -24,6 +25,9 @@ coverage/**
 
 # Source maps (the runtime bundle ships, but we don't need raw maps in the .vsix)
 dist/**/*.map
+
+# Source icon (PNG ships, SVG stays in repo only)
+media/*.svg
 
 # Misc
 **/.DS_Store

@@ -1,0 +1,21 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CodeMap icon">
+  <rect width="128" height="128" rx="22" fill="#0b0d12"/>
+
+  <path d="M 36 56 L 58 78" stroke="#6b6e78" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <path d="M 92 56 L 70 78" stroke="#6b6e78" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+
+  <rect x="10" y="24" width="52" height="32" rx="5" fill="#171a21" stroke="#a78bfa" stroke-width="2.5"/>
+  <line x1="10" y1="36" x2="62" y2="36" stroke="#a78bfa" stroke-width="2"/>
+  <circle cx="19" cy="46" r="1.6" fill="#a78bfa"/>
+  <line x1="25" y1="46" x2="53" y2="46" stroke="#a78bfa" stroke-width="1" opacity="0.55"/>
+
+  <rect x="66" y="24" width="52" height="32" rx="5" fill="#171a21" stroke="#5eead4" stroke-width="2.5"/>
+  <line x1="66" y1="36" x2="118" y2="36" stroke="#5eead4" stroke-width="2"/>
+  <circle cx="75" cy="46" r="1.6" fill="#5eead4"/>
+  <line x1="81" y1="46" x2="109" y2="46" stroke="#5eead4" stroke-width="1" opacity="0.55"/>
+
+  <rect x="38" y="78" width="52" height="32" rx="5" fill="#171a21" stroke="#fbbf24" stroke-width="2.5"/>
+  <line x1="38" y1="90" x2="90" y2="90" stroke="#fbbf24" stroke-width="2"/>
+  <circle cx="47" cy="100" r="1.6" fill="#fbbf24"/>
+  <line x1="53" y1="100" x2="81" y2="100" stroke="#fbbf24" stroke-width="1" opacity="0.55"/>
+</svg>

@@ -2,7 +2,7 @@
   "name": "codemap",
   "displayName": "CodeMap",
   "description": "Interactive call graph + reading guidance for AI-generated code. Repo-level UML class graph with LSP-calibrated verification.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "changjian-wang",
   "license": "MIT",
   "repository": {
@@ -24,7 +24,8 @@
     "onChatParticipant:codemap.codemap",
     "onCommand:codemap.showLastGraph",
     "onCommand:codemap.clearAnalyzerCache",
-    "onCommand:codemap.resetReadingProgress"
+    "onCommand:codemap.resetReadingProgress",
+    "onCommand:codemap.saveCurrentGraphAsGolden"
   ],
   "contributes": {
     "chatParticipants": [
@@ -50,6 +51,10 @@
           {
             "name": "explain",
             "description": "Explain unverified nodes in the current graph"
+          },
+          {
+            "name": "eval",
+            "description": "Score the current graph against .codemap/golden.json and show precision/recall/F1"
           }
         ]
       }
@@ -66,6 +71,10 @@
       {
         "command": "codemap.clearAnalyzerCache",
         "title": "CodeMap: Clear Analyzer Cache"
+      },
+      {
+        "command": "codemap.saveCurrentGraphAsGolden",
+        "title": "CodeMap: Save Current Graph as Golden"
       }
     ],
     "configuration": {
@@ -138,5 +147,10 @@
     "typescript": "^5.4.0",
     "vitest": "^1.4.0",
     "yaml": "^2.9.0"
+  },
+  "dependencies": {
+    "cytoscape": "^3.33.4",
+    "cytoscape-dagre": "^3.0.0",
+    "dagre": "^0.8.5"
   }
 }

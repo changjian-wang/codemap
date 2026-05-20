@@ -4,6 +4,57 @@ All notable changes to this extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.3 — 2026-05-20
+
+Hardening release: closes a render-blanking crash triggered by nested
+types, tightens the calibrator's edge verification, and trims framework
+plumbing from the prompt's external-call output. No new user-facing
+features. Pure recommended upgrade from 0.0.2.
+
+### Fixed
+- **Webview no longer blanks when an edge points at a nested type.**
+  The DocumentSymbol API returns a tree; the symbol provider's flatten
+  walked children unconditionally, so nested types (a private record
+  like `ChunkHit` inside RecallQuery.cs, an inner class) showed up in
+  the flat in-file symbol list. The calibrator matched a `calls` target
+  against the nested symbol and emitted the edge as verified=true; the
+  aggregator's short-circuit then pushed it without checking whether
+  the target was actually a graph node. cytoscape threw "Can not create
+  edge with nonexistent target" on the first dangling reference and
+  aborted the entire render — the panel fell back to the mockup fixture
+  ("14 CLASSES · 51 METHODS") with no graph at all. Three layers of
+  defense now:
+  - `vscode-symbol-provider.flatten()` tracks depth and tags children
+    with `topLevel: false`.
+  - `calibrator.calibrate()` filters in-file symbols to top-level only
+    before `bestSymbolMatch`. `CALIBRATOR_VERSION` bumped v2 → v3 so
+    cached AnalyzeResults built under the old logic invalidate.
+  - `aggregator` only short-circuits a verified=true edge when its
+    target is already in `nodeIdSet`; otherwise the edge falls through
+    to the same lookup + ghost-creation path as unverified edges.
+  - `graph-adapter` drops any edge whose endpoint isn't in
+    `validNodeIds ∪ validExtIds` before shipping to the webview, so
+    a future regression in either layer above cannot blank the panel.
+- **`npm run package` no longer ships a stale bundle.** The script only
+  ran `vsce package`, leaving an out-of-date `dist/extension.js` from
+  the previous build. Adding `npm run build &&` to the package script
+  plus a `vscode:prepublish` hook closes the gap — a freshly-bumped
+  PROMPT_VERSION / CALIBRATOR_VERSION in source now always reaches the
+  VSIX.
+
+### Changed
+- **Prompt v3.3 → v3.4: skip framework infrastructure in
+  `external_calls`.** Previously, every `IServiceCollection` /
+  `IConfiguration` / `ILogger` / `CancellationToken` / generic
+  `Exception` ref leaked into the graph as an `ext:*` edge. v3.4
+  explicitly enumerates the skip list (DI, logging, async primitives,
+  generic exceptions, ASP.NET Core HTTP plumbing) and the keep list
+  (Dapper, Npgsql, IDbConnection, Pgvector, IHttpClientFactory,
+  third-party SDKs, workspace contracts). On the lumen `apps/api/src`
+  corpus this dropped 80+ framework edges that were drowning out real
+  inter-module references; eval F1(edges) moved -0.30 vs the v3.3
+  baseline as expected, then back to 1.00 after re-snapshotting golden.
+
 ## 0.0.2 — 2026-05-20
 
 Per-folder graph persistence, deep-focus drill-down, and golden-based eval

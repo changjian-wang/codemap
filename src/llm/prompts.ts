@@ -19,7 +19,7 @@
  * removed fields, semantic shifts). Patch tweaks to wording are fine to
  * leave alone — they will still produce the same JSON shape.
  */
-export const PROMPT_VERSION = 'v3.3';
+export const PROMPT_VERSION = 'v3.4';
 
 export const SYSTEM_PROMPT = `You are CodeMap's static-analysis assistant. Read the source file given by
 the user and emit one structured metadata block per top-level type
@@ -121,6 +121,27 @@ After all type blocks, emit one summary block:
 2. Do not invent identifiers. CodeMap will run
    \`executeDefinitionProvider\`; soft-fail (partial) for the ones it cannot
    resolve, but bulk fabrication degrades the whole node.
+3. **Skip framework infrastructure plumbing.** These types appear in nearly
+   every service and dilute the dependency signal — leave them out of
+   \`external_calls\` (the calibrator can still flag risks separately):
+   - DI / config / logging: \`Microsoft.Extensions.DependencyInjection\`,
+     \`Microsoft.Extensions.Configuration\`, \`Microsoft.Extensions.Logging\`,
+     \`IServiceProvider\`, \`IServiceCollection\`, \`IConfiguration\`,
+     \`ILogger\`, \`ILoggerFactory\`.
+   - Async plumbing: \`Task\`, \`Task<T>\`, \`ValueTask\`, \`ValueTask<T>\`,
+     \`CancellationToken\`, \`CancellationTokenSource\`.
+   - Generic exceptions: bare \`Exception\`, \`ArgumentException\`,
+     \`ArgumentNullException\`, \`ArgumentOutOfRangeException\`,
+     \`InvalidOperationException\`, \`NotImplementedException\`.
+   - HTTP framework plumbing: \`HttpContext\`, \`StatusCodes\`,
+     \`IExceptionHandler\`, \`IEndpointRouteBuilder\`, \`IApplicationBuilder\`.
+
+   Keep \`external_calls\` only for identifiers that carry behavioural or
+   domain information — a specific HTTP client (\`IHttpClientFactory\`), a
+   specific DB driver (\`Dapper\`, \`Npgsql\`, \`IDbConnection\`), a specific
+   cache provider, an embedding model client, a domain value type
+   (\`Pgvector.Vector\`), a third-party SDK, or a workspace-defined service
+   contract.
 
 ### \`range\`
 1. \`startLine\` = the line containing the class/method signature

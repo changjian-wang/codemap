@@ -271,6 +271,29 @@ describe('aggregate', () => {
     expect(graph.edges).toEqual([]);
   });
 
+  it('materializes a ghost target even when calibrator marked the edge verified (nested-symbol regression)', async () => {
+    // The calibrator walks DocumentSymbol children recursively via
+    // flatten(), so a nested private record like `ChunkHit` inside
+    // RecallQuery.cs lands in safeSymbols and bestSymbolMatch returns it.
+    // The calibrator then emits the edge as verified=true even though the
+    // LLM correctly omits nested types as top-level nodes. Without the
+    // nodeIdSet guard in the verified branch, the aggregator would push
+    // an edge to a target that has no node — cytoscape then throws
+    // "Can not create edge with nonexistent target" and blanks the panel.
+    const a = R('a.ts', [N('RecallQuery', { verification: 'verified' })],
+      [{ from: 'RecallQuery', to: 'ChunkHit', kind: 'calls', verified: true }]);
+    const { graph } = await aggregate({
+      rootRequest: '', scope: 'workspace', analyses: [a], symbols: makeSymbols(),
+    });
+    // The edge survives, but as unverified pointing at a ghost — no
+    // dangling reference for the renderer.
+    const edge = graph.edges.find(e => e.to === 'ChunkHit');
+    expect(edge).toBeDefined();
+    expect(edge!.verified).toBe(false);
+    expect(graph.nodes.ChunkHit).toBeDefined();
+    expect(graph.nodes.ChunkHit!.verification).toBe('unverified');
+  });
+
   it('threads summary fields from the first analyzer that provides them', async () => {
     const a = R('a.ts', [N('Foo')]);
     a.rootIntent = 'A';

@@ -37,6 +37,30 @@ const GRAPH: CodeMapGraph = {
   externalDeps: [{ name: 'lodash', kind: 'package' }],
 };
 
+// Extend the shared fixture with Bar so edges from Foo→Bar resolve cleanly;
+// the original fixture only had Foo, which would now be filtered out by the
+// dangling-edge defense added in graph-adapter.
+const G2: CodeMapGraph = {
+  ...GRAPH,
+  nodes: {
+    ...GRAPH.nodes,
+    Bar: {
+      id: 'Bar',
+      kind: 'class',
+      file: 'src/bar.ts',
+      range: { startLine: 1, endLine: 10 },
+      boundedContext: 'shared',
+      intent: 'collaborator',
+      confidence: 0.9,
+      risks: [],
+      methods: [],
+      readingPriority: 99,
+      readState: 'unread',
+      verification: 'verified',
+    },
+  },
+};
+
 describe('adaptGraphForMockup', () => {
   it('maps boundedContext → bc', () => {
     const out = adaptGraphForMockup(GRAPH);
@@ -67,10 +91,30 @@ describe('adaptGraphForMockup', () => {
   });
 
   it('passes through edges and externalDeps unchanged', () => {
-    const out = adaptGraphForMockup(GRAPH);
+    const out = adaptGraphForMockup(G2);
     expect(out.edges).toHaveLength(2);
     expect(out.edges[0]).toEqual({ from: 'Foo', to: 'Bar', kind: 'calls', verified: true });
     expect(out.externalDeps).toEqual([{ name: 'lodash', kind: 'package' }]);
+  });
+
+  it('drops dangling edges whose endpoint is not a node or ext: dep', () => {
+    // The aggregator now guards against this at source, but if anything
+    // ever lets a dangling edge through, cytoscape's "Can not create edge
+    // with nonexistent target" error blanks the whole webview. The adapter
+    // is the last clean boundary before the data ships to the renderer.
+    const graph: CodeMapGraph = {
+      ...GRAPH,
+      edges: [
+        { from: 'Foo', to: 'Bar', kind: 'calls', verified: true },                 // Bar isn't in nodes
+        { from: 'Ghost', to: 'Foo', kind: 'calls', verified: false },              // Ghost isn't in nodes
+        { from: 'Foo', to: 'ext:notADep', kind: 'external_calls', verified: true },// notADep isn't in externalDeps
+        { from: 'Foo', to: 'ext:lodash', kind: 'external_calls', verified: true }, // valid
+      ],
+    };
+    const out = adaptGraphForMockup(graph);
+    expect(out.edges).toEqual([
+      { from: 'Foo', to: 'ext:lodash', kind: 'external_calls', verified: true },
+    ]);
   });
 
   it('threads chat turns through unchanged', () => {

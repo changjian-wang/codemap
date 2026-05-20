@@ -161,17 +161,21 @@ export async function aggregate(input: AggregateInput): Promise<AggregateResult>
       }
       const newFrom = remapByFile.get(a.file)?.get(e.from) ?? e.from;
       const newTo = resolveTarget(e.to, a.file);
-      if (e.verified) {
-        // Calibrator already confirmed this is in-file; pass through.
+      if (e.verified && nodeIdSet.has(newTo)) {
+        // Calibrator confirmed in-file AND the target is a known top-level
+        // node; pass through unchanged.
         pushEdge({ ...e, from: newFrom, to: newTo });
         continue;
       }
-      // verified=false: calibrator couldn't see the target in-file. Try
-      // workspace symbol lookup. Found and in-graph → upgrade to verified;
-      // found in workspace but outside skeleton → ghost (unverified) node;
-      // not found at all → ghost (unverified) node. Either way the edge
-      // and the target survive as concrete graph elements per v3 §5.4
-      // (no bare auto-nodes from cytoscape).
+      // Either verified=false (calibrator couldn't resolve), or verified=true
+      // but the target is not a top-level node — typically a nested type
+      // (private record / inner class) that `flatten()` in the symbol
+      // provider exposes because it walks DocumentSymbol children. The LLM
+      // correctly omits nested types per the prompt contract, so the
+      // resulting edge points at no node. Fall through to the workspace
+      // lookup + ghost-creation path so we either retarget onto a known
+      // node or materialize a styled ghost — never a bare cytoscape edge
+      // to nowhere (which crashes the whole render).
       if (nodeIdSet.has(newTo)) {
         pushEdge({ ...e, from: newFrom, to: newTo, verified: true });
         continue;

@@ -201,17 +201,27 @@ export function adaptGraphForMockup(
     verificationDetails: n.verificationDetails,
   }));
 
-  const edges: MockupEdge[] = graph.edges.map(e => ({
-    from: e.from,
-    to: e.to,
-    kind: e.kind,
-    verified: e.verified,
-  }));
-
   const externalDeps: MockupExternalDep[] = graph.externalDeps.map(d => ({
     name: d.name,
     kind: d.kind,
   }));
+
+  // Defensive: drop edges whose endpoint isn't materialised as a node or
+  // an external dep. Cytoscape throws "Can not create edge with nonexistent
+  // target" on the first dangling edge and aborts the entire render, so a
+  // single stray edge can blank the whole webview. The aggregator now
+  // guards against this at source, but this is the boundary between
+  // structured graph and webview script — if the boundary holds, no
+  // future aggregator regression can blank the panel.
+  const validNodeIds = new Set(classes.map(c => c.id));
+  const validExtIds = new Set(externalDeps.map(d => `ext:${d.name}`));
+  const isResolvable = (id: string): boolean =>
+    validNodeIds.has(id) || validExtIds.has(id);
+  const edges: MockupEdge[] = [];
+  for (const e of graph.edges) {
+    if (!isResolvable(e.from) || !isResolvable(e.to)) continue;
+    edges.push({ from: e.from, to: e.to, kind: e.kind, verified: e.verified });
+  }
 
   // Default stats derived from the graph itself so the UI never displays
   // canned numbers from the mockup template. Real eval scores / timings come

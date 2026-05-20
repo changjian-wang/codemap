@@ -90,6 +90,52 @@ describe('Calibrator', () => {
     expect(edges.find(e => e.to === 'CrossFileClass')?.verified).toBe(false);
   });
 
+  it('ignores nested symbols when validating calls targets', async () => {
+    // The LSP returns a flat list that includes nested types via
+    // DocumentSymbol.children — e.g. a private record `ChunkHit` declared
+    // inside `RecallQuery.cs`. The v3 prompt has the LLM emit only
+    // top-level types as nodes, so a `calls` edge to such a nested name
+    // must NOT come out verified=true (otherwise the aggregator's
+    // short-circuit would push it as a dangling edge → cytoscape blanks
+    // the whole render). vscode-symbol-provider's flatten() now tags the
+    // nested symbol with topLevel=false; the calibrator filters those
+    // out before bestSymbolMatch.
+    const c = new Calibrator(
+      makeProvider({
+        inFile: {
+          'a.cs': [
+            { ...sym('RecallQuery', 'a.cs', 1, 100), topLevel: true },
+            { ...sym('ChunkHit', 'a.cs', 50, 60), topLevel: false },
+          ],
+        },
+      }),
+    );
+    const out = await c.calibrate({
+      data: { node_id: 'RecallQuery', calls: ['ChunkHit'] },
+      file: 'a.cs',
+      boundedContext: 'recall',
+    });
+    const edge = out!.edges.find(e => e.to === 'ChunkHit');
+    expect(edge?.verified).toBe(false);
+  });
+
+  it('treats topLevel=undefined as top-level for backwards compatibility', async () => {
+    // Mock providers and the workspace-lookup / regex-fallback paths in
+    // vscode-symbol-provider do not set topLevel. Those candidates must
+    // still match so this field's introduction is a pure additive signal.
+    const c = new Calibrator(
+      makeProvider({
+        inFile: { 'a.cs': [sym('Foo', 'a.cs', 1, 10), sym('Bar', 'a.cs', 12, 20)] },
+      }),
+    );
+    const out = await c.calibrate({
+      data: { node_id: 'Foo', calls: ['Bar'] },
+      file: 'a.cs',
+      boundedContext: 'capture',
+    });
+    expect(out!.edges.find(e => e.to === 'Bar')?.verified).toBe(true);
+  });
+
   it('emits external_calls as ext: edges regardless of workspace symbol presence', async () => {
     // Per W2 scope: we accept all external_calls. (Distinguishing package
     // imports from missing symbols lands in W3.)

@@ -15,8 +15,11 @@ import type { SymbolProvider, SymbolHit } from './symbol-provider';
  * History:
  *   v1 — initial
  *   v2 — symmetric generic-stripping in bestSymbolMatch (Foo<T> <-> Foo)
+ *   v3 — filter to top-level symbols when matching node_id / calls targets,
+ *        so nested types (private records / inner classes) returned by the
+ *        LSP no longer produce verified=true edges with no node target
  */
-export const CALIBRATOR_VERSION = 'v2';
+export const CALIBRATOR_VERSION = 'v3';
 
 /**
  * Calibrator: LLM raw output → validated CodeNode + CodeEdge[].
@@ -127,7 +130,14 @@ export class Calibrator {
     // ---- 1. Locate the class in the file. ----
     const inFileSymbols = await this.symbols.symbolsInFile(file);
     const lspNotReady = inFileSymbols === undefined;
-    const safeSymbols = inFileSymbols ?? [];
+    // Only top-level symbols are candidate graph nodes / edge targets per
+    // the v3 prompt. The LSP returns a flat list that includes nested types
+    // (private records, inner classes); matching against them produces
+    // verified=true edges to identifiers the aggregator has no node for.
+    // `topLevel === undefined` is treated as top-level so mocks and the
+    // workspace-lookup / regex-fallback paths (which don't know depth) keep
+    // working unchanged.
+    const safeSymbols = (inFileSymbols ?? []).filter(s => s.topLevel !== false);
     const symbol = bestSymbolMatch(nodeId, safeSymbols);
 
     let verification: VerificationState = 'verified';

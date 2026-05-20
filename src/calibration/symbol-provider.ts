@@ -24,6 +24,21 @@ export interface SymbolHit {
    * matches.
    */
   kind?: string;
+  /**
+   * True iff this symbol is declared at the file's top level (not nested
+   * inside another class/struct/record). The v3 prompt has the LLM emit
+   * only top-level types as graph nodes, so the calibrator must only
+   * validate `calls` targets against top-level symbols — otherwise a
+   * nested private record (e.g. `ChunkHit` inside RecallQuery.cs) gets
+   * matched, the edge ships as verified=true, and the aggregator has no
+   * corresponding node to render against.
+   *
+   * `undefined` means "depth unknown" and is treated as top-level for
+   * backwards compatibility with providers that do not track this
+   * (workspace symbol lookup results, regex-based fallback hits, test
+   * mocks predating this field).
+   */
+  topLevel?: boolean;
 }
 
 export interface SymbolProvider {

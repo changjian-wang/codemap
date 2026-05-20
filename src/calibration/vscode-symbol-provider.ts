@@ -114,16 +114,17 @@ function escapeRegex(s: string): string {
 
 function flatten(symbols: vscode.DocumentSymbol[], file: string): SymbolHit[] {
   const out: SymbolHit[] = [];
-  const walk = (s: vscode.DocumentSymbol): void => {
+  const walk = (s: vscode.DocumentSymbol, depth: number): void => {
     out.push({
       name: s.name,
       file,
       startLine: s.range.start.line + 1,
       endLine: s.range.end.line + 1,
       kind: vscode.SymbolKind[s.kind],
+      topLevel: depth === 0,
     });
-    s.children?.forEach(walk);
+    s.children?.forEach(c => walk(c, depth + 1));
   };
-  symbols.forEach(walk);
+  symbols.forEach(s => walk(s, 0));
   return out;
 }

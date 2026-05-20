@@ -85,6 +85,13 @@ export interface MockupMeta {
    * display the real bucket name on each chip and outline section.
    */
   bcLabels?: { host: string; capture: string; recall: string; shared: string };
+  /**
+   * Class id the webview should select on first render. Used by `/focus`
+   * so the right details card opens automatically instead of whichever
+   * node happens to win the reading-order sort. Falls back to the first
+   * class in reading order when omitted or unknown.
+   */
+  selectedNodeId?: string;
 }
 
 export interface MockupStats {

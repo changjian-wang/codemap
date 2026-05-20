@@ -315,6 +315,14 @@ async function pickScopeAndRegenerate(
         canSelectMany: false,
         defaultUri: dialogDefaultUri,
         openLabel: 'Use as scope',
+        // Restrict the picker to the languages the analyzer actually
+        // supports so the user can't accidentally pick a README / json /
+        // png as a "scope" and watch the orchestrator error out 30s later.
+        // Mirrors DEFAULT_SCAN_OPTIONS.extensions in workspace-scanner.ts.
+        filters: {
+          'Source files': ['cs', 'ts', 'tsx', 'js', 'jsx', 'py'],
+          'All files': ['*'],
+        },
       });
       if (!picked || picked.length === 0) return;
       const rel = toWorkspaceRelative(picked[0].fsPath, rootFs);
@@ -384,6 +392,19 @@ function renderHtml(
     </body></html>`;
   }
 
+  // Replace the unpkg.com CDN URLs with locally bundled vendor scripts so the
+  // graph renders even on machines without external network access (or where
+  // unpkg.com is blocked / slow). The CSP only allows `${webview.cspSource}`
+  // for scripts, so unpkg also gets refused in stricter setups.
+  const vendorDir = vscode.Uri.file(path.join(context.extensionPath, 'dist', 'vendor'));
+  const cyUri  = webview.asWebviewUri(vscode.Uri.joinPath(vendorDir, 'cytoscape.min.js')).toString();
+  const dagUri = webview.asWebviewUri(vscode.Uri.joinPath(vendorDir, 'dagre.min.js')).toString();
+  const cdaUri = webview.asWebviewUri(vscode.Uri.joinPath(vendorDir, 'cytoscape-dagre.js')).toString();
+  html = html
+    .replace(/https:\/\/unpkg\.com\/cytoscape@[^"']+/g, cyUri)
+    .replace(/https:\/\/unpkg\.com\/dagre@[^"']+/g, dagUri)
+    .replace(/https:\/\/unpkg\.com\/cytoscape-dagre@[^"']+/g, cdaUri);
+
   const mockupData = adaptGraphForMockup(graph, chatTurns, stats, meta);
   // Embed as a JSON string and parse on the page — avoids HTML/JS escaping
   // pitfalls with < / backticks / quotes in intent text.
@@ -392,6 +413,26 @@ function renderHtml(
   const injection = `
     <script nonce="${nonce}">
       window.__CODEMAP_DATA__ = JSON.parse(${JSON.stringify(payload)});
+      // Surface webview-side JS errors directly on the page — without this,
+      // a single uncaught exception silently halts the mockup script and the
+      // page sticks on its hardcoded fixture values. Wrapped in try so we
+      // don't break in environments where document.body is missing.
+      window.addEventListener('error', function (e) {
+        try {
+          var bar = document.getElementById('__cm_err_bar') || (function () {
+            var b = document.createElement('div');
+            b.id = '__cm_err_bar';
+            b.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#5e2020;color:#fff;padding:6px 10px;font-family:Consolas,monospace;font-size:11px;z-index:9999;border-top:1px solid #f48771;max-height:60vh;overflow:auto;';
+            document.body.appendChild(b);
+            return b;
+          })();
+          var msg = (e && e.message) || 'error';
+          var src = (e && e.filename) ? ' @ ' + e.filename + ':' + e.lineno + ':' + e.colno : '';
+          var row = document.createElement('div');
+          row.textContent = '⚠ ' + msg + src;
+          bar.appendChild(row);
+        } catch (_) { /* swallow */ }
+      });
       const vscodeApi = acquireVsCodeApi();
       window.codemap = window.codemap || {};
       window.codemap.postMessage = (msg) => vscodeApi.postMessage(msg);

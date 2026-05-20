@@ -157,7 +157,39 @@
       color: var(--vs-text-dim); text-transform: uppercase;
       letter-spacing: 0.4px; margin-top: 6px;
       display: flex; align-items: center; gap: 6px;
+      cursor: pointer; user-select: none;
     }
+    .bc-group:hover { color: var(--vs-text); }
+    .bc-group .bc-caret {
+      display: inline-block; width: 10px;
+      font-size: 9px; opacity: 0.7;
+      transition: transform 0.12s ease-out;
+    }
+    .bc-group.collapsed .bc-caret { transform: rotate(-90deg); }
+    .bc-group .bc-count {
+      margin-left: auto; opacity: 0.55; font-size: 10px;
+      font-family: "Consolas", monospace; letter-spacing: 0;
+    }
+    /* The list container right after a collapsed bc-group / external-section
+       hides its rows. We toggle a `.collapsed` class on the container itself
+       so search/filter logic in applyOutlineFilters() keeps working without
+       a special case. */
+    .outline-list.collapsed { display: none; }
+    .ext-section-title {
+      cursor: pointer; user-select: none;
+    }
+    .ext-section-title:hover { color: var(--vs-text); }
+    .ext-section-title .bc-caret {
+      display: inline-block; width: 10px;
+      font-size: 9px; opacity: 0.7;
+      transition: transform 0.12s ease-out;
+    }
+    .ext-section-title.collapsed .bc-caret { transform: rotate(-90deg); }
+    .outline-toggle-all {
+      color: rgba(255,255,255,0.4); cursor: pointer;
+      font-size: 11px; margin-right: 6px;
+    }
+    .outline-toggle-all:hover { color: var(--vs-text); }
     .bc-dot { width: 8px; height: 8px; border-radius: 2px; }
     .bc-dot.capture { background: var(--bc-capture); }
     .bc-dot.recall  { background: var(--bc-recall); }
@@ -787,28 +819,32 @@
       <div class="outline-section">
         <div class="outline-section-title">
           <span>Reading Order</span>
-          <span style="color:rgba(255,255,255,0.4); cursor:pointer" title="Reset progress" id="outlineReset">↺</span>
+          <span>
+            <span class="outline-toggle-all" title="Collapse all groups" id="outlineCollapseAll">−</span>
+            <span class="outline-toggle-all" title="Expand all groups" id="outlineExpandAll">+</span>
+            <span style="color:rgba(255,255,255,0.4); cursor:pointer" title="Reset progress" id="outlineReset">↺</span>
+          </span>
         </div>
 
-        <div class="bc-group" data-slot="host"><span class="bc-dot host"></span>Host (entry)</div>
-        <div id="outlineHost"></div>
+        <div class="bc-group" data-slot="host" data-target="outlineHost"><span class="bc-caret">▾</span><span class="bc-dot host"></span>Host (entry)<span class="bc-count" id="countHost"></span></div>
+        <div id="outlineHost" class="outline-list"></div>
 
-        <div class="bc-group" data-slot="capture"><span class="bc-dot capture"></span>Modules.Capture</div>
-        <div id="outlineCapture"></div>
+        <div class="bc-group" data-slot="capture" data-target="outlineCapture"><span class="bc-caret">▾</span><span class="bc-dot capture"></span>Modules.Capture<span class="bc-count" id="countCapture"></span></div>
+        <div id="outlineCapture" class="outline-list"></div>
 
-        <div class="bc-group" data-slot="recall"><span class="bc-dot recall"></span>Modules.Recall</div>
-        <div id="outlineRecall"></div>
+        <div class="bc-group" data-slot="recall" data-target="outlineRecall"><span class="bc-caret">▾</span><span class="bc-dot recall"></span>Modules.Recall<span class="bc-count" id="countRecall"></span></div>
+        <div id="outlineRecall" class="outline-list"></div>
 
-        <div class="bc-group" data-slot="shared"><span class="bc-dot shared"></span>Shared.Infrastructure</div>
-        <div id="outlineShared"></div>
+        <div class="bc-group" data-slot="shared" data-target="outlineShared"><span class="bc-caret">▾</span><span class="bc-dot shared"></span>Shared.Infrastructure<span class="bc-count" id="countShared"></span></div>
+        <div id="outlineShared" class="outline-list"></div>
       </div>
 
       <div class="outline-section" style="border-top: 1px solid var(--vs-border-soft); margin-top: 4px;">
-        <div class="outline-section-title">
-          <span>External Deps</span>
+        <div class="outline-section-title ext-section-title" data-target="externalList">
+          <span><span class="bc-caret">▾</span> External Deps</span>
           <span class="mono" id="extCount">7</span>
         </div>
-        <div id="externalList"></div>
+        <div id="externalList" class="outline-list"></div>
       </div>
     </div>
 
@@ -1269,6 +1305,23 @@ EXTERNAL_DEPS.forEach(d => {
   }
 });
 
+// Defensive: synthesize any `ext:<Name>` placeholder node referenced by an
+// edge but missing from EXTERNAL_DEPS, so cytoscape doesn't throw
+// "Can not create edge with nonexistent target" and abort the whole render.
+(function () {
+  const existing = new Set(nodes.map(n => n.data.id));
+  EDGES.forEach(e => {
+    if (e.to && e.to.indexOf('ext:') === 0 && !existing.has(e.to)) {
+      const bare = e.to.slice(4);
+      nodes.push({
+        data: { id: e.to, label: bare, bc: 'shared', external: true },
+        classes: 'ext',
+      });
+      existing.add(e.to);
+    }
+  });
+})();
+
 const edges = EDGES.map((e, i) => ({
   data: { id: `e${i}`, source: e.from, target: e.to, kind: e.kind, verified: e.verified },
   classes: `${e.kind}${e.verified ? '' : ' unverified-edge'}`
@@ -1496,6 +1549,24 @@ function renderOutline() {
   // Apply any active bc/search/toggle filters to the rows we just rendered
   // so navigation, marking-as-read, etc. don't reset the user's filter state.
   applyOutlineFilters();
+
+  // Refresh per-group counts in the headers so users can see at a glance how
+  // many classes live in each BC without expanding.
+  const countMap = {
+    outlineHost:    document.getElementById('countHost'),
+    outlineCapture: document.getElementById('countCapture'),
+    outlineRecall:  document.getElementById('countRecall'),
+    outlineShared:  document.getElementById('countShared'),
+  };
+  Object.entries(countMap).forEach(([listId, badge]) => {
+    if (!badge) return;
+    const list = document.getElementById(listId);
+    badge.textContent = list ? String(list.children.length) : '0';
+  });
+  // Re-apply collapsed state — collapsed flags live on the list container,
+  // and applyOutlineFilters doesn't touch them, but a fresh render of new
+  // content may have cleared the visual indicator on the header.
+  if (typeof applyCollapsedState === 'function') applyCollapsedState();
 }
 
 // ---------- Card ----------
@@ -2361,6 +2432,28 @@ function applyOutlineFilters() {
       group.classList.toggle('hidden', !anyVisible);
     }
   });
+
+  // When a search is active, force-expand any group that has visible hits so
+  // the user can actually see the matches even if that group was collapsed.
+  // No persistence — we keep the user's saved collapsed state and only
+  // override it visually for as long as the search box has content. When the
+  // search clears, the persisted state is reapplied below.
+  const hasSearch = q.length > 0;
+  document.querySelectorAll('.bc-group[data-target], .ext-section-title[data-target]').forEach(header => {
+    const key = header.getAttribute('data-target');
+    const list = document.getElementById(key);
+    if (!list) return;
+    if (hasSearch) {
+      const anyVisible = [...list.children].some(r => !r.classList.contains('hidden'));
+      if (anyVisible) {
+        header.classList.remove('collapsed');
+        list.classList.remove('collapsed');
+      }
+    }
+  });
+  if (!hasSearch && typeof applyCollapsedState === 'function') {
+    applyCollapsedState();
+  }
 }
 function applyFilters() {
   cy.nodes('.cls').forEach(n => {
@@ -2488,6 +2581,79 @@ document.addEventListener('click', e => {
 });
 const outlineResetEl = document.getElementById('outlineReset');
 if (outlineResetEl) outlineResetEl.addEventListener('click', postResetProgress);
+
+// --- Outline group collapse/expand ---
+// Persisted in localStorage as a JSON object { [groupKey: string]: true }
+// where `true` means collapsed. Groups not in the map default to expanded.
+// `groupKey` is the data-target attribute (the list container id), which is
+// stable across re-renders.
+const OUTLINE_COLLAPSE_KEY = 'codemap.outline.collapsed';
+function loadCollapsed() {
+  try {
+    const raw = localStorage.getItem(OUTLINE_COLLAPSE_KEY);
+    return raw ? (JSON.parse(raw) || {}) : {};
+  } catch { return {}; }
+}
+function saveCollapsed(state) {
+  try { localStorage.setItem(OUTLINE_COLLAPSE_KEY, JSON.stringify(state)); } catch {}
+}
+function setGroupCollapsed(key, collapsed) {
+  const state = loadCollapsed();
+  if (collapsed) state[key] = true; else delete state[key];
+  saveCollapsed(state);
+  applyCollapsedState();
+}
+function applyCollapsedState() {
+  const state = loadCollapsed();
+  document.querySelectorAll('.bc-group[data-target]').forEach(header => {
+    const key = header.getAttribute('data-target');
+    const list = document.getElementById(key);
+    const collapsed = !!state[key];
+    header.classList.toggle('collapsed', collapsed);
+    if (list) list.classList.toggle('collapsed', collapsed);
+  });
+  document.querySelectorAll('.ext-section-title[data-target]').forEach(header => {
+    const key = header.getAttribute('data-target');
+    const list = document.getElementById(key);
+    const collapsed = !!state[key];
+    header.classList.toggle('collapsed', collapsed);
+    if (list) list.classList.toggle('collapsed', collapsed);
+  });
+}
+// Wire up header clicks (delegated so it works across re-renders).
+document.addEventListener('click', e => {
+  const t = e.target;
+  if (!t || !(t instanceof Element)) return;
+  // Don't capture clicks on the reset/toggle-all controls inside titles.
+  if (t.closest('#outlineReset, #outlineCollapseAll, #outlineExpandAll')) return;
+  const header = t.closest('.bc-group[data-target], .ext-section-title[data-target]');
+  if (!header) return;
+  const key = header.getAttribute('data-target');
+  const state = loadCollapsed();
+  setGroupCollapsed(key, !state[key]);
+});
+function allGroupKeys() {
+  const keys = [];
+  document.querySelectorAll('.bc-group[data-target], .ext-section-title[data-target]')
+    .forEach(h => keys.push(h.getAttribute('data-target')));
+  return keys;
+}
+const collapseAllEl = document.getElementById('outlineCollapseAll');
+if (collapseAllEl) collapseAllEl.addEventListener('click', e => {
+  e.stopPropagation();
+  const state = {};
+  allGroupKeys().forEach(k => { state[k] = true; });
+  saveCollapsed(state);
+  applyCollapsedState();
+});
+const expandAllEl = document.getElementById('outlineExpandAll');
+if (expandAllEl) expandAllEl.addEventListener('click', e => {
+  e.stopPropagation();
+  saveCollapsed({});
+  applyCollapsedState();
+});
+// Initial paint after first renderOutline().
+setTimeout(applyCollapsedState, 0);
 const searchInputEl = document.getElementById('searchInput');
 if (searchInputEl) {
   searchInputEl.addEventListener('input', () => {
@@ -2541,6 +2707,11 @@ function renderStats() {
   setText('repoScope', meta.scope ? `· ${meta.scope}` : '');
   setText('repoStats', meta.fileCountText ? `· ${meta.fileCountText}` : '');
   setText('scopePill', meta.scopePill || '📦 WORKSPACE');
+  // Outline header summary — counts the data we actually rendered, not the
+  // fixture's hardcoded "14 classes · 51 methods".
+  const classCount = CLASSES.length;
+  const methodCount = CLASSES.reduce((sum, c) => sum + (c.methods ? c.methods.length : 0), 0);
+  setText('outlineCount', `${classCount} classes · ${methodCount} methods`);
 
   const stats = __INJ.stats;
   if (stats) {
@@ -2606,8 +2777,13 @@ window.postMarkRead = postMarkRead;
 
 setTimeout(() => {
   if (CLASSES.length === 0) return;
-  const first = [...CLASSES].sort((a,b) => (a.readingPriority ?? 99) - (b.readingPriority ?? 99))[0];
-  selectClass(first.id);
+  // Prefer an explicitly chosen node (set by /focus etc.) so the right card
+  // opens automatically. Fall back to reading-order #1 for the generic
+  // workspace generate case.
+  const hint = (__INJ.meta && __INJ.meta.selectedNodeId) || null;
+  const picked = (hint && CLASSES.find(c => c.id === hint))
+    || [...CLASSES].sort((a,b) => (a.readingPriority ?? 99) - (b.readingPriority ?? 99))[0];
+  selectClass(picked.id);
 }, 100);
 
 </script>

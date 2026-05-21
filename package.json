@@ -9,14 +9,36 @@
     "type": "git",
     "url": "https://github.com/changjian-wang/codemap.git"
   },
+  "bugs": {
+    "url": "https://github.com/changjian-wang/codemap/issues"
+  },
+  "homepage": "https://github.com/changjian-wang/codemap#readme",
+  "keywords": [
+    "call graph",
+    "uml",
+    "code map",
+    "architecture",
+    "copilot",
+    "chat participant",
+    "language model",
+    "code reading",
+    "code review",
+    "visualization"
+  ],
+  "galleryBanner": {
+    "color": "#0b0d12",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Visualization",
-    "Other"
+    "AI",
+    "Chat",
+    "Visualization"
   ],
   "main": "./dist/extension.js",
+  "icon": "media/icon.png",
   "extensionDependencies": [
     "GitHub.copilot-chat"
   ],

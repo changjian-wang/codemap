@@ -6,12 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.0.4 — 2026-05-20
 
-Hotfix on v0.0.3. The v3 calibrator change shipped a regression that
-flagged every C# type as `unverified` because the new "top-level"
-detection used recursion depth (`depth === 0`) — but C# Dev Kit wraps a
-file's contents in a `namespace` DocumentSymbol, putting every actual
-class at depth 1. The eval round on `lumen/apps/api/src` returned 119/119
-unverified and Edges F1=0.88. Pure recommended upgrade from 0.0.3.
+Hotfix on v0.0.3 plus a packaging / Marketplace pass. The v3 calibrator
+change shipped a regression that flagged every C# type as `unverified`
+because the new "top-level" detection used recursion depth
+(`depth === 0`) — but C# Dev Kit wraps a file's contents in a
+`namespace` DocumentSymbol, putting every actual class at depth 1. The
+eval round on `lumen/apps/api/src` returned 119/119 unverified and Edges
+F1=0.88. Same release ships the extension icon, fills in the Marketplace
+storefront metadata, trims the dev-only mockup HTML out of the VSIX, and
+corrects a bounded-context classification regression in the `/focus`
+cache-miss path. Pure recommended upgrade from 0.0.3.
 
 ### Fixed
 - **"Top-level type" is now defined by ancestry, not depth.** A symbol is
@@ -28,6 +32,34 @@ unverified and Edges F1=0.88. Pure recommended upgrade from 0.0.3.
   nested types inside `Class` / `Struct` / `Interface`, nested
   namespaces, file-root types (TS / Python / JS), and the kind / line
   passthrough.
+- **`/focus` cache-miss path mis-classified the bounded context of newly
+  discovered classes.** `deep-focus.ts` was reading
+  `classify(file).boundedContext`, which doesn't exist on
+  `BcClassification` (the real field is `.bucket`). Cache-miss nodes
+  ended up with `undefined` as their bc and lost color in the UML view.
+
+### Added
+- **Extension icon** (`media/icon.png`, 128×128). Three UML class boxes
+  in the mockup palette (capture / recall / host) connected by call
+  edges — the same metaphor the WebView renders.
+- **Marketplace storefront metadata**: `keywords`, `bugs`, `homepage`,
+  `galleryBanner` (dark theme, color matched to the WebView background).
+
+### Changed
+- **Marketplace categories**: `["Visualization", "Other"]` →
+  `["AI", "Chat", "Visualization"]` so the extension shows up under the
+  AI / Chat storefront sections, not just the catch-all Other bucket.
+- **`.vscodeignore` excludes `docs/mockups/**` and `media/*.svg`.** The
+  118 KB `lumen-backend-v3.html` design reference and the editable SVG
+  icon source were getting bundled into the VSIX; only the runtime PNG
+  ships now. Final VSIX: 12 files / 325 KB (was 352 KB before the
+  exclusion).
+- **README status line** updated from `v0.0.1` to reflect the current
+  release.
+- **CONTRIBUTING.md**: corrected the stale test-count snippet
+  (`181 tests, ~4s` → `247 tests, ~1.5s`) and replaced an inherited
+  template note about a non-existent ESLint plugin with the actual
+  `npm run lint` (tsc) guidance.
 
 ## 0.0.3 — 2026-05-20
 

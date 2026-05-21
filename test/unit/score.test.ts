@@ -128,4 +128,73 @@ describe('scoreGraph', () => {
     expect(r.diff.missingEdges).toEqual([{ from: 'B', to: 'C' }]);
     expect(r.diff.extraEdges).toEqual([{ from: 'A', to: 'C' }]);
   });
+
+  describe('ignoreEdgeToPrefixes (v3.7.1 — strip BCL / infra noise)', () => {
+    it('drops matching edges from BOTH sides so neither precision nor recall is biased', () => {
+      // actual has 1 business edge (A→B), 1 BCL noise edge (A→ext:File).
+      // golden expects 1 business edge (A→B), 1 BCL noise edge (A→ext:JsonDocument).
+      // Without ignore: actual={A→B, A→ext:File}, expected={A→B, A→ext:JsonDocument}
+      //   → P = 1/2 = 0.5, R = 1/2 = 0.5
+      // With `ignoreEdgeToPrefixes: ['ext:File', 'ext:JsonDocument']`:
+      //   actual_filtered = {A→B}, expected_filtered = {A→B}
+      //   → P = R = 1.0
+      const actual = G(
+        [N('A', 'a.ts'), N('B', 'b.ts')],
+        [{ from: 'A', to: 'B' }, { from: 'A', to: 'ext:File.WriteAllText' }],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['A', 'B'],
+        edges: [
+          { from: 'A', to: 'B' },
+          { from: 'A', to: 'ext:JsonDocument', kind: 'external_calls' },
+        ],
+        ignoreEdgeToPrefixes: ['ext:File', 'ext:JsonDocument'],
+      };
+      const r = scoreGraph(actual, golden);
+      expect(r.edges.precision).toBe(1);
+      expect(r.edges.recall).toBe(1);
+      // Diff should also reflect post-ignore reality.
+      expect(r.diff.missingEdges).toEqual([]);
+      expect(r.diff.extraEdges).toEqual([]);
+    });
+
+    it('matches by prefix (e.g. `ext:Dapper` covers `ext:Dapper.CommandDefinition`)', () => {
+      const actual = G(
+        [N('A', 'a.ts')],
+        [
+          { from: 'A', to: 'ext:Dapper' },
+          { from: 'A', to: 'ext:Dapper.CommandDefinition' },
+          { from: 'A', to: 'ext:Dawning.Sdk' }, // not ignored (Dawning is business)
+        ],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['A'],
+        edges: [{ from: 'A', to: 'ext:Dawning.Sdk', kind: 'external_calls' }],
+        ignoreEdgeToPrefixes: ['ext:Dapper'],
+      };
+      const r = scoreGraph(actual, golden);
+      // After filter: actual = {A→ext:Dawning.Sdk}, expected = {A→ext:Dawning.Sdk}
+      expect(r.edges.precision).toBe(1);
+      expect(r.edges.recall).toBe(1);
+    });
+
+    it('is a no-op when the field is missing (backward compat)', () => {
+      const actual = G(
+        [N('A', 'a.ts'), N('B', 'b.ts')],
+        [{ from: 'A', to: 'B' }, { from: 'A', to: 'ext:File.WriteAllText' }],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['A', 'B'],
+        edges: [{ from: 'A', to: 'B' }],
+        // no ignoreEdgeToPrefixes
+      };
+      const r = scoreGraph(actual, golden);
+      // ext:File.WriteAllText is an extra edge — precision should still be penalised.
+      expect(r.edges.precision).toBe(1 / 2);
+      expect(r.edges.recall).toBe(1);
+    });
+  });
 });

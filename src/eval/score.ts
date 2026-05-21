@@ -30,6 +30,14 @@ export interface GoldenSample {
   nodes: string[];
   /** Expected calls/external_calls edges (kind defaults to 'calls'). */
   edges: { from: string; to: string; kind?: 'calls' | 'external_calls' }[];
+  /**
+   * Edge-target prefixes to ignore on BOTH sides (expected and actual)
+   * before scoring. Use for BCL / common infra noise that is not a useful
+   * "business dependency" signal in a codemap, e.g. `ext:System.`,
+   * `ext:File`, `ext:Dapper`. A prefix matches when the edge's `to` field
+   * starts with the prefix string. Empty / missing means "score everything".
+   */
+  ignoreEdgeToPrefixes?: string[];
 }
 
 export interface EvalScore {
@@ -80,10 +88,19 @@ export function scoreGraph(actual: CodeMapGraph, golden: GoldenSample): ScoreRes
   const nodeR = ratio(nodeIntersection.length, expectedNodeIds.size);
 
   // ---- Score edges, but only consider edges whose `from` is in scope ----
+  // and whose `to` is not on the ignore-prefix list (applied double-sided so
+  // it never artificially boosts precision OR recall).
   const edgeKey = (e: { from: string; to: string }): string => `${e.from}|${e.to}`;
-  const actualEdgesInScope = actual.edges.filter(e => actualNodeIds.has(e.from));
+  const ignorePrefixes = golden.ignoreEdgeToPrefixes ?? [];
+  const isIgnoredEdge = (e: { to: string }): boolean =>
+    ignorePrefixes.some(p => e.to.startsWith(p));
+  const actualEdgesInScope = actual.edges.filter(
+    e => actualNodeIds.has(e.from) && !isIgnoredEdge(e),
+  );
   const actualEdgeKeys = new Set(actualEdgesInScope.map(edgeKey));
-  const expectedEdgeKeys = new Set(golden.edges.map(edgeKey));
+  const expectedEdgeKeys = new Set(
+    golden.edges.filter(e => !isIgnoredEdge(e)).map(edgeKey),
+  );
 
   const edgeIntersection = [...actualEdgeKeys].filter(k => expectedEdgeKeys.has(k));
   const missingEdgeKeys = [...expectedEdgeKeys].filter(k => !actualEdgeKeys.has(k));

@@ -5,6 +5,7 @@ import type { SymbolProvider } from '../calibration/symbol-provider';
 import type { LlmClient } from '../llm/client';
 import { scanWorkspace, type ScanOptions, DEFAULT_SCAN_OPTIONS } from './workspace-scanner';
 import { bucketAll } from './bc-classifier';
+import { detectInternalNamespaces } from './internal-namespace-detector';
 import { SingleFileAnalyzer, type AnalyzeResult } from './single-file-analyzer';
 import { runParallel } from './parallel-runner';
 import { aggregate } from './aggregator';
@@ -146,7 +147,7 @@ export async function runOrchestrator(
   const classified = bucketAll(skeleton);
   if (token.isCancellationRequested) throw new CancelledError();
 
-  // ---- Step 2.5: pre-read file texts + predict cache coverage ----
+  // ---- Step 2.5: pre-read file texts + detect internal namespaces + probe cache ----
   //
   // Reading every skeleton file in parallel is cheap (~50ms for 80 .cs
   // files). The payoff: we can compute the cache hit rate BEFORE deciding
@@ -154,47 +155,82 @@ export async function runOrchestrator(
   // even on a small solution; if every file is already cached, the LSP
   // never gets touched and waiting on warmup is pure friction.
   //
+  // We also use the pre-read texts to detect the workspace's internal
+  // namespace roots (v3.8); the result feeds both the LLM hint and the
+  // AnalyzerCache salt, so a change in detected roots invalidates the
+  // cache for every file in scope.
+  //
   // Side benefit: each worker reuses the pre-read text instead of
   // re-reading from disk.
   events.onStep?.(`Pre-reading ${skeleton.length} files and probing cache`);
   const entryPointSet = new Set(scan.entryPoints);
+  const bucketByFile = new Map(classified.map(c => [c.file, c.bucket] as const));
+
+  // Pass 1: read every skeleton file's text in parallel.
+  const textByFile = new Map<string, string>();
+  await Promise.all(
+    skeleton.map(async file => {
+      const text = await deps.reader.readText(file);
+      if (text !== undefined) textByFile.set(file, text);
+    }),
+  );
+  if (token.isCancellationRequested) throw new CancelledError();
+
+  // Pass 2: detect internal namespace roots from the texts we just read
+  // plus the workspace-root `package.json` (if any). The reader returns
+  // `undefined` when the file is missing, so a non-Node project just
+  // skips the TS contribution silently.
+  const packageJsonText = await deps.reader.readText('package.json');
+  const internalNamespaceRoots = detectInternalNamespaces({
+    filesWithText: textByFile,
+    packageJsonText,
+  });
+  if (internalNamespaceRoots.length > 0) {
+    events.onStep?.(
+      `Detected ${internalNamespaceRoots.length} internal namespace root(s): ` +
+        internalNamespaceRoots.slice(0, 5).join(', ') +
+        (internalNamespaceRoots.length > 5 ? `, ... (+${internalNamespaceRoots.length - 5} more)` : ''),
+    );
+  }
+
   // Build a deterministic salt per file so the cache key folds in the
   // workspace-scanner-derived hints we now embed in the user message.
   // Same scope on the same workspace → same salt; different scope (which
   // gives different inbound lists) → different salt → cache miss, as
-  // intended. See AnalyzerCache.key for the rationale.
+  // intended. v3.8: salt also folds in the global internal-namespace
+  // roots so a change to those (new module added, etc.) re-asks the LLM.
+  // See AnalyzerCache.key for the rationale.
+  const namespaceSaltSegment = `ns:${internalNamespaceRoots.join(',')}`;
   const computeHintSalt = (file: string, bucket: string): string => {
     const inbound = scan.inbound.get(file) ?? [];
     return [
       `bc:${bucket}`,
       `entry:${entryPointSet.has(file) ? '1' : '0'}`,
       `in:${[...inbound].sort().join(',')}`,
+      namespaceSaltSegment,
     ].join('|');
   };
-  const bucketByFile = new Map(classified.map(c => [c.file, c.bucket] as const));
+
+  // Pass 3: compute cache keys + probe cache.
   interface PrecheckEntry {
     text: string;
     cacheKey: string;
     cached: AnalyzeResult | undefined;
   }
   const preCheck = new Map<string, PrecheckEntry>();
-  await Promise.all(
-    skeleton.map(async file => {
-      const text = await deps.reader.readText(file);
-      if (text === undefined) return;
-      const bucket = bucketByFile.get(file) ?? '';
-      const cacheKey = deps.cache
-        ? AnalyzerCacheClass.key(
-            `${PROMPT_VERSION}/${CALIBRATOR_VERSION}`,
-            file,
-            text,
-            computeHintSalt(file, bucket),
-          )
-        : '';
-      const cached = deps.cache?.get(cacheKey);
-      preCheck.set(file, { text, cacheKey, cached });
-    }),
-  );
+  for (const [file, text] of textByFile) {
+    const bucket = bucketByFile.get(file) ?? '';
+    const cacheKey = deps.cache
+      ? AnalyzerCacheClass.key(
+          `${PROMPT_VERSION}/${CALIBRATOR_VERSION}`,
+          file,
+          text,
+          computeHintSalt(file, bucket),
+        )
+      : '';
+    const cached = deps.cache?.get(cacheKey);
+    preCheck.set(file, { text, cacheKey, cached });
+  }
   if (token.isCancellationRequested) throw new CancelledError();
   const cacheMissCount = Array.from(preCheck.values()).filter(p => !p.cached).length;
 
@@ -289,6 +325,7 @@ export async function runOrchestrator(
         token,
         isEntryPoint: entryPointSet.has(file),
         inboundImports: scan.inbound.get(file) ?? [],
+        internalNamespaceRoots,
       });
       if (deps.cache && cacheKey) {
         // Fire-and-forget the write; the cache itself dedupes pending writes.

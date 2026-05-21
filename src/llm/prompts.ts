@@ -35,8 +35,14 @@ import { ENTRY_GUIDANCE_SECTION } from './entry-detection';
  *          "does anyone else call me?" — the scanner already knows.
  *          Closes the v3.5 false-positive cluster on `public_api` and
  *          stabilises the `cli_main` synthesis on top-level Program files.
+ *   v3.8 — user message now also carries the set of internal namespace
+ *          roots detected from workspace source (C# `namespace X.Y.Z;`
+ *          declarations and the root `package.json` name). The LLM is
+ *          forbidden from emitting `ext:Root.*` external_calls for any
+ *          root in that list. Closes the v3.7 edge-precision gap on
+ *          codebases that declare their own multi-level namespaces.
  */
-export const PROMPT_VERSION = 'v3.7';
+export const PROMPT_VERSION = 'v3.8';
 
 export const SYSTEM_PROMPT = `You are CodeMap's static-analysis assistant. Read the source file given by
 the user and emit one structured metadata block per top-level type
@@ -214,6 +220,18 @@ export interface FileContextHints {
    * The distinction matters for `public_api` detection.
    */
   inboundImports?: string[];
+  /**
+   * Workspace-internal namespace roots (v3.8). Each root is the first
+   * segment of a namespace declared somewhere in the workspace (e.g.
+   * `Lumen` for `namespace Lumen.Modules.Capture { … }`). The LLM is
+   * instructed never to emit `ext:Root.*` external_calls for any of these
+   * roots — they belong to the project, not to an external SDK.
+   *
+   * Empty list / undefined means "no roots detected" (script-only project,
+   * or a language family the detector doesn't cover yet) — the rule then
+   * doesn't fire and the LLM falls back to its usual heuristics.
+   */
+  internalNamespaceRoots?: string[];
 }
 
 /**
@@ -247,6 +265,11 @@ export function buildUserMessage(
       for (const f of shown) lines.push(`  - ${f}`);
       if (moreCount > 0) lines.push(`  - ... and ${moreCount} more`);
     }
+  }
+  if (hints.internalNamespaceRoots && hints.internalNamespaceRoots.length > 0) {
+    lines.push(
+      `Internal namespace roots (workspace-defined, NOT external): ${hints.internalNamespaceRoots.join(', ')}`,
+    );
   }
   lines.push('');
   lines.push('```');

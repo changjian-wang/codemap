@@ -51,6 +51,13 @@ export interface AnalyzeInput {
    */
   inboundImports?: string[];
   /**
+   * Internal namespace roots detected from workspace source (v3.8). The
+   * LLM is forbidden from emitting `ext:Root.*` for any of these roots.
+   * `undefined` / `[]` means "no roots detected" — the rule doesn't fire
+   * and the LLM uses its usual heuristics.
+   */
+  internalNamespaceRoots?: string[];
+  /**
    * Optional callback fired each time a calibrated node is ready. Lets the
    * UI stream nodes into the WebView as they come in (v3 plan §4 streaming
    * design); call site can ignore it for a batched workflow.
@@ -71,6 +78,7 @@ export class SingleFileAnalyzer {
       boundedContext,
       isEntryPoint: input.isEntryPoint,
       inboundImports: input.inboundImports,
+      internalNamespaceRoots: input.internalNamespaceRoots,
     });
     const lang = detectLang(file);
 

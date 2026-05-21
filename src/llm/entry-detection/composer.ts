@@ -6,6 +6,7 @@ import {
   SYNTHESIZED_PROGRAM_RULE,
   ENTRY_META_FIELD_RULE,
   WORKSPACE_HINTS_RULE,
+  INTERNAL_NAMESPACE_RULE,
 } from './universal';
 
 const ENTRY_KIND_LABEL: Record<(typeof ENTRY_KIND_ORDER)[number], string> = {
@@ -57,6 +58,7 @@ Set \`is_entry: true\` only when one of the per-language triggers below matches 
   sections.push(SYNTHESIZED_PROGRAM_RULE);
   sections.push(ENTRY_META_FIELD_RULE);
   sections.push(WORKSPACE_HINTS_RULE);
+  sections.push(INTERNAL_NAMESPACE_RULE);
 
   return sections.join('\n\n');
 }

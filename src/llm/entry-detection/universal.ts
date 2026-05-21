@@ -128,7 +128,7 @@ If the appropriate field is empty (e.g. a \`cli_main\` with no defined subcomman
  */
 export const WORKSPACE_HINTS_RULE = `**Using the workspace hints in the user message**
 
-The user message may include three structured hints before the source block: \`Bounded context\`, \`Entry-point filename match\`, and \`Inbound imports (workspace scan)\`. These come from a deterministic static scan, not heuristics — trust them.
+The user message may include four structured hints before the source block: \`Bounded context\`, \`Entry-point filename match\`, \`Inbound imports (workspace scan)\`, and \`Internal namespace roots\`. These come from a deterministic static scan, not heuristics — trust them.
 
 Hard rules when hints are present:
 
@@ -138,3 +138,27 @@ Hard rules when hints are present:
 - **No hints present** → treat the call graph as unknown; fall back to the per-language triggers and the universal negatives.
 
 The hints never override the universal negatives: a \`*Service\` / \`*Repository\` / \`*Helper\` is still not an entry point even if its filename matches a pattern.`;
+
+/**
+ * Markdown block: how to use the workspace-internal namespace roots hint
+ * that v3.8 inlines into the user message.
+ *
+ * The single biggest source of edge-precision noise on the lumen review
+ * was the LLM tagging types like `Lumen.Modules.Capture.AssemblyMarker`
+ * as `ext:` (external) because it could see them only via `using`
+ * directives and didn't know which namespaces were workspace-internal.
+ * The scanner now extracts the set of declared namespace roots and the
+ * LLM is forbidden from putting them behind `ext:`. Project-agnostic:
+ * the rule fires off whatever roots the scanner actually found, with no
+ * hard-coded project strings.
+ */
+export const INTERNAL_NAMESPACE_RULE = `**Using \`Internal namespace roots\`**
+
+When the user message lists \`Internal namespace roots (workspace-defined, NOT external): A, B, C\`, every type whose fully-qualified name starts with one of those roots is part of THIS workspace, not an external SDK / package. Hard rules:
+
+- **Never emit \`ext:<Root>.*\`** in \`external_calls\` for any listed root. If you would have emitted \`ext:Lumen.Modules.Capture.AssemblyMarker\` and \`Lumen\` is listed, drop the \`ext:\` prefix and the namespace path — emit just \`AssemblyMarker\` (the calibrator will resolve it to the workspace node, or drop it if it doesn't exist). The same goes for nested cases: \`Lumen.Shared.Infrastructure.Persistence.MigrationRunner\` with \`Lumen\` listed → \`MigrationRunner\`.
+- **Cross-namespace references inside the workspace are still in scope** — a class in \`Lumen.Modules.Capture\` that calls into \`Lumen.Shared.Infrastructure.Persistence\` is still calling workspace code; emit the bare type name in \`external_calls\` (cross-file) or \`calls\` (in-file), not \`ext:Lumen.…\`.
+- **The rule is a strict prefix match.** \`ext:Lumens.Foo\` (with the trailing \`s\`) is NOT covered by \`Lumen\`; \`ext:Microsoft.Lumen.X\` is NOT covered by \`Lumen\` because \`Microsoft\` is the first segment. Only the leading segment counts.
+- **No roots listed** (or no hint present at all) → fall back to your normal \`ext:\` decisions for \`using\` / \`import\` based types.
+
+This rule only changes the **prefix** used in \`external_calls\` — it does not change which types you list. If you would have omitted a type as too trivial (a BCL primitive, framework plumbing per the existing skip list), still omit it.`;

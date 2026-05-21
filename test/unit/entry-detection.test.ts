@@ -54,6 +54,14 @@ describe('entry-detection composer', () => {
     expect(out.indexOf('**Synthesized Program for top-level statements**')).toBeGreaterThan(langAt);
     expect(out.indexOf('**`entry_meta` field-to-kind mapping (strict)**')).toBeGreaterThan(langAt);
   });
+
+  it('emits the v3.8 internal-namespace rule after the workspace-hints block', () => {
+    const out = composeEntryGuidance([DOTNET_RULES]);
+    const hintsAt = out.indexOf('Using the workspace hints');
+    const nsAt = out.indexOf('Using `Internal namespace roots`');
+    expect(hintsAt).toBeGreaterThan(-1);
+    expect(nsAt).toBeGreaterThan(hintsAt);
+  });
 });
 
 describe('SYSTEM_PROMPT integration', () => {
@@ -76,14 +84,20 @@ describe('SYSTEM_PROMPT integration', () => {
     expect(SYSTEM_PROMPT).toContain('top-level statements');
   });
 
-  it('declares PROMPT_VERSION v3.7', () => {
-    expect(PROMPT_VERSION).toBe('v3.7');
+  it('declares PROMPT_VERSION v3.8', () => {
+    expect(PROMPT_VERSION).toBe('v3.8');
   });
 
   it('includes the workspace-hints rule (fixes v3.6 cross-file blindness)', () => {
     expect(SYSTEM_PROMPT).toContain('Using the workspace hints in the user message');
     expect(SYSTEM_PROMPT).toContain('CANNOT be `public_api`');
     expect(SYSTEM_PROMPT).toContain('Inbound imports (workspace scan)');
+  });
+
+  it('includes the v3.8 internal-namespace rule (fixes ext:Lumen.* false positives)', () => {
+    expect(SYSTEM_PROMPT).toContain('Using `Internal namespace roots`');
+    expect(SYSTEM_PROMPT).toContain('Never emit `ext:<Root>.*`');
+    expect(SYSTEM_PROMPT).toContain('strict prefix match');
   });
 });
 
@@ -160,5 +174,21 @@ describe('buildUserMessage (v3.7 hints)', () => {
   it('omits the inbound block entirely when undefined (no scan data)', () => {
     const out = buildUserMessage('src/Foo.cs', src, { boundedContext: 'capture' });
     expect(out).not.toContain('Inbound imports');
+  });
+
+  it('emits internal namespace roots when supplied (v3.8)', () => {
+    const out = buildUserMessage('src/Foo.cs', src, {
+      internalNamespaceRoots: ['Lumen', 'codemap'],
+    });
+    expect(out).toContain(
+      'Internal namespace roots (workspace-defined, NOT external): Lumen, codemap',
+    );
+  });
+
+  it('omits the internal-namespace line when roots are empty or absent', () => {
+    const empty = buildUserMessage('src/Foo.cs', src, { internalNamespaceRoots: [] });
+    expect(empty).not.toContain('Internal namespace roots');
+    const absent = buildUserMessage('src/Foo.cs', src, {});
+    expect(absent).not.toContain('Internal namespace roots');
   });
 });

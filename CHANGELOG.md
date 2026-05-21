@@ -4,6 +4,83 @@ All notable changes to this extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.5 — 2026-05-21
+
+Recall pass. v0.0.4's v3.5 prompt spike traded recall for precision —
+correctly tagging entry points but losing two thirds of the non-entry
+nodes on `lumen/apps/api/src` (nodes R 0.99 → 0.67). This release puts
+the recall back without giving up the entry-point semantics, and adds
+a small scorer change so the eval numbers stop being dominated by BCL
+plumbing.
+
+Two architectural changes drive it. First, the monolithic entry-point
+prompt section is decomposed into per-language rule files
+(`src/llm/entry-detection/rules/{dotnet,python,node}.ts`) composed with
+five universal blocks; `PROMPT_VERSION` is now `v3.6` and
+`CALIBRATOR_VERSION` is now `v5`. Second, every per-file LLM analysis
+now sees scanner-derived cross-file context — bounded context bucket,
+whether the file is an entry point, and the list of in-skeleton files
+that statically import it — folded into the user message and into the
+AnalyzerCache key so changing scope produces correct cache misses
+(`PROMPT_VERSION v3.7`). The scoring change (`v3.7.1`) is purely an
+eval-side feature: golden samples may now declare
+`ignoreEdgeToPrefixes`, and the scorer strips those prefixes from both
+expected and actual before computing P/R/F1.
+
+Net on `lumen/apps/api/src` against the cached v3.5 baseline:
+
+| Metric    | v0.0.4 (v3.5) | v0.0.5 (v3.7.1) |
+| --------- | ------------- | --------------- |
+| Nodes P/R | 0.99 / 0.67   | 0.98 / 0.99     |
+| Edges P/R | 0.93 / 0.78   | 0.79 / 0.97     |
+| Edges F1  | 0.85          | 0.87            |
+
+Edge precision regressed because the LLM still over-tags some internal
+classes as `ext:*` (e.g. `ext:Lumen.Modules.Capture.AssemblyMarker`);
+that fix is queued for v0.0.6 as a workspace-agnostic
+internal-namespace hint. Pure recommended upgrade from 0.0.4 for any
+codebase with >20 source files.
+
+### Added
+- **`src/llm/entry-detection/`** — per-language rule files
+  (`rules/dotnet.ts`, `rules/python.ts`, `rules/node.ts`) plus five
+  universal rule blocks (no entry, public_api hardening, synthesized
+  Program for top-level statements, entry_meta strict mapping,
+  workspace-hints). Adding a new language is one file in `rules/`.
+  Composed by `composer.ts` into the entry-point section of the
+  system prompt.
+- **Scanner cross-file hints in the LLM user message.**
+  `workspace-scanner.ts` now exposes `ScanResult.inbound: Map<string,
+  string[]>` built during BFS and filtered to skeleton membership on
+  both sides. The orchestrator threads `boundedContext`,
+  `isEntryPoint`, and `inboundImports` into each per-file analyzer
+  call; `prompts.ts:buildUserMessage` renders them as a `Workspace
+  Hints:` block. A non-empty `inboundImports` is a hard rule against
+  tagging the file as `public_api`.
+- **`AnalyzerCache.key` gained a `hintSalt` parameter.** The salt
+  format is `bc:${bucket}|entry:${0|1}|in:${sortedInbound.join(',')}`,
+  so two scopes that produce different cross-file context for the
+  same file get different cache keys.
+- **`GoldenSample.ignoreEdgeToPrefixes?: string[]`.** Edge-target
+  prefixes that should be stripped from BOTH expected and actual edge
+  sets before scoring. Use for BCL / common infra noise (`ext:System`,
+  `ext:Microsoft`, `ext:Dapper`, …) so the metric reflects business
+  edges only.
+
+### Changed
+- **`PROMPT_VERSION`** `v3.5` → `v3.7` and **`CALIBRATOR_VERSION`**
+  `v4` → `v5`. AnalyzerCache invalidates entries from the v3.5
+  prompt automatically; symbol-provider cache invalidates entries
+  from the v4 calibrator. Existing `.codemap/` GraphStore values
+  are not affected.
+- **Calibrator strips `kind=*` prefix from entity-form symbol
+  probes** before matching against the LSP symbol table, so
+  `kind=class:Foo` correctly resolves to `Foo`. Fixes the v3.5
+  spike's false-positive `unverified` on every kind-tagged probe.
+
+### Fixed
+- *(none — this is a feature release.)*
+
 ## 0.0.4 — 2026-05-20
 
 Hotfix on v0.0.3 plus a packaging / Marketplace pass. The v3 calibrator

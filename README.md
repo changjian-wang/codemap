@@ -2,7 +2,7 @@
 
 > Interactive UML-style call graph + reading guidance for AI-generated code, packaged as a VS Code chat participant.
 
-**Status:** v0.0.3 — render-blanking fix + prompt v3.4 (drops framework plumbing from `external_calls`).
+**Status:** v0.0.5 — prompt v3.7 (decoupled entry detection + workspace cross-file hints) and eval v3.7.1 (BCL/infra noise filtering).
 
 ![CodeMap UI](https://raw.githubusercontent.com/changjian-wang/codemap/main/docs/media/screenshot.png)
 

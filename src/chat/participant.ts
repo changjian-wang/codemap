@@ -411,6 +411,11 @@ async function handleEval(
     const tail = sc.diff.missingEdges.length > 10 ? ` _(+${sc.diff.missingEdges.length - 10} more)_` : '';
     lines.push('', `**Missing edges (${sc.diff.missingEdges.length}):**`, showE.map(e => `- \`${e.from}\` → \`${e.to}\``).join('\n') + tail);
   }
+  if (sc.diff.extraEdges.length > 0) {
+    const showE = sc.diff.extraEdges.slice(0, 20);
+    const tail = sc.diff.extraEdges.length > 20 ? ` _(+${sc.diff.extraEdges.length - 20} more)_` : '';
+    lines.push('', `**Extra edges (${sc.diff.extraEdges.length}):**`, showE.map(e => `- \`${e.from}\` → \`${e.to}\``).join('\n') + tail);
+  }
   response.markdown(lines.join('\n'));
 }
 

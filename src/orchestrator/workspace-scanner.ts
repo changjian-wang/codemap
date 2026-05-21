@@ -82,6 +82,19 @@ export interface ScanResult {
   skeleton: string[];
   /** Files we found but did not include due to {@link ScanOptions.maxFiles}. */
   overflow: string[];
+  /**
+   * Workspace-relative inbound adjacency: `inbound[target]` is the list of
+   * skeleton files whose static imports resolve to `target`. Built as a
+   * by-product of the BFS so it is free; we expose it because the
+   * single-file analyzer needs to tell the LLM "this class is called from
+   * those files" — that's the only way to disambiguate `public_api`
+   * (no in-workspace callers) from a normal internal class without showing
+   * the LLM every other file in the workspace.
+   *
+   * Stable ordering: discovery order during BFS. A target with zero
+   * inbound edges is omitted from the map (not stored as `[]`).
+   */
+  inbound: Map<string, string[]>;
 }
 
 const ENTRY_PATTERNS: RegExp[] = [
@@ -171,6 +184,7 @@ export async function scanWorkspace(
       ? Math.min(eligible.length, Math.max(options.maxFiles * 3, 60))
       : options.maxFiles;
   const inDegree = new Map<string, number>();
+  const inboundFiles = new Map<string, string[]>();
   const depthOf = new Map<string, number>();
   const queue: { file: string; depth: number }[] = seeds.map(f => ({ file: f, depth: 0 }));
 
@@ -196,6 +210,13 @@ export async function scanWorkspace(
       // (a util imported by 5 callers should rank higher than one imported
       // by 1, regardless of BFS discovery order).
       inDegree.set(resolved, (inDegree.get(resolved) ?? 0) + 1);
+      // Adjacency: record the caller. Dedupe preserves first-seen order.
+      let inbound = inboundFiles.get(resolved);
+      if (!inbound) {
+        inbound = [];
+        inboundFiles.set(resolved, inbound);
+      }
+      if (!inbound.includes(file)) inbound.push(file);
       if (seen.has(resolved)) continue;
       queue.push({ file: resolved, depth: depth + 1 });
     }
@@ -259,7 +280,17 @@ export async function scanWorkspace(
 
   const finalSet = new Set(finalSkeleton);
   const overflow = eligible.filter(f => !finalSet.has(f));
-  return { entryPoints, skeleton: finalSkeleton, overflow };
+  // Filter the inbound map to only contain files that survived the
+  // skeleton cut on BOTH sides — keys must be in the final skeleton, and
+  // each caller in the value list must be too. Stale entries would
+  // confuse the LLM ("this caller doesn't exist in my graph").
+  const inbound = new Map<string, string[]>();
+  for (const [target, callers] of inboundFiles) {
+    if (!finalSet.has(target)) continue;
+    const filtered = callers.filter(c => finalSet.has(c));
+    if (filtered.length > 0) inbound.set(target, filtered);
+  }
+  return { entryPoints, skeleton: finalSkeleton, overflow, inbound };
 }
 
 /** Heuristic: files whose basename is a common assembly-scanning anchor

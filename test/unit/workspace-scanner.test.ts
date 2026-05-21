@@ -267,4 +267,77 @@ describe('scanWorkspace', () => {
     expect(r.skeleton).not.toContain('src/Lumen.Modules.Notify/AssemblyMarker.cs');
     expect(r.skeleton).not.toContain('src/Lumen.Modules.Recall/ModuleAnchor.cs');
   });
+
+  describe('inbound adjacency (v3.7)', () => {
+    it('exposes a map of who-imports-me built during BFS', async () => {
+      const reader = makeReader({
+        'src/main.ts': `import { a } from './a'; import { b } from './b';`,
+        'src/a.ts': `import { c } from './c';`,
+        'src/b.ts': `import { c } from './c';`,
+        'src/c.ts': `export const c = 1;`,
+      });
+      const r = await scanWorkspace(reader);
+      // main is a seed → nobody imports it in our scan
+      expect(r.inbound.get('src/main.ts')).toBeUndefined();
+      // a and b are each imported by main
+      expect(r.inbound.get('src/a.ts')).toEqual(['src/main.ts']);
+      expect(r.inbound.get('src/b.ts')).toEqual(['src/main.ts']);
+      // c is imported by both a and b
+      expect(r.inbound.get('src/c.ts')?.sort()).toEqual(['src/a.ts', 'src/b.ts']);
+    });
+
+    it('drops callers that did not survive the skeleton cut', async () => {
+      const fs: Record<string, string> = {
+        'src/main.ts': `import { a } from './a';`,
+        'src/a.ts': `export const a = 1;`,
+      };
+      // Add many extra files so maxFiles=2 forces overflow.
+      for (let i = 0; i < 5; i++) {
+        fs['src/main.ts'] += `import './extra${i}';`;
+        fs[`src/extra${i}.ts`] = `import { a } from './a';`;
+      }
+      const reader = makeReader(fs);
+      const r = await scanWorkspace(reader, {
+        maxDepth: 3,
+        maxFiles: 2, // only main + a
+        extensions: ['.ts'],
+      });
+      expect(r.skeleton).toEqual(['src/main.ts', 'src/a.ts']);
+      // a's inbound should only include main, not the overflowed extras
+      // (even though they statically imported a, they are not in the
+      // analyzed set so listing them would mislead the LLM).
+      expect(r.inbound.get('src/a.ts')).toEqual(['src/main.ts']);
+    });
+
+    it('is empty when the scan finds no entry points', async () => {
+      const reader = makeReader({ 'src/util.ts': 'export const x = 1;' });
+      const r = await scanWorkspace(reader);
+      expect(r.inbound.size).toBe(0);
+    });
+
+    it('handles C# fill-only workspaces (no BFS expansion → empty inbound)', async () => {
+      // C# `using` does not resolve to files, so fill is the only way the
+      // skeleton grows past entries. With no resolvable imports, inbound
+      // stays empty — that's correct: the LLM gets "no scan signal" and
+      // falls back to per-language triggers.
+      const fs: Record<string, string> = {
+        'apps/api/src/Lumen.Host/Program.cs': 'using System;',
+        'apps/api/src/Lumen.Modules.X/Handler.cs': 'using System;',
+      };
+      const reader: FileReader = {
+        async listFiles() { return Object.keys(fs); },
+        async readText(rel) { return fs[rel]; },
+        async resolveImport() { return undefined; },
+      };
+      const r = await scanWorkspace(reader, {
+        maxDepth: 3,
+        maxFiles: 80,
+        extensions: ['.cs'],
+        rankBy: 'centrality',
+        fillToMaxFiles: true,
+      });
+      expect(r.skeleton.length).toBe(2);
+      expect(r.inbound.size).toBe(0);
+    });
+  });
 });

@@ -37,6 +37,20 @@ export interface AnalyzeInput {
   boundedContext: string;
   token: vscode.CancellationToken;
   /**
+   * True iff this file matched an entry-point filename pattern during the
+   * workspace scan. Forwarded to the LLM as a hint so it can synthesize a
+   * Program node for top-level statements / __main__ scripts.
+   */
+  isEntryPoint?: boolean;
+  /**
+   * Workspace-relative paths of OTHER skeleton files whose static imports
+   * resolve to this file (produced by the scanner BFS). `undefined` means
+   * no scan data was supplied; an empty array means "scanned, zero
+   * callers" — the LLM uses this to gate `public_api`. See
+   * {@link FileContextHints}.
+   */
+  inboundImports?: string[];
+  /**
    * Optional callback fired each time a calibrated node is ready. Lets the
    * UI stream nodes into the WebView as they come in (v3 plan §4 streaming
    * design); call site can ignore it for a batched workflow.
@@ -53,7 +67,11 @@ export class SingleFileAnalyzer {
 
   async analyze(input: AnalyzeInput): Promise<AnalyzeResult> {
     const { file, fileText, boundedContext, token } = input;
-    const userMessage = buildUserMessage(file, fileText);
+    const userMessage = buildUserMessage(file, fileText, {
+      boundedContext,
+      isEntryPoint: input.isEntryPoint,
+      inboundImports: input.inboundImports,
+    });
     const lang = detectLang(file);
 
     const parseErrors: AnalyzeResult['parseErrors'] = [];

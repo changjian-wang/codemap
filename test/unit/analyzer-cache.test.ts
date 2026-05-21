@@ -78,6 +78,21 @@ describe('AnalyzerCache', () => {
     expect(k1).not.toBe(k5);
   });
 
+  it('key() defaults to empty hint salt (v3.7 backward compat)', () => {
+    const without = AnalyzerCache.key('v1', 'a.ts', 'X');
+    const withEmpty = AnalyzerCache.key('v1', 'a.ts', 'X', '');
+    expect(without).toBe(withEmpty);
+  });
+
+  it('key() is hint-salt-sensitive (v3.7 — different scan context → different cache slot)', () => {
+    const a = AnalyzerCache.key('v1', 'a.ts', 'X', 'bc:capture|entry:1|in:');
+    const b = AnalyzerCache.key('v1', 'a.ts', 'X', 'bc:capture|entry:0|in:b.ts');
+    const c = AnalyzerCache.key('v1', 'a.ts', 'X', 'bc:recall|entry:1|in:');
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(c);
+    expect(b).not.toBe(c);
+  });
+
   it('LRU-evicts oldest entries when capacity exceeded', async () => {
     const cache = new AnalyzerCache(memento, 3);
     const keys = ['k1', 'k2', 'k3', 'k4'];

@@ -138,4 +138,65 @@ describe('SingleFileAnalyzer', () => {
     });
     expect(chunks).toBeLessThan(100);
   });
+
+  it('threads workspace hints (isEntryPoint + inboundImports) into the user message (v3.7)', async () => {
+    let capturedUser = '';
+    const llm: LlmClient = {
+      async *stream(_system, user) {
+        capturedUser = user;
+        yield SUMMARY;
+      },
+    };
+    const a = new SingleFileAnalyzer(llm, fakeSymbols());
+    await a.analyze({
+      file: 'src/Lumen.Modules.Capture/Endpoints/CaptureEndpoints.cs',
+      fileText: 'public static class CaptureEndpoints {}',
+      boundedContext: 'capture',
+      isEntryPoint: true,
+      inboundImports: ['src/Lumen.Host/Program.cs'],
+      token: NEVER_CANCELLED,
+    });
+    expect(capturedUser).toContain('Bounded context: capture');
+    expect(capturedUser).toContain('Entry-point filename match: yes');
+    expect(capturedUser).toContain('Inbound imports (workspace scan, 1):');
+    expect(capturedUser).toContain('  - src/Lumen.Host/Program.cs');
+  });
+
+  it('emits inbound "none" line when scan produced an empty caller list', async () => {
+    let capturedUser = '';
+    const llm: LlmClient = {
+      async *stream(_system, user) {
+        capturedUser = user;
+        yield SUMMARY;
+      },
+    };
+    const a = new SingleFileAnalyzer(llm, fakeSymbols());
+    await a.analyze({
+      file: 'src/Foo.cs',
+      fileText: 'public class Foo {}',
+      boundedContext: 'capture',
+      inboundImports: [],
+      token: NEVER_CANCELLED,
+    });
+    expect(capturedUser).toContain('Inbound imports (workspace scan): none.');
+  });
+
+  it('omits the new v3.7 hint lines when isEntryPoint/inboundImports are not supplied', async () => {
+    let capturedUser = '';
+    const llm: LlmClient = {
+      async *stream(_system, user) {
+        capturedUser = user;
+        yield SUMMARY;
+      },
+    };
+    const a = new SingleFileAnalyzer(llm, fakeSymbols());
+    await a.analyze({
+      file: 'src/Foo.cs',
+      fileText: 'public class Foo {}',
+      boundedContext: 'capture',
+      token: NEVER_CANCELLED,
+    });
+    expect(capturedUser).not.toContain('Entry-point filename match');
+    expect(capturedUser).not.toContain('Inbound imports');
+  });
 });

@@ -11,15 +11,32 @@
  *
  * The actual user message wraps the source code and adds the file path; see
  * {@link buildUserMessage}.
+ *
+ * Entry-tagging guidance lives in `entry-detection/` so a new language can
+ * be added without rewriting the prompt — see `entry-detection/index.ts`.
  */
+
+import { ENTRY_GUIDANCE_SECTION } from './entry-detection';
 
 /**
  * Cache-busting tag for {@link AnalyzerCache}. Bump whenever the prompt
  * contract changes in a way that invalidates prior LLM outputs (new fields,
  * removed fields, semantic shifts). Patch tweaks to wording are fine to
  * leave alone — they will still produce the same JSON shape.
+ *
+ * History:
+ *   v3.4 — pre-entry tagging
+ *   v3.5 — added is_entry / entry_kind / entry_meta (single inline section)
+ *   v3.6 — entry guidance moved to entry-detection/; .NET tightened
+ *          (apps/ exclusion on public_api), Python + Node sections,
+ *          synthesized Program rule, entry_meta field-to-kind table
+ *   v3.7 — user message now carries workspace hints (inbound imports,
+ *          isEntryPoint, bounded context). The LLM no longer has to guess
+ *          "does anyone else call me?" — the scanner already knows.
+ *          Closes the v3.5 false-positive cluster on `public_api` and
+ *          stabilises the `cli_main` synthesis on top-level Program files.
  */
-export const PROMPT_VERSION = 'v3.5';
+export const PROMPT_VERSION = 'v3.7';
 
 export const SYSTEM_PROMPT = `You are CodeMap's static-analysis assistant. Read the source file given by
 the user and emit one structured metadata block per top-level type
@@ -170,82 +187,7 @@ Use the exact class name as it appears in source. Generic parameters dropped
 ### Reading priority
 Entry points / Controllers → \`1\`. Pure utility / private helper class → \`5\`.
 
-### Entry-point tagging (\`is_entry\` / \`entry_kind\` / \`entry_meta\`)
-
-A class is an **entry-point** when the reader would pick it as the start of
-a call chain rather than discover it by following an inbound edge. Tagging
-is used by the Entries panel to list user-callable starting points; it does
-NOT change the graph or affect calibration. Default to \`is_entry: false\`
-(or omit the field).
-
-Set \`is_entry: true\` only when one of these applies, and set
-\`entry_kind\` accordingly:
-
-- \`"http_endpoint"\` — the class maps HTTP routes. Patterns:
-  * ASP.NET Core minimal-API endpoint class with \`Map{Get,Post,Put,Delete,Patch}\`
-    calls (often named \`*Endpoints\` with a \`MapXxxRoutes(IEndpointRouteBuilder)\`
-    extension method).
-  * MVC controller deriving from \`ControllerBase\` / \`Controller\` with
-    \`[HttpGet]\` / \`[HttpPost]\` / \`[Route]\` attributes.
-  * Express / Fastify class registering routes via \`app.get\` /
-    \`router.post\`.
-  * FastAPI / Starlette router class with \`@router.get\` / \`@app.get\`
-    decorators.
-  * Flask Blueprint class, Django view class with \`urlpatterns\`.
-  * gRPC service class deriving from generated \`*Base\`.
-
-  Populate \`entry_meta.routes\` with the routes the class exposes, formatted
-  as \`"<METHOD> <PATH>"\` strings (e.g. \`"GET /recall"\`,
-  \`"POST /capture/batch"\`). If a path is built dynamically and you cannot
-  read it statically, emit \`"GET ?"\` rather than guessing.
-
-- \`"cli_main"\` — top-level program entry. Patterns:
-  * \`Program\` class with \`Main\` (C# / Java) or a top-level
-    \`Program.cs\` containing the host builder.
-  * Root command class for a CLI framework (\`System.CommandLine\`
-    \`RootCommand\`, Click \`@group\`, Cobra \`Command\`, oclif \`Command\`).
-  * Python script with an \`if __name__ == "__main__":\` block whose body
-    is a class method.
-
-  Populate \`entry_meta.commands\` with subcommand names if the file
-  defines them; otherwise leave it out.
-
-- \`"worker"\` — long-running / scheduled background work. Patterns:
-  * \`BackgroundService\` / \`IHostedService\` implementation.
-  * Quartz.NET \`IJob\`, Hangfire job class, Celery \`Task\`, Sidekiq
-    worker, APScheduler job.
-
-  \`entry_meta\` may be left empty (no required fields).
-
-- \`"sample"\` — self-contained example program under \`samples/\` or
-  \`examples/\` whose purpose is to demonstrate library usage. Populate
-  \`entry_meta.sampleName\` with the file stem (e.g. \`"BasicCaching"\` for
-  \`samples/BasicCaching.cs\`). The class is the example, not a real
-  HTTP / CLI entry.
-
-- \`"public_api"\` — library / SDK surface class that is the user-facing
-  entry but is NOT itself called by another class in the same workspace.
-  Patterns:
-  * Static class whose primary value is the public extension methods it
-    exposes (e.g. \`ServiceCollectionExtensions\` with
-    \`AddDawningCaching(this IServiceCollection)\`).
-  * Public facade / factory class meant to be instantiated directly by
-    consumers.
-
-  Populate \`entry_meta.publicApis\` with the extension / public static
-  method names that serve as the entry surface (e.g.
-  \`["AddDawningCaching", "UseDawningCaching"]\`).
-
-Do NOT set \`is_entry: true\` on:
-- service / repository / domain classes (they have entry callers above
-  them; tagging them as entries clutters the panel),
-- DTOs, records, configuration / options POCOs,
-- internal helpers (\`*Builder\`, \`*Mapper\`, \`*Helper\`, \`*Resolver\`),
-- test or test-fixture classes.
-
-When in doubt, set \`is_entry: false\`. False negatives are cheap (the
-class is still reachable via the Overview view); false positives clutter
-the Entries panel with non-callable noise.
+${ENTRY_GUIDANCE_SECTION}
 
 ## Style
 
@@ -259,6 +201,56 @@ the Entries panel with non-callable noise.
   dropped, your whole node is marked partial.
 `;
 
-export function buildUserMessage(filePath: string, fileText: string): string {
-  return `File: ${filePath}\n\n\`\`\`\n${fileText}\n\`\`\``;
+export interface FileContextHints {
+  /** Bucket assigned by the bounded-context classifier. */
+  boundedContext?: string;
+  /** True iff the file path matches an entry-point pattern (Program.cs / *Endpoints.cs / index.ts / ...). */
+  isEntryPoint?: boolean;
+  /**
+   * Workspace-relative paths of OTHER skeleton files whose static
+   * imports resolve to this file. Pass `[]` to mean "we ran the scan and
+   * found no callers in scope"; pass `undefined` to mean "no scan data
+   * available" (the LLM should then treat the call graph as unknown).
+   * The distinction matters for `public_api` detection.
+   */
+  inboundImports?: string[];
+}
+
+/**
+ * Render the user message for one file analysis. v3.7 prefixes the source
+ * with a small structured hint block produced by the scanner so the LLM
+ * doesn't have to invent cross-file knowledge it can't see.
+ */
+export function buildUserMessage(
+  filePath: string,
+  fileText: string,
+  hints: FileContextHints = {},
+): string {
+  const lines: string[] = [`File: ${filePath}`];
+  if (hints.boundedContext) {
+    lines.push(`Bounded context: ${hints.boundedContext}`);
+  }
+  if (hints.isEntryPoint === true) {
+    lines.push(
+      'Entry-point filename match: yes (matches Program.cs / *Endpoints.cs / index.ts / ... pattern).',
+    );
+  }
+  if (hints.inboundImports !== undefined) {
+    if (hints.inboundImports.length === 0) {
+      lines.push(
+        'Inbound imports (workspace scan): none. No other skeleton file imports this file by static analysis.',
+      );
+    } else {
+      const shown = hints.inboundImports.slice(0, 20);
+      const moreCount = hints.inboundImports.length - shown.length;
+      lines.push(`Inbound imports (workspace scan, ${hints.inboundImports.length}):`);
+      for (const f of shown) lines.push(`  - ${f}`);
+      if (moreCount > 0) lines.push(`  - ... and ${moreCount} more`);
+    }
+  }
+  lines.push('');
+  lines.push('```');
+  lines.push(fileText);
+  lines.push('```');
+  return lines.join('\n');
 }

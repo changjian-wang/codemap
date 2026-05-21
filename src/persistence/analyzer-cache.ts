@@ -54,18 +54,32 @@ export class AnalyzerCache {
 
   /**
    * Compute the cache key. Combines prompt version + file path + content
-   * sha. We include the path because `AnalyzeResult.file` records it and
-   * downstream graph node ids are stable per-path; re-using the same blob
-   * under a different path would silently emit edges pointing at the old
-   * location.
+   * sha + an optional hint salt. We include the path because
+   * `AnalyzeResult.file` records it and downstream graph node ids are
+   * stable per-path; re-using the same blob under a different path would
+   * silently emit edges pointing at the old location.
+   *
+   * The hint salt (v3.7+) folds workspace-scanner-derived context that
+   * changes the user message: bounded context, entry-point flag, inbound
+   * imports. Without it, the cache would serve a v3.7 result built under
+   * one scope as if it were valid for a different scope's inbound list,
+   * silently leaking stale cross-file context. Pass an empty string for
+   * the no-hints code path (tests, pre-v3.7 callers).
    */
-  static key(promptVersion: string, file: string, fileText: string): string {
+  static key(
+    promptVersion: string,
+    file: string,
+    fileText: string,
+    hintSalt: string = '',
+  ): string {
     return createHash('sha256')
       .update(promptVersion)
       .update('\0')
       .update(file)
       .update('\0')
       .update(fileText)
+      .update('\0')
+      .update(hintSalt)
       .digest('hex');
   }
 

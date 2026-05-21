@@ -24,8 +24,13 @@ import type { SymbolProvider, SymbolHit } from './symbol-provider';
  *        of depth=0; v3 broke verification for every C# type because C# Dev
  *        Kit wraps file contents in a namespace symbol so all classes sit
  *        at depth 1
+ *   v5 — strip entry_meta fields whose kind doesn't match entry_kind
+ *        (routes only for http_endpoint, commands for cli_main, sampleName
+ *        for sample, publicApis for public_api); v3.5 LLMs emitted
+ *        sampleName on cli_main blocks, which the calibrator was passing
+ *        through to the graph
  */
-export const CALIBRATOR_VERSION = 'v4';
+export const CALIBRATOR_VERSION = 'v5';
 
 /**
  * Calibrator: LLM raw output → validated CodeNode + CodeEdge[].
@@ -122,6 +127,23 @@ const VALID_ENTRY_KINDS = new Set<EntryKind>([
 ]);
 
 /**
+ * `entry_meta` fields are 1:1 with `entry_kind`. The v3.6 prompt
+ * documents this as a "field-to-kind mapping" but the LLM still mixes
+ * them (the v3.5 spike emitted `sampleName` on a `cli_main` block). We
+ * strip any field whose owning kind doesn't match — better to drop a
+ * bad field than to surface confusing metadata on the entries panel.
+ *
+ * Map drives both the parser and (eventually) the entries-view renderer
+ * so the two stay in lockstep.
+ */
+const ENTRY_META_FIELD_KIND: Record<keyof EntryMeta, EntryKind> = {
+  routes: 'http_endpoint',
+  commands: 'cli_main',
+  sampleName: 'sample',
+  publicApis: 'public_api',
+};
+
+/**
  * Read the optional entry-point fields off a raw LLM block. Defensive:
  * a bad shape demotes to `is_entry: false` rather than failing the whole
  * node, so a single misformatted entry block can't blank the graph.
@@ -150,10 +172,17 @@ function parseEntry(data: unknown): {
       .concat(asArray(metaRaw, 'public_apis'))
       .filter((x): x is string => typeof x === 'string');
     const m: EntryMeta = {};
-    if (routes.length) m.routes = routes;
-    if (commands.length) m.commands = commands;
-    if (sampleName) m.sampleName = sampleName;
-    if (publicApis.length) m.publicApis = publicApis;
+    // Strip fields whose owning kind doesn't match the block's entry_kind.
+    // When entryKind is undefined (unknown/missing) we keep all populated
+    // fields — the kind is the missing signal, not the meta. This way the
+    // entries view still has *something* to show; the kind dropdown lets
+    // the user reclassify.
+    const allow = (field: keyof EntryMeta): boolean =>
+      entryKind === undefined || ENTRY_META_FIELD_KIND[field] === entryKind;
+    if (routes.length && allow('routes')) m.routes = routes;
+    if (commands.length && allow('commands')) m.commands = commands;
+    if (sampleName && allow('sampleName')) m.sampleName = sampleName;
+    if (publicApis.length && allow('publicApis')) m.publicApis = publicApis;
     if (Object.keys(m).length) entryMeta = m;
   }
   return { isEntry: true, entryKind, entryMeta };

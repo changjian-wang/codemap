@@ -200,7 +200,13 @@ describe('runOrchestrator', () => {
 
     for (const [file, text] of Object.entries(files)) {
       const id = file.includes('Program') ? 'Program' : 'CaptureEndpoints';
-      const key = AnalyzerCache.key(`${PROMPT_VERSION}/${CALIBRATOR_VERSION}`, file, text);
+      // v3.7: cache key folds in a salt derived from bounded context +
+      // entry-point flag + sorted inbound list. Pre-seed with the exact salt
+      // the orchestrator will compute, otherwise these "fully cached" runs
+      // miss and re-analyze the file.
+      const bucket = file.includes('Lumen.Host') ? 'host' : 'capture';
+      const salt = `bc:${bucket}|entry:1|in:`;
+      const key = AnalyzerCache.key(`${PROMPT_VERSION}/${CALIBRATOR_VERSION}`, file, text, salt);
       await cache.set(key, {
         file,
         nodes: [
@@ -278,7 +284,13 @@ describe('runOrchestrator', () => {
     const reader = fakeFileReader(files);
 
     await cache.set(
-      AnalyzerCache.key(`${PROMPT_VERSION}/${CALIBRATOR_VERSION}`, cachedFile, files[cachedFile]!),
+      AnalyzerCache.key(
+        `${PROMPT_VERSION}/${CALIBRATOR_VERSION}`,
+        cachedFile,
+        files[cachedFile]!,
+        // v3.7: Program.cs in Lumen.Host → bucket "host", entry-point, no inbound.
+        'bc:host|entry:1|in:',
+      ),
       {
         file: cachedFile,
         nodes: [

@@ -381,4 +381,112 @@ describe('Calibrator', () => {
       expect(out?.node.entryMeta?.sampleName).toBe('BasicCaching');
     });
   });
+
+  describe('entry-point tagging (v3.6 — kind-strip)', () => {
+    it('drops sampleName when entry_kind is cli_main (v3.5 EvalHostBuilder bug)', async () => {
+      const c = new Calibrator(
+        makeProvider({ inFile: { 'host.cs': [sym('EvalHostBuilder', 'host.cs', 1, 50)] } }),
+      );
+      const out = await c.calibrate({
+        data: {
+          node_id: 'EvalHostBuilder',
+          is_entry: true,
+          entry_kind: 'cli_main',
+          entry_meta: {
+            commands: ['eval', 'replay'],
+            sampleName: 'EvalHostBuilder', // wrong field for cli_main
+          },
+        },
+        file: 'host.cs',
+        boundedContext: 'eval',
+      });
+      expect(out?.node.entryKind).toBe('cli_main');
+      expect(out?.node.entryMeta?.commands).toEqual(['eval', 'replay']);
+      expect(out?.node.entryMeta?.sampleName).toBeUndefined();
+    });
+
+    it('drops routes when entry_kind is worker', async () => {
+      const c = new Calibrator(
+        makeProvider({ inFile: { 'w.cs': [sym('IndexerWorker', 'w.cs', 1, 50)] } }),
+      );
+      const out = await c.calibrate({
+        data: {
+          node_id: 'IndexerWorker',
+          is_entry: true,
+          entry_kind: 'worker',
+          entry_meta: {
+            routes: ['GET /healthz'], // wrong field for worker
+          },
+        },
+        file: 'w.cs',
+        boundedContext: 'index',
+      });
+      expect(out?.node.entryKind).toBe('worker');
+      expect(out?.node.entryMeta).toBeUndefined();
+    });
+
+    it('drops publicApis when entry_kind is http_endpoint', async () => {
+      const c = new Calibrator(
+        makeProvider({ inFile: { 'r.cs': [sym('RecallEndpoints', 'r.cs', 1, 50)] } }),
+      );
+      const out = await c.calibrate({
+        data: {
+          node_id: 'RecallEndpoints',
+          is_entry: true,
+          entry_kind: 'http_endpoint',
+          entry_meta: {
+            routes: ['GET /recall'],
+            publicApis: ['MapRecallRoutes'], // wrong field for http_endpoint
+          },
+        },
+        file: 'r.cs',
+        boundedContext: 'recall',
+      });
+      expect(out?.node.entryMeta?.routes).toEqual(['GET /recall']);
+      expect(out?.node.entryMeta?.publicApis).toBeUndefined();
+    });
+
+    it('drops commands when entry_kind is public_api', async () => {
+      const c = new Calibrator(
+        makeProvider({ inFile: { 's.cs': [sym('ServiceCollectionExtensions', 's.cs', 1, 50)] } }),
+      );
+      const out = await c.calibrate({
+        data: {
+          node_id: 'ServiceCollectionExtensions',
+          is_entry: true,
+          entry_kind: 'public_api',
+          entry_meta: {
+            publicApis: ['AddDawningCaching'],
+            commands: ['ghost'], // wrong field for public_api
+          },
+        },
+        file: 's.cs',
+        boundedContext: 'caching',
+      });
+      expect(out?.node.entryMeta?.publicApis).toEqual(['AddDawningCaching']);
+      expect(out?.node.entryMeta?.commands).toBeUndefined();
+    });
+
+    it('keeps all meta fields when entry_kind is missing (calibrator cannot decide)', async () => {
+      const c = new Calibrator(
+        makeProvider({ inFile: { 'a.cs': [sym('Unknown', 'a.cs', 1, 50)] } }),
+      );
+      const out = await c.calibrate({
+        data: {
+          node_id: 'Unknown',
+          is_entry: true,
+          // entry_kind intentionally omitted
+          entry_meta: {
+            routes: ['GET /x'],
+            commands: ['y'],
+          },
+        },
+        file: 'a.cs',
+        boundedContext: 'misc',
+      });
+      expect(out?.node.entryKind).toBeUndefined();
+      expect(out?.node.entryMeta?.routes).toEqual(['GET /x']);
+      expect(out?.node.entryMeta?.commands).toEqual(['y']);
+    });
+  });
 });

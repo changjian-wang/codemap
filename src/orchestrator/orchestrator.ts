@@ -157,6 +157,21 @@ export async function runOrchestrator(
   // Side benefit: each worker reuses the pre-read text instead of
   // re-reading from disk.
   events.onStep?.(`Pre-reading ${skeleton.length} files and probing cache`);
+  const entryPointSet = new Set(scan.entryPoints);
+  // Build a deterministic salt per file so the cache key folds in the
+  // workspace-scanner-derived hints we now embed in the user message.
+  // Same scope on the same workspace → same salt; different scope (which
+  // gives different inbound lists) → different salt → cache miss, as
+  // intended. See AnalyzerCache.key for the rationale.
+  const computeHintSalt = (file: string, bucket: string): string => {
+    const inbound = scan.inbound.get(file) ?? [];
+    return [
+      `bc:${bucket}`,
+      `entry:${entryPointSet.has(file) ? '1' : '0'}`,
+      `in:${[...inbound].sort().join(',')}`,
+    ].join('|');
+  };
+  const bucketByFile = new Map(classified.map(c => [c.file, c.bucket] as const));
   interface PrecheckEntry {
     text: string;
     cacheKey: string;
@@ -167,11 +182,13 @@ export async function runOrchestrator(
     skeleton.map(async file => {
       const text = await deps.reader.readText(file);
       if (text === undefined) return;
+      const bucket = bucketByFile.get(file) ?? '';
       const cacheKey = deps.cache
         ? AnalyzerCacheClass.key(
             `${PROMPT_VERSION}/${CALIBRATOR_VERSION}`,
             file,
             text,
+            computeHintSalt(file, bucket),
           )
         : '';
       const cached = deps.cache?.get(cacheKey);
@@ -248,6 +265,7 @@ export async function runOrchestrator(
               `${PROMPT_VERSION}/${CALIBRATOR_VERSION}`,
               file,
               fileText,
+              computeHintSalt(file, bucket),
             )
           : '');
       const cached = pre?.cached ?? deps.cache?.get(cacheKey);
@@ -269,6 +287,8 @@ export async function runOrchestrator(
         fileText,
         boundedContext: bucket,
         token,
+        isEntryPoint: entryPointSet.has(file),
+        inboundImports: scan.inbound.get(file) ?? [],
       });
       if (deps.cache && cacheKey) {
         // Fire-and-forget the write; the cache itself dedupes pending writes.

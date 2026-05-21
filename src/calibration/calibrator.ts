@@ -1,6 +1,8 @@
 import type {
   CodeNode,
   CodeEdge,
+  EntryKind,
+  EntryMeta,
   MethodInfo,
   RiskType,
   VerificationState,
@@ -109,6 +111,52 @@ function parseRiskTags(raw: unknown[]): RiskType[] {
   return raw
     .filter((r): r is string => typeof r === 'string' && VALID_RISKS.has(r as RiskType))
     .map(r => r as RiskType);
+}
+
+const VALID_ENTRY_KINDS = new Set<EntryKind>([
+  'http_endpoint',
+  'cli_main',
+  'worker',
+  'sample',
+  'public_api',
+]);
+
+/**
+ * Read the optional entry-point fields off a raw LLM block. Defensive:
+ * a bad shape demotes to `is_entry: false` rather than failing the whole
+ * node, so a single misformatted entry block can't blank the graph.
+ *
+ * Returns `{}` when the block is not an entry; the caller spreads the
+ * result into the CodeNode so the fields stay undefined when absent.
+ */
+function parseEntry(data: unknown): {
+  isEntry?: boolean;
+  entryKind?: EntryKind;
+  entryMeta?: EntryMeta;
+} {
+  if (data === null || typeof data !== 'object') return {};
+  const raw = (data as Record<string, unknown>).is_entry;
+  if (raw !== true) return {};
+  const kindRaw = asString(data, 'entry_kind');
+  const entryKind: EntryKind | undefined =
+    kindRaw && VALID_ENTRY_KINDS.has(kindRaw as EntryKind) ? (kindRaw as EntryKind) : undefined;
+  const metaRaw = asObject(data, 'entry_meta');
+  let entryMeta: EntryMeta | undefined;
+  if (metaRaw) {
+    const routes = asArray(metaRaw, 'routes').filter((x): x is string => typeof x === 'string');
+    const commands = asArray(metaRaw, 'commands').filter((x): x is string => typeof x === 'string');
+    const sampleName = asString(metaRaw, 'sampleName') ?? asString(metaRaw, 'sample_name');
+    const publicApis = asArray(metaRaw, 'publicApis')
+      .concat(asArray(metaRaw, 'public_apis'))
+      .filter((x): x is string => typeof x === 'string');
+    const m: EntryMeta = {};
+    if (routes.length) m.routes = routes;
+    if (commands.length) m.commands = commands;
+    if (sampleName) m.sampleName = sampleName;
+    if (publicApis.length) m.publicApis = publicApis;
+    if (Object.keys(m).length) entryMeta = m;
+  }
+  return { isEntry: true, entryKind, entryMeta };
 }
 
 function bestSymbolMatch(name: string, hits: SymbolHit[]): SymbolHit | undefined {
@@ -247,6 +295,7 @@ export class Calibrator {
       : rawKind === 'interface' ? 'interface'
       : rawKind === 'record' ? 'record'
       : 'class';
+    const entry = parseEntry(data);
     const node: CodeNode = {
       id: nodeId,
       kind,
@@ -260,6 +309,9 @@ export class Calibrator {
       methods,
       readingPriority: asNumber(data, 'reading_priority') ?? 99,
       readState: 'unread',
+      isEntry: entry.isEntry,
+      entryKind: entry.entryKind,
+      entryMeta: entry.entryMeta,
       verification,
       verificationDetails: {
         rangeAdjusted,

@@ -277,4 +277,108 @@ describe('Calibrator', () => {
     // (not silently kept as in-file).
     expect(out?.edges.find(e => e.to === 'Bar')?.verified).toBe(false);
   });
+
+  describe('entry-point tagging (v3.5)', () => {
+    it('reads is_entry / entry_kind / entry_meta off the raw block', async () => {
+      const c = new Calibrator(
+        makeProvider({ inFile: { 'a.cs': [sym('RecallEndpoints', 'a.cs', 1, 50)] } }),
+      );
+      const out = await c.calibrate({
+        data: {
+          node_id: 'RecallEndpoints',
+          is_entry: true,
+          entry_kind: 'http_endpoint',
+          entry_meta: { routes: ['GET /recall', 'POST /recall/feedback'] },
+        },
+        file: 'a.cs',
+        boundedContext: 'recall',
+      });
+      expect(out?.node.isEntry).toBe(true);
+      expect(out?.node.entryKind).toBe('http_endpoint');
+      expect(out?.node.entryMeta?.routes).toEqual(['GET /recall', 'POST /recall/feedback']);
+    });
+
+    it('leaves entry fields undefined when is_entry is omitted', async () => {
+      const c = new Calibrator(
+        makeProvider({ inFile: { 'a.cs': [sym('UserService', 'a.cs', 1, 50)] } }),
+      );
+      const out = await c.calibrate({
+        data: { node_id: 'UserService' },
+        file: 'a.cs',
+        boundedContext: 'identity',
+      });
+      expect(out?.node.isEntry).toBeUndefined();
+      expect(out?.node.entryKind).toBeUndefined();
+      expect(out?.node.entryMeta).toBeUndefined();
+    });
+
+    it('treats is_entry: false as not an entry (no leakage of entry_kind)', async () => {
+      const c = new Calibrator(
+        makeProvider({ inFile: { 'a.cs': [sym('UserService', 'a.cs', 1, 50)] } }),
+      );
+      const out = await c.calibrate({
+        data: { node_id: 'UserService', is_entry: false, entry_kind: 'http_endpoint' },
+        file: 'a.cs',
+        boundedContext: 'identity',
+      });
+      expect(out?.node.isEntry).toBeUndefined();
+      expect(out?.node.entryKind).toBeUndefined();
+    });
+
+    it('drops an unknown entry_kind but keeps isEntry=true', async () => {
+      const c = new Calibrator(
+        makeProvider({ inFile: { 'a.cs': [sym('Weird', 'a.cs', 1, 50)] } }),
+      );
+      const out = await c.calibrate({
+        data: { node_id: 'Weird', is_entry: true, entry_kind: 'webhook' },
+        file: 'a.cs',
+        boundedContext: 'shared',
+      });
+      expect(out?.node.isEntry).toBe(true);
+      expect(out?.node.entryKind).toBeUndefined();
+    });
+
+    it('parses all entry_meta variants and omits empty fields', async () => {
+      const c = new Calibrator(
+        makeProvider({ inFile: { 'a.cs': [sym('Sdk', 'a.cs', 1, 50)] } }),
+      );
+      const out = await c.calibrate({
+        data: {
+          node_id: 'Sdk',
+          is_entry: true,
+          entry_kind: 'public_api',
+          entry_meta: {
+            publicApis: ['AddDawningCaching', 'UseDawningCaching'],
+            routes: [],            // empty arrays should not appear on output
+            sampleName: '',         // empty string should not appear
+          },
+        },
+        file: 'a.cs',
+        boundedContext: 'caching',
+      });
+      expect(out?.node.entryMeta?.publicApis).toEqual([
+        'AddDawningCaching',
+        'UseDawningCaching',
+      ]);
+      expect(out?.node.entryMeta?.routes).toBeUndefined();
+      expect(out?.node.entryMeta?.sampleName).toBeUndefined();
+    });
+
+    it('accepts snake_case meta keys (sample_name, public_apis) for LLM tolerance', async () => {
+      const c = new Calibrator(
+        makeProvider({ inFile: { 'a.cs': [sym('BasicCachingSample', 'a.cs', 1, 50)] } }),
+      );
+      const out = await c.calibrate({
+        data: {
+          node_id: 'BasicCachingSample',
+          is_entry: true,
+          entry_kind: 'sample',
+          entry_meta: { sample_name: 'BasicCaching' },
+        },
+        file: 'a.cs',
+        boundedContext: 'samples',
+      });
+      expect(out?.node.entryMeta?.sampleName).toBe('BasicCaching');
+    });
+  });
 });

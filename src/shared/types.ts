@@ -6,6 +6,46 @@ export type NodeKind = 'class' | 'interface' | 'record' | 'enum';
 export type VerificationState = 'verified' | 'partial' | 'unverified';
 export type EdgeKind = 'calls' | 'external_calls';
 
+/**
+ * What kind of project entry-point a class is, when {@link CodeNode.isEntry}
+ * is true. Drives the Entries panel grouping and the per-card badge.
+ *
+ * Tagged by the LLM during analyze; consumed by the WebView only — the
+ * graph / calibrator / aggregator do not branch on this.
+ *
+ *  - `http_endpoint` — maps HTTP routes (ASP.NET MapXxx / MVC controller,
+ *    Express router, FastAPI router class, Flask Blueprint, gRPC service).
+ *  - `cli_main` — top-level Program / Main, CLI framework root command.
+ *  - `worker` — BackgroundService / IHostedService / cron job class.
+ *  - `sample` — self-contained example program under `samples/` /
+ *    `examples/`, used as a faux entry-point when a library has no real
+ *    HTTP / CLI surface.
+ *  - `public_api` — library / SDK surface class whose public extension
+ *    methods are the user-facing entry surface (e.g. `AddDawningCaching`).
+ */
+export type EntryKind =
+  | 'http_endpoint'
+  | 'cli_main'
+  | 'worker'
+  | 'sample'
+  | 'public_api';
+
+/**
+ * Kind-specific entry-point metadata. All fields optional — populate only
+ * what is statically extractable from the source. Display layer treats an
+ * absent field as "no info to show", not as an error.
+ */
+export interface EntryMeta {
+  /** http_endpoint: `["GET /recall", "POST /capture/batch", ...]`. */
+  routes?: string[];
+  /** cli_main: subcommand names, e.g. `["recall", "capture"]`. */
+  commands?: string[];
+  /** sample: file stem, e.g. `"BasicCaching"`. */
+  sampleName?: string;
+  /** public_api: extension / static method names, e.g. `["AddDawningCaching"]`. */
+  publicApis?: string[];
+}
+
 export type RiskType =
   | 'security'
   | 'external_io'
@@ -44,6 +84,22 @@ export interface CodeNode {
   methods: MethodInfo[];
   readingPriority?: number;
   readState: 'unread' | 'reading' | 'read';
+
+  /**
+   * True when the LLM tagged this class as a user-facing entry-point —
+   * something the reader would pick as the start of a call chain rather
+   * than discover by following an edge. Drives the Entries panel; the
+   * graph and calibrator do not branch on it.
+   *
+   * Distinct from `layer === 'entry'`, which is a coarser architectural
+   * role used by reading-order sort. A class can be `layer: 'controller'`
+   * AND `isEntry: true` (HTTP endpoint class), or `layer: 'util'` AND
+   * `isEntry: true` (sample program), or `layer: 'entry'` AND
+   * `isEntry: false` (composition root with no user-callable surface).
+   */
+  isEntry?: boolean;
+  entryKind?: EntryKind;
+  entryMeta?: EntryMeta;
 
   /**
    * Verbatim leading documentation comment (Python docstring, C# `///`,

@@ -19,7 +19,7 @@
  * removed fields, semantic shifts). Patch tweaks to wording are fine to
  * leave alone — they will still produce the same JSON shape.
  */
-export const PROMPT_VERSION = 'v3.4';
+export const PROMPT_VERSION = 'v3.5';
 
 export const SYSTEM_PROMPT = `You are CodeMap's static-analysis assistant. Read the source file given by
 the user and emit one structured metadata block per top-level type
@@ -78,7 +78,15 @@ For every in-scope type defined in the file, output exactly one fenced block:
     { "type": "security" | "external_io" | "concurrency" | "low_confidence" | "high_coupling" | "missing_test",
       "desc": "<≤ 60 chars reason>" }
   ],
-  "reading_priority": <1 = read first, 5 = read last>
+  "reading_priority": <1 = read first, 5 = read last>,
+  "is_entry": <true | false>,
+  "entry_kind": "http_endpoint" | "cli_main" | "worker" | "sample" | "public_api",
+  "entry_meta": {
+    "routes": ["<METHOD PATH>", ...],
+    "commands": ["<subcommand>", ...],
+    "sampleName": "<file stem>",
+    "publicApis": ["<extension or static method name>", ...]
+  }
 }
 \`\`\`
 
@@ -161,6 +169,83 @@ Use the exact class name as it appears in source. Generic parameters dropped
 
 ### Reading priority
 Entry points / Controllers → \`1\`. Pure utility / private helper class → \`5\`.
+
+### Entry-point tagging (\`is_entry\` / \`entry_kind\` / \`entry_meta\`)
+
+A class is an **entry-point** when the reader would pick it as the start of
+a call chain rather than discover it by following an inbound edge. Tagging
+is used by the Entries panel to list user-callable starting points; it does
+NOT change the graph or affect calibration. Default to \`is_entry: false\`
+(or omit the field).
+
+Set \`is_entry: true\` only when one of these applies, and set
+\`entry_kind\` accordingly:
+
+- \`"http_endpoint"\` — the class maps HTTP routes. Patterns:
+  * ASP.NET Core minimal-API endpoint class with \`Map{Get,Post,Put,Delete,Patch}\`
+    calls (often named \`*Endpoints\` with a \`MapXxxRoutes(IEndpointRouteBuilder)\`
+    extension method).
+  * MVC controller deriving from \`ControllerBase\` / \`Controller\` with
+    \`[HttpGet]\` / \`[HttpPost]\` / \`[Route]\` attributes.
+  * Express / Fastify class registering routes via \`app.get\` /
+    \`router.post\`.
+  * FastAPI / Starlette router class with \`@router.get\` / \`@app.get\`
+    decorators.
+  * Flask Blueprint class, Django view class with \`urlpatterns\`.
+  * gRPC service class deriving from generated \`*Base\`.
+
+  Populate \`entry_meta.routes\` with the routes the class exposes, formatted
+  as \`"<METHOD> <PATH>"\` strings (e.g. \`"GET /recall"\`,
+  \`"POST /capture/batch"\`). If a path is built dynamically and you cannot
+  read it statically, emit \`"GET ?"\` rather than guessing.
+
+- \`"cli_main"\` — top-level program entry. Patterns:
+  * \`Program\` class with \`Main\` (C# / Java) or a top-level
+    \`Program.cs\` containing the host builder.
+  * Root command class for a CLI framework (\`System.CommandLine\`
+    \`RootCommand\`, Click \`@group\`, Cobra \`Command\`, oclif \`Command\`).
+  * Python script with an \`if __name__ == "__main__":\` block whose body
+    is a class method.
+
+  Populate \`entry_meta.commands\` with subcommand names if the file
+  defines them; otherwise leave it out.
+
+- \`"worker"\` — long-running / scheduled background work. Patterns:
+  * \`BackgroundService\` / \`IHostedService\` implementation.
+  * Quartz.NET \`IJob\`, Hangfire job class, Celery \`Task\`, Sidekiq
+    worker, APScheduler job.
+
+  \`entry_meta\` may be left empty (no required fields).
+
+- \`"sample"\` — self-contained example program under \`samples/\` or
+  \`examples/\` whose purpose is to demonstrate library usage. Populate
+  \`entry_meta.sampleName\` with the file stem (e.g. \`"BasicCaching"\` for
+  \`samples/BasicCaching.cs\`). The class is the example, not a real
+  HTTP / CLI entry.
+
+- \`"public_api"\` — library / SDK surface class that is the user-facing
+  entry but is NOT itself called by another class in the same workspace.
+  Patterns:
+  * Static class whose primary value is the public extension methods it
+    exposes (e.g. \`ServiceCollectionExtensions\` with
+    \`AddDawningCaching(this IServiceCollection)\`).
+  * Public facade / factory class meant to be instantiated directly by
+    consumers.
+
+  Populate \`entry_meta.publicApis\` with the extension / public static
+  method names that serve as the entry surface (e.g.
+  \`["AddDawningCaching", "UseDawningCaching"]\`).
+
+Do NOT set \`is_entry: true\` on:
+- service / repository / domain classes (they have entry callers above
+  them; tagging them as entries clutters the panel),
+- DTOs, records, configuration / options POCOs,
+- internal helpers (\`*Builder\`, \`*Mapper\`, \`*Helper\`, \`*Resolver\`),
+- test or test-fixture classes.
+
+When in doubt, set \`is_entry: false\`. False negatives are cheap (the
+class is still reachable via the Overview view); false positives clutter
+the Entries panel with non-callable noise.
 
 ## Style
 

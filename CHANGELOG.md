@@ -4,6 +4,103 @@ All notable changes to this extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.6 — 2026-05-21
+
+Precision pass. v0.0.5 reached `lumen/apps/api/src` Edges F1=0.87 with a
+clean recall (0.97) but a precision floor (0.79) the v0.0.5 release notes
+already flagged for follow-up. This release lifts F1 to **0.92** (P=0.87,
+R=0.97) and Nodes F1 to a perfect **1.00** on the same target by removing
+two concentrated noise sources and adding one new cross-file signal,
+without re-opening the recall trade we paid off last release.
+
+The investigation took three loops. A first prompt-only spike (v3.8 —
+hand the LLM a list of internal namespace roots so cross-file workspace
+types stay in `external_calls` rather than getting mis-categorized) gave
++0.01 — disappointing but harmless, so it stayed. A second calibrator-side
+spike that dropped bare-name `external_calls` entries before they reached
+the aggregator (v6, then a narrowed v7) tanked Edges R to 0.29 by killing
+the very same workspace-type bare names v3.8 was trying to promote.
+Diagnosis then shifted from "bare names" to "where do the noise edges
+actually come from" — and the answer was synthetic
+top-level-statements `Program` nodes (`Lumen.Host.Program` and
+`Lumen.Eval.Program`) dragging in roughly twenty extra out-edges each.
+The third loop drops those nodes in the aggregator with a deterministic
+file-path heuristic and rolls v6/v7 all the way back, with
+`CALIBRATOR_VERSION` bumped to `v8` so the polluted cache is invalidated.
+
+Net on `lumen/apps/api/src` against v0.0.5:
+
+| Metric    | v0.0.5 (v3.7.1) | v0.0.6 (v3.8 + v8) |
+| --------- | --------------- | ------------------ |
+| Nodes P/R | 0.98 / 0.99     | 1.00 / 0.99        |
+| Nodes F1  | 0.99            | **1.00**           |
+| Edges P/R | 0.79 / 0.97     | 0.87 / 0.97        |
+| Edges F1  | 0.87            | **0.92**           |
+
+Recommended upgrade from 0.0.5 for any .NET 6+ workspace that uses
+top-level statements in `Program.cs`. Other languages see the smaller
+improvement from the v3.8 namespace hint and the new `/eval` diagnostic.
+
+### Added
+- **`src/orchestrator/internal-namespace-detector.ts`** (`PROMPT_VERSION
+  v3.8`) — derives the list of internal namespace roots from scanner
+  output (e.g. `["Lumen.Host", "Lumen.Modules.*", "Lumen.Shared.*"]`),
+  folded into the per-file user message so the LLM stops emitting
+  cross-file workspace types as `ext:*`. The hint is also part of the
+  AnalyzerCache key so changing the workspace shape produces correct
+  cache misses.
+- **`/eval` diagnostic — extra edges** — the `/eval` output now lists
+  up to 20 false-positive edges (next to the existing missing-edges
+  block). Cheap to render, decisive when chasing precision regressions
+  — without it the v3.10 root cause (synthetic Program nodes) would
+  have stayed invisible behind aggregate P numbers.
+
+### Changed
+- **`src/orchestrator/aggregator.ts` — synthetic Program node filter.**
+  In .NET 6+ a `Program.cs` containing only top-level statements has no
+  explicit `class Program` declaration but the LSP/LLM still report
+  one. The aggregator namespace-qualifies it
+  (e.g. `Lumen.Host.Program`) and the resulting node plus every
+  wire-up out-edge (`AddCaptureModule`, `MapRecallEndpoints`, ...) is
+  pure noise against any reasonable golden wiki. We now drop the node
+  and every in/out edge it touches via a file-path heuristic
+  (basename = `Program.cs`, short id = `Program`). Deterministic,
+  FS-free, easy to revert per-workspace if anyone actually does write
+  an explicit `class Program` in `Program.cs`.
+- **`src/llm/prompts.ts` — `PROMPT_VERSION` v3.7 → v3.8.** Adds the
+  internal-namespace-roots hint; otherwise no behavioural change.
+- **`src/calibration/calibrator.ts` — `CALIBRATOR_VERSION` v5 → v8.**
+  The intermediate v6 (blanket bare-name `external_calls` drop) and v7
+  (narrow v6 to verb-prefix bare names) never shipped — both regressed
+  recall worse than they helped precision, and the actual fix lives in
+  the aggregator. v8 reverts to v5's "accept every well-formed
+  `external_calls`" semantics; the version bump alone invalidates any
+  v6/v7 cache entries from prerelease VSIXes.
+
+### Fixed
+- **`Lumen.Host.Program` and `Lumen.Eval.Program` no longer appear as
+  extra nodes** on .NET 6+ workspaces, and their roughly twenty
+  spurious out-edges (`Program → ext:WebApplication.CreateBuilder`,
+  `Program → DatasetLoader`, `Program → AddCaptureModule`, ...) are
+  gone with them. This is the headline F1 win.
+- **`EvalHostBuilder → ext:AddCaptureModule` and ~8 similar edges**
+  that v6/v7 had erroneously deleted at the calibrator level are
+  restored, lifting Edges R back to 0.97 from the v3.9 disaster level
+  of 0.29.
+
+### Known issues
+- The LLM still over-emits "type-only" references as `calls` edges —
+  return types, parameter types, generic arguments, implements
+  clauses (`EnrichmentStore → IEnrichmentStore`,
+  `CaptureModuleServiceCollectionExtensions → IEventStore`, ...). On
+  lumen these account for roughly half of the remaining 31 extras and
+  are the largest remaining target for v0.0.7+.
+- Bare vs fully-qualified `ext:` names can split one logical edge
+  across the missing/extras buckets (e.g.
+  `ext:AssemblyMarker` predicted vs
+  `ext:Lumen.Modules.Capture.AssemblyMarker` in the golden). Worth a
+  scorer-side normaliser in eval rather than another prompt round.
+
 ## 0.0.5 — 2026-05-21
 
 Recall pass. v0.0.4's v3.5 prompt spike traded recall for precision —

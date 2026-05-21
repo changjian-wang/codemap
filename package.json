@@ -2,7 +2,7 @@
   "name": "codemap",
   "displayName": "CodeMap",
   "description": "Interactive call graph + reading guidance for AI-generated code. Repo-level UML class graph with LSP-calibrated verification.",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "publisher": "changjian-wang",
   "license": "MIT",
   "repository": {

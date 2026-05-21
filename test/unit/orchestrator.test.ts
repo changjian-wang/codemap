@@ -65,18 +65,23 @@ function fakeSymbols(symbolsByFile: Record<string, SymbolHit[]>): SymbolProvider
 
 describe('runOrchestrator', () => {
   it('runs scan → classify → analyze → aggregate end-to-end', async () => {
+    // We use HostStartup.cs (not Program.cs) on purpose: the aggregator
+    // drops synthetic top-level-statements `Program` nodes by file-path
+    // heuristic (see "top-level Program filter" in aggregator.ts). Picking
+    // a different filename here keeps this test focused on end-to-end
+    // pipeline wiring without entangling it with that node-filter rule.
     const reader = fakeFileReader({
-      'apps/api/src/Lumen.Host/Program.cs': 'class Program {}',
+      'apps/api/src/Lumen.Host/HostStartup.cs': 'class HostStartup {}',
       'apps/api/src/Lumen.Modules.Capture/Endpoints/CaptureEndpoints.cs': 'class CaptureEndpoints {}',
     });
     const llm = fakeLlm({
-      'apps/api/src/Lumen.Host/Program.cs':
-        metaBlock({ id: 'Program', calls: ['CaptureEndpoints'] }) + '\n' + SUMMARY,
+      'apps/api/src/Lumen.Host/HostStartup.cs':
+        metaBlock({ id: 'HostStartup', calls: ['CaptureEndpoints'] }) + '\n' + SUMMARY,
       'apps/api/src/Lumen.Modules.Capture/Endpoints/CaptureEndpoints.cs':
         metaBlock({ id: 'CaptureEndpoints' }) + '\n' + SUMMARY,
     });
     const symbols = fakeSymbols({
-      'apps/api/src/Lumen.Host/Program.cs': [sym('Program', 'apps/api/src/Lumen.Host/Program.cs', 1, 10)],
+      'apps/api/src/Lumen.Host/HostStartup.cs': [sym('HostStartup', 'apps/api/src/Lumen.Host/HostStartup.cs', 1, 10)],
       'apps/api/src/Lumen.Modules.Capture/Endpoints/CaptureEndpoints.cs': [
         sym('CaptureEndpoints', 'apps/api/src/Lumen.Modules.Capture/Endpoints/CaptureEndpoints.cs', 1, 10),
       ],
@@ -91,11 +96,11 @@ describe('runOrchestrator', () => {
       NEVER_CANCELLED,
     );
 
-    expect(Object.keys(out.graph.nodes).sort()).toEqual(['CaptureEndpoints', 'Program']);
+    expect(Object.keys(out.graph.nodes).sort()).toEqual(['CaptureEndpoints', 'HostStartup']);
     expect(out.graph.edges).toEqual([
-      { from: 'Program', to: 'CaptureEndpoints', kind: 'calls', verified: true },
+      { from: 'HostStartup', to: 'CaptureEndpoints', kind: 'calls', verified: true },
     ]);
-    expect(out.graph.nodes.Program!.boundedContext).toBe('host');
+    expect(out.graph.nodes.HostStartup!.boundedContext).toBe('host');
     expect(out.graph.nodes.CaptureEndpoints!.boundedContext).toBe('capture');
     expect(out.stats.filesAnalyzed).toBe(2);
     expect(out.stats.verifiedCount).toBe(2);
@@ -201,11 +206,13 @@ describe('runOrchestrator', () => {
     for (const [file, text] of Object.entries(files)) {
       const id = file.includes('Program') ? 'Program' : 'CaptureEndpoints';
       // v3.7: cache key folds in a salt derived from bounded context +
-      // entry-point flag + sorted inbound list. Pre-seed with the exact salt
-      // the orchestrator will compute, otherwise these "fully cached" runs
-      // miss and re-analyze the file.
+      // entry-point flag + sorted inbound list. v3.8 also folds in the
+      // detected internal-namespace roots (empty here — the fixture .cs
+      // files declare no `namespace` and there is no package.json). Pre-seed
+      // with the exact salt the orchestrator will compute, otherwise these
+      // "fully cached" runs miss and re-analyze the file.
       const bucket = file.includes('Lumen.Host') ? 'host' : 'capture';
-      const salt = `bc:${bucket}|entry:1|in:`;
+      const salt = `bc:${bucket}|entry:1|in:|ns:`;
       const key = AnalyzerCache.key(`${PROMPT_VERSION}/${CALIBRATOR_VERSION}`, file, text, salt);
       await cache.set(key, {
         file,
@@ -288,8 +295,9 @@ describe('runOrchestrator', () => {
         `${PROMPT_VERSION}/${CALIBRATOR_VERSION}`,
         cachedFile,
         files[cachedFile]!,
-        // v3.7: Program.cs in Lumen.Host → bucket "host", entry-point, no inbound.
-        'bc:host|entry:1|in:',
+        // v3.7+v3.8: Program.cs in Lumen.Host → bucket "host", entry-point,
+        // no inbound, no namespace roots (fixture has no `namespace` decl).
+        'bc:host|entry:1|in:|ns:',
       ),
       {
         file: cachedFile,

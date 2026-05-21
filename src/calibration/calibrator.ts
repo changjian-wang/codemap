@@ -29,8 +29,22 @@ import type { SymbolProvider, SymbolHit } from './symbol-provider';
  *        for sample, publicApis for public_api); v3.5 LLMs emitted
  *        sampleName on cli_main blocks, which the calibrator was passing
  *        through to the graph
+ *   v6 — (rolled back in v8) blanket bare-name `external_calls` drop;
+ *        broke R catastrophically when v3.8 started using bare names as
+ *        a deliberate signal for workspace-type promotion.
+ *   v7 — (rolled back in v8) narrow v6 to verb-prefix bare names. Killed
+ *        ~9 legitimate `EvalHostBuilder → ext:AddXxx` style edges that
+ *        golden expected, costing ~0.06 in recall without enough P gain.
+ *   v8 — revert both v6 and v7. The actual lumen noise source was
+ *        top-level-statements `Program` nodes (Lumen.Host.Program /
+ *        Lumen.Eval.Program) dragging in ~20 spurious out-edges; that
+ *        problem now lives in the aggregator (see "top-level Program
+ *        filter" in `aggregator.ts`). The calibrator goes back to
+ *        accepting every well-formed `external_calls` entry; the
+ *        aggregator's existing workspace-symbol promotion + the new
+ *        Program filter handle the rest.
  */
-export const CALIBRATOR_VERSION = 'v5';
+export const CALIBRATOR_VERSION = 'v8';
 
 /**
  * Calibrator: LLM raw output → validated CodeNode + CodeEdge[].

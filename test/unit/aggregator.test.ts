@@ -326,4 +326,58 @@ describe('aggregate', () => {
     });
     expect(graph.readingOrder).toEqual(['Entry', 'Helper']);
   });
+
+  it('drops synthetic top-level-statements Program nodes and all touching edges', async () => {
+    // .NET 6+ Program.cs with top-level statements has no explicit
+    // `class Program` declaration but the LSP/LLM still report one. The
+    // aggregator namespace-qualifies it (Lumen.Host.Program) and the
+    // resulting node + every wire-up edge is noise vs the golden wiki.
+    // We drop the node and any in/out edge regardless of edge kind.
+    const host = R('apps/api/src/Lumen.Host/Program.cs', [
+      N('Program', { file: 'apps/api/src/Lumen.Host/Program.cs' }),
+    ], [
+      { from: 'Program', to: 'GlobalExceptionHandler', kind: 'calls', verified: true },
+      { from: 'Program', to: 'ext:WebApplication.CreateBuilder', kind: 'external_calls', verified: true },
+    ]);
+    const evalProg = R('apps/api/src/Lumen.Eval/Program.cs', [
+      N('Program', { file: 'apps/api/src/Lumen.Eval/Program.cs' }),
+    ], [
+      { from: 'Program', to: 'DatasetLoader', kind: 'calls', verified: true },
+    ]);
+    const other = R('apps/api/src/Lumen.Host/GlobalExceptionHandler.cs', [
+      N('GlobalExceptionHandler', { file: 'apps/api/src/Lumen.Host/GlobalExceptionHandler.cs' }),
+    ]);
+    const datasetLoader = R('apps/api/src/Lumen.Eval/Dataset/DatasetLoader.cs', [
+      N('DatasetLoader', { file: 'apps/api/src/Lumen.Eval/Dataset/DatasetLoader.cs' }),
+    ]);
+    const { graph } = await aggregate({
+      rootRequest: '', scope: 'workspace',
+      analyses: [host, evalProg, other, datasetLoader],
+      symbols: makeSymbols(),
+    });
+    // Both Program nodes (namespace-qualified by parent folder) are dropped.
+    expect(graph.nodes['Lumen.Host.Program']).toBeUndefined();
+    expect(graph.nodes['Lumen.Eval.Program']).toBeUndefined();
+    // Non-Program nodes survive.
+    expect(graph.nodes.GlobalExceptionHandler).toBeDefined();
+    expect(graph.nodes.DatasetLoader).toBeDefined();
+    // No edges remain that reference a dropped Program node.
+    expect(graph.edges).toEqual([]);
+    // The ext: edge from a dropped Program node must not appear in externalDeps.
+    expect(graph.externalDeps.find(d => d.name === 'WebApplication.CreateBuilder')).toBeUndefined();
+  });
+
+  it('keeps a real Program class when it lives in a non-Program.cs file', async () => {
+    // If someone explicitly writes `class Program` in a file that is NOT
+    // named Program.cs, the filter must not touch it (e.g. someone's own
+    // unrelated `Program` type in `ProgramRunner.cs`). The heuristic is
+    // file-path-based on purpose; this test pins that contract.
+    const a = R('src/runner/ProgramRunner.cs', [
+      N('Program', { file: 'src/runner/ProgramRunner.cs' }),
+    ]);
+    const { graph } = await aggregate({
+      rootRequest: '', scope: 'workspace', analyses: [a], symbols: makeSymbols(),
+    });
+    expect(graph.nodes.Program).toBeDefined();
+  });
 });

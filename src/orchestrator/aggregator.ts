@@ -263,6 +263,46 @@ export async function aggregate(input: AggregateInput): Promise<AggregateResult>
     });
   }
 
+  // ---- 2.5. Drop synthetic top-level-statements `Program` nodes. ----
+  //
+  // In .NET 6+ a Program.cs that contains only top-level statements has no
+  // explicit `class Program` declaration; the compiler synthesizes one.
+  // The LLM/LSP still report `Program` as a class node and the aggregator
+  // namespace-qualifies it (e.g. `Lumen.Host.Program`), but the resulting
+  // node and its out-edges are pure noise from a codemap-reader's
+  // perspective — it's an entry point, not a type users reason about, and
+  // every wire-up call (`AddCaptureModule`, `MapRecallEndpoints`, ...)
+  // becomes an extra edge with no in-graph partner. Golden samples
+  // (lumen wiki, others) consistently exclude these.
+  //
+  // Heuristic: file basename is `Program.cs` and the node's short id is
+  // exactly `Program`. We deliberately do NOT read the file to confirm
+  // absence of an explicit `class Program` declaration — modern .NET
+  // discourages writing one, and the false-positive (someone explicitly
+  // declares `class Program` in Program.cs) is rare and recoverable by
+  // renaming the file. The simplicity buys us a deterministic, FS-free
+  // filter that survives the aggregator-as-pure-function contract.
+  const droppedProgramIds = new Set<string>();
+  for (const [id, node] of nodesById) {
+    if (!isTopLevelProgramFile(node.file)) continue;
+    const shortId = id.split('.').pop();
+    if (shortId !== 'Program') continue;
+    droppedProgramIds.add(id);
+  }
+  if (droppedProgramIds.size > 0) {
+    for (const id of droppedProgramIds) {
+      nodesById.delete(id);
+      nodeIdSet.delete(id);
+    }
+    for (let i = edges.length - 1; i >= 0; i--) {
+      const e = edges[i]!;
+      if (droppedProgramIds.has(e.from) || droppedProgramIds.has(e.to)) {
+        edgesSeen.delete(`${e.from}|${e.to}|${e.kind}`);
+        edges.splice(i, 1);
+      }
+    }
+  }
+
   // ---- 3. External dep list (de-duped from ext:* edge targets). ----
   const externalDeps: ExternalDep[] = [];
   const seenExt = new Set<string>();
@@ -351,6 +391,16 @@ function qualifierFromFile(file: string): string {
   const parts = file.replace(/\\/g, '/').split('/').filter(Boolean);
   if (parts.length < 2) return '';
   return parts[parts.length - 2] ?? '';
+}
+
+/**
+ * Detect a Program.cs path regardless of separator style (POSIX or Win32).
+ * Used by the synthetic-Program-node filter; intentionally cheap so we can
+ * call it in a hot loop over every node without FS access.
+ */
+function isTopLevelProgramFile(file: string): boolean {
+  const norm = file.replace(/\\/g, '/').toLowerCase();
+  return norm === 'program.cs' || norm.endsWith('/program.cs');
 }
 
 

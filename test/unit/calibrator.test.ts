@@ -159,6 +159,42 @@ describe('Calibrator', () => {
     ]);
   });
 
+  it('drops bare verb-prefix external_calls (extension methods) but keeps bare type names for aggregator promotion', async () => {
+    // v8 rollback verification: the v6/v7 bare-name filters are gone. The
+    // calibrator accepts every well-formed external_calls entry; downstream
+    // (aggregator) is responsible for any node-level noise filtering (e.g.
+    // top-level-statements Program drop). This test pins the no-filter
+    // contract so a future regression that re-introduces bare-name dropping
+    // at the calibrator level is caught immediately.
+    const c = new Calibrator(
+      makeProvider({ inFile: { 'a.cs': [sym('Program', 'a.cs', 1, 100)] } }),
+    );
+    const out = await c.calibrate({
+      data: {
+        node_id: 'Program',
+        external_calls: [
+          'AddCaptureModule',
+          'MapRecallEndpoints',
+          'UseExceptionHandler',
+          'IRecallQuery',
+          'AskByQueryRequest',
+          'WebApplication.CreateBuilder',
+        ],
+      },
+      file: 'a.cs',
+      boundedContext: 'host',
+    });
+    const externalEdges = out?.edges.filter(e => e.kind === 'external_calls').map(e => e.to);
+    expect(externalEdges).toEqual([
+      'ext:AddCaptureModule',
+      'ext:MapRecallEndpoints',
+      'ext:UseExceptionHandler',
+      'ext:IRecallQuery',
+      'ext:AskByQueryRequest',
+      'ext:WebApplication.CreateBuilder',
+    ]);
+  });
+
   it('honours dotted call targets (e.g. "Util.helper" → "Util")', async () => {
     const c = new Calibrator(
       makeProvider({

@@ -1,4 +1,4 @@
-import type { CodeMapGraph, CodeNode } from '../shared/types';
+import type { CodeMapGraph, CodeNode, EntryKind } from '../shared/types';
 
 /**
  * Pure helpers for the `/why`, `/explain`, and `/focus` chat sub-commands.
@@ -309,3 +309,96 @@ export function formatVerificationDigest(
   lines.push('_Use `@codemap /why <Class>` for a per-node breakdown._');
   return lines.join('\n');
 }
+
+export interface EntriesResult {
+  markdown: string;
+  count: number;
+}
+
+const ENTRY_KIND_ORDER: readonly EntryKind[] = [
+  'http_endpoint',
+  'cli_main',
+  'worker',
+  'sample',
+  'public_api',
+];
+
+const ENTRY_KIND_LABEL: Record<EntryKind, string> = {
+  http_endpoint: 'HTTP endpoints',
+  cli_main: 'CLI mains',
+  worker: 'Workers',
+  sample: 'Samples',
+  public_api: 'Public APIs',
+};
+
+/**
+ * Diagnostic listing of every node tagged `isEntry: true`, grouped by
+ * `entryKind`. Used to eyeball v3.5 prompt accuracy before any UI work.
+ */
+export function listEntries(graph: CodeMapGraph): EntriesResult {
+  const all = Object.values(graph.nodes);
+  const entries = all.filter(n => n.isEntry === true);
+
+  if (entries.length === 0) {
+    return {
+      count: 0,
+      markdown:
+        '_No entry-point classes tagged in the current graph._ ' +
+        'Either the workspace has no user-facing entry points, or the LLM ' +
+        'did not surface any (rerun `@codemap /scope <path>` after bumping ' +
+        'the prompt version to invalidate the cache).',
+    };
+  }
+
+  const byKind = new Map<EntryKind | 'unknown', CodeNode[]>();
+  for (const n of entries) {
+    const k = (n.entryKind ?? 'unknown') as EntryKind | 'unknown';
+    if (!byKind.has(k)) byKind.set(k, []);
+    byKind.get(k)!.push(n);
+  }
+
+  const lines: string[] = [];
+  lines.push(
+    `Found **${entries.length}** entry-point class(es) across **${byKind.size}** kind(s).`,
+  );
+  lines.push('');
+
+  for (const kind of ENTRY_KIND_ORDER) {
+    const ns = byKind.get(kind);
+    if (!ns || ns.length === 0) continue;
+    lines.push(`### ${ENTRY_KIND_LABEL[kind]} (${ns.length})`);
+    for (const n of ns) lines.push(formatEntryLine(n));
+    lines.push('');
+  }
+
+  const unknown = byKind.get('unknown');
+  if (unknown && unknown.length > 0) {
+    lines.push(`### Tagged \`isEntry\` without a recognized kind (${unknown.length})`);
+    for (const n of unknown) lines.push(formatEntryLine(n));
+    lines.push('');
+  }
+
+  lines.push('_Use `@codemap /focus <Class>` to see an entry\'s subgraph._');
+  return { count: entries.length, markdown: lines.join('\n') };
+}
+
+function formatEntryLine(n: CodeNode): string {
+  const bits: string[] = [];
+  const meta = n.entryMeta;
+  if (meta?.routes && meta.routes.length > 0) {
+    bits.push(meta.routes.map(r => `\`${r}\``).join(', '));
+  }
+  if (meta?.commands && meta.commands.length > 0) {
+    bits.push(`cmds: ${meta.commands.map(c => `\`${c}\``).join(', ')}`);
+  }
+  if (meta?.sampleName) bits.push(`sample: \`${meta.sampleName}\``);
+  if (meta?.publicApis && meta.publicApis.length > 0) {
+    const shown = meta.publicApis.slice(0, 4).map(a => `\`${a}\``).join(', ');
+    const tail =
+      meta.publicApis.length > 4 ? ` _(+${meta.publicApis.length - 4} more)_` : '';
+    bits.push(`apis: ${shown}${tail}`);
+  }
+  const suffix = bits.length > 0 ? ` — ${bits.join(' · ')}` : '';
+  return `- \`${n.id}\` (\`${n.file}\`)${suffix}`;
+}
+

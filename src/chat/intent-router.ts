@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 
-export type ChatIntentKind = 'generate_workspace' | 'scope' | 'focus' | 'why' | 'explain' | 'eval' | 'unknown';
+export type ChatIntentKind = 'generate_workspace' | 'scope' | 'focus' | 'why' | 'explain' | 'eval' | 'entries' | 'unknown';
 
 export interface ChatIntent {
   kind: ChatIntentKind;
@@ -59,6 +59,8 @@ export function routeChatIntent(request: vscode.ChatRequest): ChatIntent {
       return { kind: 'explain', target: prompt, prompt };
     case 'eval':
       return { kind: 'eval', target: prompt, prompt };
+    case 'entries':
+      return { kind: 'entries', target: prompt, prompt };
   }
 
   // No sub-command. If the prompt body mentions codemap / call graph / graph

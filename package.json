@@ -77,6 +77,10 @@
           {
             "name": "eval",
             "description": "Score the current graph against .codemap/golden.json and show precision/recall/F1"
+          },
+          {
+            "name": "entries",
+            "description": "List entry-point classes (HTTP endpoints, CLI mains, workers, samples, public APIs) in the current graph"
           }
         ]
       }

@@ -12,7 +12,7 @@ import { DEFAULT_SCAN_OPTIONS } from '../orchestrator/workspace-scanner';
 import type { MockupChatTurn } from '../webview/graph-adapter';
 import { GraphStore, currentWorkspaceRevHash, loadLatestGraph, type StoredGraph } from '../persistence/graph-store';
 import { AnalyzerCache } from '../persistence/analyzer-cache';
-import { explainNode, explainUnverified, focusSubgraph, formatVerificationDigest } from './chat-responders';
+import { explainNode, explainUnverified, focusSubgraph, formatVerificationDigest, listEntries } from './chat-responders';
 import { shouldDeepFocus, runDeepFocus } from '../orchestrator/deep-focus';
 
 const PARTICIPANT_ID = 'codemap.codemap';
@@ -40,6 +40,9 @@ export function registerChatParticipant(context: vscode.ExtensionContext): vscod
       case 'eval':
         await handleEval(context, response);
         return;
+      case 'entries':
+        await handleEntries(context, response);
+        return;
       case 'unknown':
         response.markdown(
           [
@@ -50,6 +53,7 @@ export function registerChatParticipant(context: vscode.ExtensionContext): vscod
             '- `@codemap /why <Class>` — explain partial/unverified state',
             '- `@codemap /explain unverified` — list all unverified nodes in the current graph',
             '- `@codemap /eval` — score the current graph against `.codemap/golden.json`',
+            '- `@codemap /entries` — list entry-point classes in the current graph',
           ].join('\n'),
         );
         return;
@@ -343,6 +347,18 @@ async function handleExplain(
     return;
   }
   response.markdown(explainUnverified(stored.graph).markdown);
+}
+
+async function handleEntries(
+  context: vscode.ExtensionContext,
+  response: vscode.ChatResponseStream,
+): Promise<void> {
+  const stored = loadCurrentGraph(context);
+  if (!stored) {
+    response.markdown(noGraphHint());
+    return;
+  }
+  response.markdown(listEntries(stored.graph).markdown);
 }
 
 async function handleEval(

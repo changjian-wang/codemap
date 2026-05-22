@@ -1677,7 +1677,11 @@ const cy = cytoscape({
     {
       // Slice 3 — shared classes (reached by ≥30% of entry methods). Smaller
       // box, muted palette, dashed border. positionSharedRow() pins these to
-      // a bottom band after each focus-mode layout.
+      // a bottom band after each focus-mode layout. Label is overridden to
+      // the bare class id so the compact box doesn't get overflown by the
+      // full multi-line method label inherited from `node.cls` — that
+      // overflow becomes visible (and ugly) when the shared node is selected
+      // and the `:selected` border thickens.
       selector: 'node.cls.shared-cls',
       style: {
         'width': 100,
@@ -1690,6 +1694,9 @@ const cy = cytoscape({
         'opacity': 0.6,
         'color': '#8a8a8a',
         'font-size': 9,
+        'label': 'data(id)',
+        'text-wrap': 'ellipsis',
+        'text-max-width': 90,
       }
     },
     {

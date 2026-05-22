@@ -4,6 +4,89 @@ All notable changes to this extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.8 — 2026-05-22
+
+Focus Mode redesign. Closes #2. The webview's READING ORDER panel was
+a flat alphabetical method list and the graph rendered every class in
+one dagre slab — two unrelated views you had to mentally cross-reference.
+This release turns both into one entry-method-driven navigator: pick
+an entry method, the graph zooms to the subgraph reachable from it at
+depth N (1 / 2 / 3 / ∞), and the outline reorders itself so reading
+distance from the chosen entry runs top-to-bottom. Browser-style
+Back / Forward arrows and a Focus / All toggle let you sweep through
+entry points without losing context.
+
+Scope: webview + eval only. The extension host, the analyzer, the LSP
+calibrator and the orchestrator are unchanged. The mockup at
+`docs/mockups/lumen-backend-v3.html` and the data adapter in
+`src/webview/graph-adapter.ts` carry the entire focus-mode change; the
+eval scorer gets a small bare-vs-FQN canonicalisation that removes a
+known double-counting noise source from precision/recall numbers
+without re-running the LLM.
+
+### Added
+- **`src/webview/graph-adapter.ts` — `computeFocusModeMetadata`.** Pure
+  derivation over the existing `MockupData` shape: entry methods
+  grouped by bc, a forward-BFS reachability map per entry, and the
+  "shared class" set (classes reached by ≥30% of entries). Exposed
+  on `window.__CODEMAP_DATA__.entries / shared` so the webview never
+  re-walks the graph at runtime.
+- **READING ORDER — 3-level entry tree.** Replaces the flat method
+  list with `bc → entry class → method`. Entry-class headers have
+  their own collapse caret; method rows show name + a one-line intent
+  subtitle. Clicking a method focuses on it.
+- **Focus subgraph navigation.** Clicking a method runs a depth-N BFS
+  over `calls` edges from its class, hides every other node and edge,
+  re-runs dagre on the visible subset, and pins shared classes to a
+  bottom band so the call chain stays vertically aligned. Depth is
+  controlled by a 1 / 2 / 3 / ∞ slider in a new focus bar above the
+  graph.
+- **Focus / All toggle.** `All` re-runs dagre on the full graph (taxi
+  routing intact) so you can sanity-check the wider context; `Focus`
+  restores the last entry without re-selecting. Clicking an outline
+  method while in All mode auto-switches back to Focus.
+- **Back / Forward history.** 50-entry stack of `(classId, methodName)`
+  pairs, browser-style: `setFocus` pushes, mid-stack navigation drops
+  the forward branch, depth changes don't pollute the stack.
+- **BC breadcrumb chip.** `bc › Class . method` in front of the
+  focus-bar class label, filled with the bc semantic color
+  (host / capture in khaki / teal with dark text; recall / shared in
+  purple / blue with white text). Dimmed in All mode.
+- **Depth-from-focus outline badges + ordering.** Each entry-class row
+  gets a small badge — `here` (current focus, accent fill), `+N`
+  (reachable in N hops), or `—` (unreachable from current focus, row
+  dimmed to opacity 0.5). Entries sort by depth ascending within their
+  bc group; All mode hides badges and falls back to `readingPriority`
+  sort.
+- **`eval/score-cli.ts` — accepts YAML actuals** (detection by file
+  extension via the already-installed `yaml` package). Removes the
+  JSON-conversion step for every webview "Export → YAML" fixture.
+  `eval/baselines/` seeded with the v0.0.6 lumen actual.
+
+### Changed
+- **`src/eval/score.ts` — bare-vs-FQN `ext:` canonicalisation.** Within
+  the union of golden + actual `ext:` targets (post
+  `ignoreEdgeToPrefixes` filter), two targets alias iff they share
+  the same last dot segment AND at least one side is bare. Longest
+  form in the alias bucket wins as canonical; lexicographic tiebreak
+  for determinism. All-FQN buckets are left alone so distinct
+  namespaces with the same type name never collide. On the lumen
+  `apps/api/src` v0.0.6 baseline this collapses one
+  `EvalHostBuilder → ext:AssemblyMarker` double-count (Edges F1
+  0.916 → 0.920). Small headline gain; real value is a noise-free
+  baseline for prompt-side experiments.
+
+### Fixed
+- **Shared-class node label no longer overflows its compact box.** The
+  Slice 3 `.shared-cls` style forces a 100×32 pill but inherited
+  `node.cls`'s full multi-line label — title + every method row. The
+  overflow was invisible at idle (1px grey dashed border, opacity 0.6
+  against the dark canvas) but glaring on selection: `node:selected`
+  drew a thick blue ring around the 100×32 box while the title and
+  trailing methods floated outside it. Shared nodes now show only the
+  bare class id with `text-wrap: ellipsis`; full method lists remain
+  accessible via the Details pane.
+
 ## 0.0.6 — 2026-05-21
 
 Precision pass. v0.0.5 reached `lumen/apps/api/src` Edges F1=0.87 with a

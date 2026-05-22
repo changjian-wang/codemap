@@ -241,6 +241,68 @@
     .v-icon.partial    { color: var(--ver-partial); }
     .v-icon.unverified { color: var(--vs-text-dim); }
 
+    /* ====== OUTLINE — focus-mode tree (Slice 2) ====== */
+    /* The Reading Order panel renders a 3-level tree: bc → entry class →
+       method. The bc layer reuses the existing `.bc-group` + `.outline-list`
+       collapse machinery. The middle (entry class) and leaf (method) layers
+       are below. */
+    .outline-class {
+      padding: 5px 10px 5px 18px;
+      display: flex; align-items: center; gap: 6px;
+      cursor: pointer; font-size: 12px; line-height: 1.4;
+      user-select: none;
+      border-left: 2px solid transparent;
+    }
+    .outline-class:hover { background: rgba(255,255,255,0.04); }
+    .outline-class.active {
+      background: rgba(0,122,204,0.18); border-left-color: var(--vs-accent);
+    }
+    .outline-class .class-caret {
+      display: inline-block; width: 10px;
+      font-size: 9px; opacity: 0.7;
+      transition: transform 0.12s ease-out;
+      flex-shrink: 0;
+    }
+    .outline-class.collapsed .class-caret { transform: rotate(-90deg); }
+    .outline-class .outline-name {
+      flex: 1; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font-family: "Consolas", monospace; font-size: 11px;
+    }
+    .outline-class .outline-method-count {
+      font-family: "Consolas", monospace; font-size: 10px;
+      color: var(--vs-text-dim); opacity: 0.65;
+      flex-shrink: 0;
+    }
+    .outline-methods {
+      padding: 2px 0 6px 0;
+    }
+    .outline-methods.collapsed { display: none; }
+    .outline-method {
+      padding: 4px 10px 4px 36px;
+      display: flex; flex-direction: column; gap: 1px;
+      cursor: pointer; line-height: 1.3;
+      border-left: 2px solid transparent;
+    }
+    .outline-method:hover { background: rgba(255,255,255,0.04); }
+    .outline-method.active {
+      background: rgba(0,122,204,0.18); border-left-color: var(--vs-accent);
+    }
+    .outline-method-name {
+      font-family: "Consolas", monospace; font-size: 11.5px;
+      color: var(--vs-text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .outline-method-intent {
+      font-size: 10.5px; color: var(--vs-text-dim);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font-style: italic;
+    }
+    .outline-empty {
+      padding: 8px 18px; font-size: 11px;
+      color: var(--vs-text-dim); font-style: italic;
+    }
+
     /* ====== GRAPH ====== */
     .graph-pane {
       position: relative;
@@ -589,6 +651,9 @@
     .yaml-punct { color: #808080; }
 
     .outline-item.hidden { display: none !important; }
+    .outline-class.hidden { display: none !important; }
+    .outline-methods.hidden { display: none !important; }
+    .outline-empty.hidden { display: none !important; }
     .bc-group.hidden { display: none !important; }
     .chip.hidden { display: none !important; }
 
@@ -1182,6 +1247,48 @@ const CLASSES = __INJ.classes || [
   },
 ];
 
+// Focus-mode entries: one row per public entry method of an isEntry class.
+// When the extension is the host this comes from window.__CODEMAP_DATA__.entries
+// (computed by computeFocusModeMetadata in graph-adapter.ts). The fallback below
+// keeps the standalone mockup demoable.
+const ENTRIES = __INJ.entries || [
+  // ---- host ----
+  { classId: 'Program',          methodName: 'Main',
+    signature: '(string[] args)',
+    intent: 'WebApplication.CreateBuilder → ConfigureModules → MapAllModuleEndpoints',
+    risks: [],
+    reachableClassIds: ['CaptureEndpoints', 'RecallEndpoints'] },
+
+  // ---- capture ----
+  { classId: 'CaptureEndpoints', methodName: 'IngestUrl',
+    signature: '(req, handler, ct)',
+    intent: 'POST /api/captures/url — enqueue async capture job',
+    risks: ['external_io'],
+    reachableClassIds: ['IngestUrlHandler', 'CaptureJobStore', 'HtmlContentExtractor', 'OnnxEmbeddingService', 'EventStore', 'EventChunkStore'] },
+  { classId: 'CaptureEndpoints', methodName: 'List',
+    signature: '(req, handler, ct)',
+    intent: 'GET /api/captures — list capture jobs',
+    risks: [],
+    reachableClassIds: ['EventStore'] },
+  { classId: 'CaptureEndpoints', methodName: 'GetJob',
+    signature: '(jobId, handler, ct)',
+    intent: 'GET /api/captures/jobs/{id} — fetch a single job',
+    risks: [],
+    reachableClassIds: ['CaptureJobStore'] },
+
+  // ---- recall ----
+  { classId: 'RecallEndpoints',  methodName: 'Search',
+    signature: '(req, handler, ct)',
+    intent: 'GET /api/recall — vector cosine top-K',
+    risks: [],
+    reachableClassIds: ['RecallByQueryHandler', 'OnnxEmbeddingService', 'RecallQuery'] },
+  { classId: 'RecallEndpoints',  methodName: 'Ask',
+    signature: '(req, handler, ct)',
+    intent: 'POST /api/recall/ask — grounded LLM Q&A (ADR-017)',
+    risks: ['security'],
+    reachableClassIds: ['AskByQueryHandler', 'OnnxEmbeddingService', 'RecallQuery', 'OllamaLlmService', 'GroundedAskPromptsV2'] },
+];
+
 const EXTERNAL_DEPS = __INJ.externalDeps || [
   { name: 'Dawning.ORM.Dapper',                       kind: 'package' },
   { name: 'Npgsql.EntityFrameworkCore.PostgreSQL',    kind: 'package' },
@@ -1514,6 +1621,10 @@ const cy = cytoscape({
 });
 
 // ---------- Outline ----------
+// Slice 2: render `READING ORDER` as a 3-level tree
+// (bc → entry class → method). bc-group collapse machinery is reused; the
+// entry-class header carries its own caret. Method click is a console.log
+// stub — real focus-mode navigation lands in Slice 3.
 function renderOutline() {
   const groups = {
     host:    document.getElementById('outlineHost'),
@@ -1523,30 +1634,79 @@ function renderOutline() {
   };
   Object.values(groups).forEach(g => g.innerHTML = '');
 
-  const sorted = [...CLASSES].sort((a,b) => a.readingPriority - b.readingPriority);
-  sorted.forEach(c => {
-    const row = document.createElement('div');
-    row.className = `outline-item${c.readState === 'read' ? ' read' : ''}`;
-    row.dataset.id = c.id;
-    const nameCls = (c.readState === 'read' ? ' read' : '') + (c.verification === 'unverified' ? ' unverified' : '');
-    const priorityCls = c.verification === 'unverified' ? ' unverified' : '';
-    const riskDots = c.risks.map(r => `<span class="icon-dot ${r.type}" title="${r.desc}"></span>`).join('');
-    // Mark non-class entries in the outline with a UML-style prefix so
-    // they're recognisable even before the user opens the card.
+  // Bucket entries by their owning class so each entry class becomes one
+  // collapsible subtree.
+  const byClass = new Map();
+  ENTRIES.forEach(e => {
+    if (!byClass.has(e.classId)) byClass.set(e.classId, []);
+    byClass.get(e.classId).push(e);
+  });
+
+  // Iterate classes in reading-priority order so the tree mirrors the
+  // sequential reading path.
+  const entryClasses = [...byClass.keys()]
+    .map(id => CLASSES.find(c => c.id === id))
+    .filter(Boolean)
+    .sort((a, b) => a.readingPriority - b.readingPriority);
+
+  entryClasses.forEach(c => {
+    const methods = byClass.get(c.id) || [];
+    const bcSlot = groups[c.bc] || groups.shared;
+
+    // Class header
+    const header = document.createElement('div');
+    header.className = 'outline-class';
+    header.dataset.classId = c.id;
     const KIND_PREFIX = { interface: 'I', record: 'R', enum: 'E' };
     const kindPrefix = c.kind && KIND_PREFIX[c.kind]
       ? `<span class="kind-prefix kind-${c.kind}" title="${c.kind}">«${KIND_PREFIX[c.kind]}»</span> `
       : '';
-    row.innerHTML = `
-      <span class="outline-priority${priorityCls}">${c.verification === 'unverified' ? '?' : c.readingPriority}</span>
-      <span class="outline-name${nameCls}">${kindPrefix}${c.id}</span>
-      <span class="outline-icons">
-        ${riskDots}
-        <span class="v-icon ${c.verification}">${visGlyph(c.verification)}</span>
-      </span>
+    header.innerHTML = `
+      <span class="class-caret">▾</span>
+      <span class="outline-name">${kindPrefix}${c.id}</span>
+      <span class="outline-method-count">${methods.length}</span>
     `;
-    row.addEventListener('click', () => selectClass(c.id));
-    (groups[c.bc] || groups.shared).appendChild(row);
+
+    // Methods container
+    const methodsList = document.createElement('div');
+    methodsList.className = 'outline-methods';
+    methodsList.dataset.classId = c.id;
+    methods.forEach(m => {
+      const row = document.createElement('div');
+      row.className = 'outline-method';
+      row.dataset.classId = c.id;
+      row.dataset.method = m.methodName;
+      row.innerHTML = `
+        <span class="outline-method-name">${m.methodName}</span>
+        <span class="outline-method-intent">${m.intent || ''}</span>
+      `;
+      row.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        // Slice 2: log-only. Slice 3 will turn this into a focus-subgraph
+        // render.
+        console.log('would focus on', c.id, m.methodName);
+      });
+      methodsList.appendChild(row);
+    });
+
+    header.addEventListener('click', () => {
+      header.classList.toggle('collapsed');
+      methodsList.classList.toggle('collapsed');
+    });
+
+    bcSlot.appendChild(header);
+    bcSlot.appendChild(methodsList);
+  });
+
+  // Empty-state placeholder per bc slot when no entry methods landed there
+  // (e.g. extension host injected entries with no host/capture/recall hits).
+  Object.entries(groups).forEach(([bcName, slot]) => {
+    if (slot.children.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'outline-empty';
+      empty.textContent = 'no entry methods';
+      slot.appendChild(empty);
+    }
   });
 
   const ext = document.getElementById('externalList');
@@ -1569,8 +1729,7 @@ function renderOutline() {
   // so navigation, marking-as-read, etc. don't reset the user's filter state.
   applyOutlineFilters();
 
-  // Refresh per-group counts in the headers so users can see at a glance how
-  // many classes live in each BC without expanding.
+  // Refresh per-group counts in the headers (entry-class count per bc).
   const countMap = {
     outlineHost:    document.getElementById('countHost'),
     outlineCapture: document.getElementById('countCapture'),
@@ -1580,7 +1739,8 @@ function renderOutline() {
   Object.entries(countMap).forEach(([listId, badge]) => {
     if (!badge) return;
     const list = document.getElementById(listId);
-    badge.textContent = list ? String(list.children.length) : '0';
+    if (!list) { badge.textContent = '0'; return; }
+    badge.textContent = String(list.querySelectorAll(':scope > .outline-class').length);
   });
   // Re-apply collapsed state — collapsed flags live on the list container,
   // and applyOutlineFilters doesn't touch them, but a fresh render of new
@@ -1624,8 +1784,11 @@ function selectClass(id) {
   const c = CLASSES.find(x => x.id === id);
   if (!c) return;
 
-  document.querySelectorAll('.outline-item').forEach(el => el.classList.remove('active'));
-  const ol = [...document.querySelectorAll('.outline-item')].find(el => el.dataset.id === id);
+  // Mark the matching entry-class header active in the new tree outline.
+  // Non-entry classes don't appear in the outline (Slice 2) so no active row
+  // is set in that case.
+  document.querySelectorAll('.outline-class, .outline-item').forEach(el => el.classList.remove('active'));
+  const ol = document.querySelector(`.outline-class[data-class-id="${CSS.escape(id)}"]`);
   if (ol) ol.classList.add('active');
 
   highlightEdges(id);
@@ -2420,32 +2583,58 @@ function matchesSearch(c, q) {
 }
 function applyOutlineFilters() {
   // Mirror the graph-side filters onto the left outline list so chip / search
-  // changes affect both panes. Hides empty bc-groups so the user doesn't see
-  // a row of bare section headers when a slot has no matches.
+  // changes affect both panes. With Slice 2 the outline is a tree of
+  // entry-class headers (.outline-class) + sibling .outline-methods groups;
+  // toggling visibility on the header pulls the methods with it. External
+  // deps still use the flat .outline-item rows.
   const q = (filterState.search || '').trim().toLowerCase();
-  document.querySelectorAll('.outline-item').forEach(row => {
-    const id = row.dataset.id;
-    const ext = row.dataset.ext;
-    let visible = true;
-    if (id) {
-      const c = CLASSES.find(x => x.id === id);
-      if (!c) { visible = false; }
-      else {
-        if (filterState.bc !== 'all' && c.bc !== filterState.bc) visible = false;
-        if (filterState.hideRead && c.readState === 'read') visible = false;
-        if (filterState.onlyUnverified && c.verification === 'verified') visible = false;
-        if (q && !matchesSearch(c, q)) visible = false;
-      }
-    } else if (ext) {
-      if (q && !ext.toLowerCase().includes(q)) visible = false;
+
+  // Entry-class headers (paired with their .outline-methods sibling).
+  document.querySelectorAll('.outline-class').forEach(header => {
+    const id = header.dataset.classId;
+    const c = CLASSES.find(x => x.id === id);
+    let visible = !!c;
+    if (c) {
+      if (filterState.bc !== 'all' && c.bc !== filterState.bc) visible = false;
+      if (filterState.hideRead && c.readState === 'read') visible = false;
+      if (filterState.onlyUnverified && c.verification === 'verified') visible = false;
+      if (q && !matchesSearch(c, q)) visible = false;
     }
+    header.classList.toggle('hidden', !visible);
+    // Methods container is the immediate next sibling tagged with the same
+    // class id.
+    const methods = header.nextElementSibling;
+    if (methods && methods.classList.contains('outline-methods')
+        && methods.dataset.classId === id) {
+      methods.classList.toggle('hidden', !visible);
+    }
+  });
+
+  // Empty-state placeholders track header visibility — hidden whenever any
+  // sibling is visible.
+  document.querySelectorAll('.outline-empty').forEach(empty => {
+    const list = empty.parentElement;
+    if (!list) return;
+    const hasVisibleClass = [...list.children].some(ch =>
+      ch.classList.contains('outline-class') && !ch.classList.contains('hidden'));
+    empty.classList.toggle('hidden', hasVisibleClass);
+  });
+
+  // External-dep rows still use the legacy flat structure.
+  document.querySelectorAll('.outline-item').forEach(row => {
+    const ext = row.dataset.ext;
+    if (!ext) return;
+    const visible = !q || ext.toLowerCase().includes(q);
     row.classList.toggle('hidden', !visible);
   });
+
   ['Host', 'Capture', 'Recall', 'Shared'].forEach(name => {
     const container = document.getElementById('outline' + name);
     if (!container) return;
     const group = container.previousElementSibling;
-    const anyVisible = [...container.children].some(r => !r.classList.contains('hidden'));
+    const anyVisible = [...container.children]
+      .filter(r => r.classList.contains('outline-class'))
+      .some(r => !r.classList.contains('hidden'));
     container.classList.toggle('hidden', !anyVisible);
     if (group && group.classList && group.classList.contains('bc-group')) {
       group.classList.toggle('hidden', !anyVisible);
@@ -2550,8 +2739,8 @@ function postResetProgress() {
   // the outline DOM (and with it the `.active` marker). We need it to
   // re-render the right card afterwards so the "Mark unread" button text
   // refreshes — otherwise the card stays frozen in its pre-reset state.
-  const prevActive = document.querySelector('.outline-item.active');
-  const prevId = prevActive && prevActive.dataset.id;
+  const prevActive = document.querySelector('.outline-class.active, .outline-item.active');
+  const prevId = prevActive && (prevActive.dataset.classId || prevActive.dataset.id);
   const prevExt = prevActive && prevActive.dataset.ext;
 
   CLASSES.forEach(c => {
@@ -2564,7 +2753,7 @@ function postResetProgress() {
   if (prevId) {
     const c = CLASSES.find(x => x.id === prevId);
     if (c) {
-      const row = [...document.querySelectorAll('.outline-item')].find(el => el.dataset.id === prevId);
+      const row = document.querySelector(`.outline-class[data-class-id="${CSS.escape(prevId)}"]`);
       if (row) row.classList.add('active');
       renderCard(c);
     }

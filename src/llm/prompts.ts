@@ -41,15 +41,8 @@ import { ENTRY_GUIDANCE_SECTION } from './entry-detection';
  *          forbidden from emitting `ext:Root.*` external_calls for any
  *          root in that list. Closes the v3.7 edge-precision gap on
  *          codebases that declare their own multi-level namespaces.
- *   v3.9 — `external_calls` now means strictly invocations / instantiations /
- *          static-member access. Type-only references (parameter types,
- *          field types, return types, generics, base types) move to a new
- *          sibling field `external_type_refs`. The calibrator does not
- *          turn `external_type_refs` into graph edges. Closes the v0.0.6
- *          edge-precision gap on type-only refs (lumen baseline:
- *          ~30 extras of this shape).
  */
-export const PROMPT_VERSION = 'v3.9';
+export const PROMPT_VERSION = 'v3.8';
 
 export const SYSTEM_PROMPT = `You are CodeMap's static-analysis assistant. Read the source file given by
 the user and emit one structured metadata block per top-level type
@@ -98,14 +91,12 @@ For every in-scope type defined in the file, output exactly one fenced block:
       "line": <int>,
       "intent": "<optional: ≤ 80 chars method intent>",
       "calls": ["<in-file class name>", ...],
-      "external_calls": ["<cross-file or cross-package identifier this method INVOKES>", ...],
-      "external_type_refs": ["<cross-file or cross-package identifier used ONLY as a type>", ...],
+      "external_calls": ["<cross-file or cross-package identifier>", ...],
       "risks": ["security" | "external_io" | "concurrency" | "low_confidence" | "high_coupling" | "missing_test", ...]
     }
   ],
   "calls": ["<in-file class names this type depends on>", ...],
-  "external_calls": ["<cross-file / cross-package identifiers this type INVOKES>", ...],
-  "external_type_refs": ["<cross-file / cross-package identifiers used ONLY as types in this type>", ...],
+  "external_calls": ["<cross-file / cross-package identifiers>", ...],
   "risks": [
     { "type": "security" | "external_io" | "concurrency" | "low_confidence" | "high_coupling" | "missing_test",
       "desc": "<≤ 60 chars reason>" }
@@ -154,42 +145,7 @@ After all type blocks, emit one summary block:
    it and instead add a \`low_confidence\` risk.
 3. Do not list language built-ins or LINQ / Array combinators.
 
-### \`external_calls\` vs \`external_type_refs\` (CRITICAL — read both before emitting either)
-
-\`external_calls\` is for identifiers your code actually **uses behaviourally**:
-
-  - Method invocations: \`HttpClient.GetAsync\`, \`Dapper.Query\`, \`logger.LogInformation\`.
-  - Instantiations: \`new Pgvector.Vector(...)\`, \`new HttpClient()\`.
-  - Static-member access: \`File.ReadAllText\`, \`Environment.MachineName\`,
-    \`Encoding.UTF8\`.
-  - Extension-method calls written as the bare verb (\`AddCaptureModule(...)\`,
-    \`MapRecallEndpoints(...)\`).
-
-\`external_type_refs\` is for identifiers that only appear as **types in a
-signature, declaration, or generic argument** — your code never invokes,
-instantiates, or accesses a member of them:
-
-  - Method parameter types: \`Task DoThing(Pgvector.Vector v)\` → \`Pgvector.Vector\`
-    is a **type_ref**, not a call.
-  - Field / property types: \`private readonly IFoo _foo;\` → \`IFoo\` is a
-    type_ref only if nothing in the type actually calls a member on it.
-    If \`_foo.Bar()\` appears anywhere in this type, \`IFoo\` is a call.
-  - Return types: \`Task<RecallResult> RunAsync()\` → \`RecallResult\` is a
-    type_ref if you only return values constructed elsewhere; it's a call if
-    you do \`new RecallResult(...)\` or \`RecallResult.Empty\` etc.
-  - Generic type arguments: \`IEnumerable<Pgvector.Vector>\` → type_ref.
-  - Base types / interfaces implemented: \`class Foo : IDisposable\` → type_ref.
-
-Decision rule per identifier:
-
-  - Did your code **call, construct, or read a static member of** this
-    identifier? → \`external_calls\`.
-  - Does it only appear as a **type annotation, generic argument, or
-    interface-implemented**? → \`external_type_refs\`.
-  - If you see it BOTH ways (e.g. parameter type AND invoked) → put it in
-    \`external_calls\` only. An identifier never appears in both fields.
-
-\`external_calls\` general rules:
+### \`external_calls\`
 1. Cross-file or cross-package identifiers go here. Format: the precise
    identifier as it appears in the source (e.g. \`Dawning.ORM.Dapper\`,
    \`HttpClient.GetAsync\`, \`Pgvector.Vector\`). Not a paraphrase.
@@ -217,22 +173,6 @@ Decision rule per identifier:
    cache provider, an embedding model client, a domain value type
    (\`Pgvector.Vector\`), a third-party SDK, or a workspace-defined service
    contract.
-
-\`external_type_refs\` general rules:
-1. Same format as \`external_calls\` (precise source identifier).
-2. Same skip-list applies — framework plumbing types (\`ILogger\`,
-   \`CancellationToken\`, \`Task\`, \`IServiceCollection\`, ...) do not belong
-   in \`external_type_refs\` either; they're noise regardless of how they
-   appear.
-3. Same anti-fabrication rule: only list identifiers actually present in
-   the source.
-4. Each method's \`external_type_refs\` covers types appearing in that
-   method's signature or local variable declarations. The type-level
-   \`external_type_refs\` covers types in fields, properties, base list,
-   and generic constraints of the type itself.
-5. If a value type or domain type is constructed (\`new Foo()\`) anywhere
-   inside the type, it is a CALL — promote it to \`external_calls\` even
-   if it also appears as a parameter type elsewhere.
 
 ### \`range\`
 1. \`startLine\` = the line containing the class/method signature

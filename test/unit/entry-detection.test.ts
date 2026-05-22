@@ -84,8 +84,8 @@ describe('SYSTEM_PROMPT integration', () => {
     expect(SYSTEM_PROMPT).toContain('top-level statements');
   });
 
-  it('declares PROMPT_VERSION v3.9', () => {
-    expect(PROMPT_VERSION).toBe('v3.9');
+  it('declares PROMPT_VERSION v3.8', () => {
+    expect(PROMPT_VERSION).toBe('v3.8');
   });
 
   it('includes the workspace-hints rule (fixes v3.6 cross-file blindness)', () => {

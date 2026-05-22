@@ -303,6 +303,26 @@
       color: var(--vs-text-dim); font-style: italic;
     }
 
+    /* ====== OUTLINE — Slice 5 depth-from-focus ====== */
+    /* In focus mode, every entry class gets a depth badge showing its
+       forward call-depth from the current focus class. The focus class
+       itself reads "here" in accent color; unreachable entries dim and
+       sort to the bottom of their bc group. */
+    .outline-class .outline-depth-badge {
+      font-family: "Consolas", monospace; font-size: 9.5px;
+      letter-spacing: 0.3px;
+      color: var(--vs-text-dim); opacity: 0.75;
+      padding: 0 4px; border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .outline-class.depth-self .outline-depth-badge {
+      color: #fff; opacity: 1;
+      background: var(--vs-accent);
+      font-weight: 700;
+    }
+    .outline-class.depth-far { opacity: 0.5; }
+    .outline-class.depth-far .outline-depth-badge { opacity: 0.85; }
+
     /* ====== FOCUS BAR (Slice 3) ====== */
     /* Sits inside .graph-pane just below .filter-bar; advertises which
        entry method is focused and exposes the 1/2/3/∞ depth slider. The
@@ -1840,6 +1860,26 @@ function getExtNodesInScope(focusSet) {
   return ext;
 }
 
+// Slice 5: depth-from-focus over the forward class-to-class `calls` graph.
+// Used to re-rank the outline tree so the user's reading order reflects the
+// currently focused call chain instead of the static `readingPriority`.
+function getDepthsFromFocus() {
+  if (!currentFocus) return null;
+  const adj = __buildClassAdjacency();
+  const depths = new Map([[currentFocus.classId, 0]]);
+  const queue = [[currentFocus.classId, 0]];
+  while (queue.length > 0) {
+    const [cur, dist] = queue.shift();
+    for (const next of (adj.get(cur) || [])) {
+      if (!depths.has(next)) {
+        depths.set(next, dist + 1);
+        queue.push([next, dist + 1]);
+      }
+    }
+  }
+  return depths;
+}
+
 function isInFocus(nodeId) {
   if (!currentFocus) return true;
   return __cmFocusSet.has(nodeId) || __cmFocusExtSet.has(nodeId);
@@ -2018,6 +2058,9 @@ function setMode(newMode) {
   if (mode === 'all') {
     applyFilters();
     layoutAll();
+    // Slice 5: outline drops depth badges and falls back to readingPriority
+    // ordering in All mode.
+    renderOutline();
     updateFocusBar();
   } else if (currentFocus) {
     applyFocusInternal(currentFocus.classId, currentFocus.methodName);
@@ -2050,6 +2093,9 @@ function applyFocusInternal(classId, methodName) {
   applyFilters();
   layoutFocus();
   updateFocusBar();
+  // Slice 5: re-render outline so the depth badges + sort reflect the new
+  // focus. highlightOutlineMethod() runs against the fresh DOM.
+  renderOutline();
   highlightOutlineMethod(classId, methodName);
 }
 
@@ -2128,10 +2174,27 @@ function renderOutline() {
 
   // Iterate classes in reading-priority order so the tree mirrors the
   // sequential reading path.
+  // Slice 5: when a focus is active, re-rank entries by their forward
+  // call-depth from the focus class (depth 0 = focus itself, +1 each hop
+  // along `calls` edges, Infinity if unreachable). Falls back to global
+  // readingPriority in All mode or when no focus is set.
+  const depths = (mode === 'focus' && currentFocus) ? getDepthsFromFocus() : null;
+  const depthOf = (id) => {
+    if (!depths) return null;
+    return depths.has(id) ? depths.get(id) : Infinity;
+  };
+
   const entryClasses = [...byClass.keys()]
     .map(id => CLASSES.find(c => c.id === id))
     .filter(Boolean)
-    .sort((a, b) => a.readingPriority - b.readingPriority);
+    .sort((a, b) => {
+      if (depths) {
+        const da = depthOf(a.id);
+        const db = depthOf(b.id);
+        if (da !== db) return da - db;
+      }
+      return (a.readingPriority || 999) - (b.readingPriority || 999);
+    });
 
   entryClasses.forEach(c => {
     const methods = byClass.get(c.id) || [];
@@ -2141,6 +2204,19 @@ function renderOutline() {
     const header = document.createElement('div');
     header.className = 'outline-class';
     header.dataset.classId = c.id;
+    let depthBadge = '';
+    if (depths) {
+      const d = depthOf(c.id);
+      if (d === 0) {
+        header.classList.add('depth-self');
+        depthBadge = '<span class="outline-depth-badge">here</span>';
+      } else if (Number.isFinite(d)) {
+        depthBadge = `<span class="outline-depth-badge">+${d}</span>`;
+      } else {
+        header.classList.add('depth-far');
+        depthBadge = '<span class="outline-depth-badge">—</span>';
+      }
+    }
     const KIND_PREFIX = { interface: 'I', record: 'R', enum: 'E' };
     const kindPrefix = c.kind && KIND_PREFIX[c.kind]
       ? `<span class="kind-prefix kind-${c.kind}" title="${c.kind}">«${KIND_PREFIX[c.kind]}»</span> `
@@ -2148,6 +2224,7 @@ function renderOutline() {
     header.innerHTML = `
       <span class="class-caret">▾</span>
       <span class="outline-name">${kindPrefix}${c.id}</span>
+      ${depthBadge}
       <span class="outline-method-count">${methods.length}</span>
     `;
 

@@ -43,8 +43,16 @@ import type { SymbolProvider, SymbolHit } from './symbol-provider';
  *        accepting every well-formed `external_calls` entry; the
  *        aggregator's existing workspace-symbol promotion + the new
  *        Program filter handle the rest.
+ *   v9 — awareness of the v3.9 prompt split: type-only references now
+ *        arrive in `external_type_refs`, separate from `external_calls`.
+ *        The calibrator explicitly drains the new field and emits no
+ *        graph edges from it (type-refs are not part of the call graph).
+ *        Behaviour for `external_calls` is unchanged; the bump exists
+ *        so cached AnalyzeResults built under v3.8 + v8 — which lumped
+ *        type-refs into `external_calls` and would now miscount — are
+ *        invalidated by the analyzer-cache key.
  */
-export const CALIBRATOR_VERSION = 'v8';
+export const CALIBRATOR_VERSION = 'v9';
 
 /**
  * Calibrator: LLM raw output → validated CodeNode + CodeEdge[].
@@ -313,6 +321,17 @@ export class Calibrator {
       } catch {
         // Treat lookup failure as "no signal" rather than a drop.
       }
+    }
+
+    // v9: drain `external_type_refs` (v3.9 prompt) explicitly. Type-only
+    // identifiers are not edges in the call graph, so we read the field
+    // for shape-validation but emit nothing. Leaving the drain visible
+    // (instead of silently ignoring) so a future maintainer can flip on
+    // type-ref edges as a separate kind without re-reading the schema.
+    for (const t of asArray(data, 'external_type_refs')) {
+      if (typeof t !== 'string') continue;
+      // intentionally no edge / no node mutation
+      void t;
     }
 
     // ---- 4. Build methods (no per-method calibration in W2; that's W3). ----

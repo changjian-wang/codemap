@@ -1,0 +1,6061 @@
+rootRequest: "@codemap /scope lumen/apps/api/src"
+scope: apps/api/src
+nodes:
+  RecallEndpoints:
+    id: RecallEndpoints
+    kind: class
+    file: apps/api/src/Lumen.Modules.Recall/Endpoints/RecallEndpoints.cs
+    range:
+      startLine: 12
+      endLine: 44
+    boundedContext: shared
+    intent: Maps HTTP routes for recall search and ask-by-query endpoints
+    layer: controller
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: HTTP endpoint surface
+      - type: missing_test
+        desc: no visible endpoint tests
+    methods:
+      - name: MapRecallEndpoints
+        signature: (this IEndpointRouteBuilder app)
+        line: 14
+        intent: Registers /api/recall GET and POST /ask routes with validation
+        risks: []
+        calls: []
+        externalCalls:
+          - ValidationFilter
+          - RecallByQueryRequest
+          - AskByQueryRequest
+      - name: Search
+        signature: (RecallByQueryRequest, RecallByQueryHandler, CancellationToken)
+        line: 27
+        intent: Handles GET /api/recall by delegating to RecallByQueryHandler
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - RecallByQueryHandler.HandleAsync
+          - Results.Ok
+          - ApiResult.Ok
+      - name: Ask
+        signature: (AskByQueryRequest, AskByQueryHandler, CancellationToken)
+        line: 36
+        intent: Handles POST /api/recall/ask by delegating to AskByQueryHandler
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - AskByQueryHandler.HandleAsync
+          - Results.Ok
+          - ApiResult.Ok
+    readingPriority: 1
+    readState: unread
+    isEntry: true
+    entryKind: http_endpoint
+    entryMeta:
+      routes:
+        - GET /api/recall
+        - POST /api/recall/ask
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+  ConnectEndpoints:
+    id: ConnectEndpoints
+    kind: class
+    file: apps/api/src/Lumen.Modules.Connect/Endpoints/ConnectEndpoints.cs
+    range:
+      startLine: 25
+      endLine: 62
+    boundedContext: shared
+    intent: Maps HTTP routes under /api/recall/associations for Connect module reads
+    layer: controller
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: reads from association store
+    methods:
+      - name: MapConnectEndpoints
+        signature: (this IEndpointRouteBuilder app)
+        line: 30
+        intent: Registers GET endpoint for event associations
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: GetAssociationsForEvent
+        signature: (Guid eventId, IEventAssociationStore store, CancellationToken)
+        line: 39
+        intent: Returns paginated associations for given event id
+        risks:
+          - external_io
+        calls:
+          - AssociationDto
+          - AssociationListResponse
+        externalCalls:
+          - IEventAssociationStore.ListForEventAsync
+          - JsonDocument.Parse
+          - ApiResult.Ok
+          - Results.Ok
+    readingPriority: 1
+    readState: unread
+    isEntry: true
+    entryKind: http_endpoint
+    entryMeta:
+      routes:
+        - GET /api/recall/associations/{eventId}
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - IEventAssociationStore.ListForEventAsync
+    docComment: |-
+      Connect 模块对外的 HTTP 表面。
+
+      路由前缀 <c>/api/recall</c>（不是 <c>/api/connect</c>）—— ADR-020 §影响 §Recall 链路
+      把"读关联"建议放在 recall 命名空间下，从用户视角"找东西"是 recall 域；
+      Connect 是写入侧的物理模块名，对外不暴露。
+
+
+      首版只读不写，写入完全由 `Features.Association.AssociateOnMemoryEnrichedHandler`
+      在 <c>MemoryEnriched</c> 事件中驱动；不开手动重建关联的接口。
+  AssociationListResponse:
+    id: AssociationListResponse
+    kind: record
+    file: apps/api/src/Lumen.Modules.Connect/Endpoints/ConnectEndpoints.cs
+    range:
+      startLine: 67
+      endLine: 67
+    boundedContext: shared
+    intent: Response DTO listing associations for an event
+    layer: controller
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: GET /api/recall/associations/{eventId} 响应体。
+  AssociationDto:
+    id: AssociationDto
+    kind: record
+    file: apps/api/src/Lumen.Modules.Connect/Endpoints/ConnectEndpoints.cs
+    range:
+      startLine: 78
+      endLine: 84
+    boundedContext: shared
+    intent: Single association edge DTO with score components
+    layer: controller
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      单条关联边的对外 DTO。
+      `Id`: 关联边主键。
+      `OtherEventId`: 关联的另一端 event id（相对于请求中的 <c>eventId</c>）。
+      `Kind`: 关联类型；首版仅 <c>composite</c>。
+      `Score`: 融合总分。
+      `Components`: 子分数 JSON 对象（<c>{cosine, topic_overlap, stance_signal}</c>）。
+      `CreatedAt`: 关联边创建时间。
+  CaptureEndpoints:
+    id: CaptureEndpoints
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Endpoints/CaptureEndpoints.cs
+    range:
+      startLine: 12
+      endLine: 62
+    boundedContext: capture
+    intent: Maps HTTP endpoints for capture ingest, listing, and job status queries.
+    layer: controller
+    confidence: 0.92
+    risks:
+      - type: external_io
+        desc: HTTP endpoints invoking handlers
+    methods:
+      - name: MapCaptureEndpoints
+        signature: (this IEndpointRouteBuilder app)
+        line: 14
+        intent: Registers /api/captures route group with POST /url, GET /, GET /jobs/{id}.
+        risks: []
+        calls: []
+        externalCalls:
+          - ValidationFilter
+      - name: IngestUrl
+        signature: (IngestUrlRequest, IngestUrlHandler, CancellationToken)
+        line: 29
+        intent: Enqueues a URL ingestion job and returns 202 Accepted.
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IngestUrlHandler.EnqueueAsync
+          - IngestUrlAcceptedResponse
+          - Results.Accepted
+          - ApiResult.Ok
+      - name: List
+        signature: ([AsParameters] ListCapturesRequest, ListCapturesHandler, CancellationToken)
+        line: 43
+        intent: Lists captures via handler and returns 200 OK envelope.
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - ListCapturesHandler.HandleAsync
+          - Results.Ok
+          - ApiResult.Ok
+      - name: GetJob
+        signature: (Guid, GetCaptureJobHandler, CancellationToken)
+        line: 52
+        intent: Returns capture job status or 404 if not found.
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - GetCaptureJobHandler.HandleAsync
+          - Results.Ok
+          - Results.NotFound
+          - ApiResult.Ok
+          - ApiResult.Fail
+    readingPriority: 1
+    readState: unread
+    isEntry: true
+    entryKind: http_endpoint
+    entryMeta:
+      routes:
+        - POST /api/captures/url
+        - GET /api/captures/
+        - GET /api/captures/jobs/{jobId}
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - IngestUrlHandler.EnqueueAsync
+        - ListCapturesHandler.HandleAsync
+        - GetCaptureJobHandler.HandleAsync
+  EvalHostBuilder:
+    id: EvalHostBuilder
+    kind: class
+    file: apps/api/src/Lumen.Eval/EvalHostBuilder.cs
+    range:
+      startLine: 25
+      endLine: 83
+    boundedContext: api
+    intent: Composition root for eval CLI; wires DI with eval DB guardrails
+    layer: entry
+    confidence: 0.85
+    risks:
+      - type: external_io
+        desc: reads config files and DB connection string
+    methods:
+      - name: Build
+        signature: (string baseDirectory)
+        line: 30
+        intent: Build configured ServiceProvider for eval CLI
+        risks:
+          - external_io
+        calls:
+          - EvalHostBuilder
+        externalCalls:
+          - ConfigurationBuilder
+          - AddLumenPersistence
+          - AddOnnxEmbedding
+          - AddHtmlContentExtractor
+          - AddIdentityModule
+          - AddCaptureModule
+          - AddRecallModule
+          - AddInProcessDomainEvents
+          - RunLumenMigrations
+          - AssemblyMarker
+      - name: AssertEvalDatabase
+        signature: (string connectionString)
+        line: 73
+        intent: Guards that the connection points to lumen_eval DB
+        risks: []
+        calls: []
+        externalCalls:
+          - NpgsqlConnectionStringBuilder
+    readingPriority: 1
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - ConfigurationBuilder
+        - NpgsqlConnectionStringBuilder
+        - AddLumenPersistence
+        - AddOnnxEmbedding
+        - AddHtmlContentExtractor
+        - AddIdentityModule
+        - AddCaptureModule
+        - AddRecallModule
+        - AddInProcessDomainEvents
+        - RunLumenMigrations
+    docComment: |-
+      Composition root for the eval CLI. Mirrors Lumen.Host wiring but:
+      (1) uses ConnectionStrings:Eval and asserts the DB name is "lumen_eval";
+      (2) does NOT register the Memory module — v1 is retrieval-only, no stance/topic enrichment;
+      (3) does NOT register Ollama LLM — v1 does not call the LLM;
+      (4) AddInProcessDomainEvents scans only the Capture assembly, so MemoryCaptured
+          dispatches to an empty handler set (cheap no-op, matches v1 contract).
+  PairSpec:
+    id: PairSpec
+    kind: class
+    file: apps/api/src/Lumen.Eval/Dataset/PairSpec.cs
+    range:
+      startLine: 19
+      endLine: 40
+    boundedContext: api
+    intent: Gold pair-wise assertion for association-pairs eval dataset
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      One pair-wise gold assertion used by the <c>association-pairs</c> dataset kind.
+
+      Each pair references two items from the shared top-level `DatasetSpec.Corpus`
+      by their case-local `CorpusItemSpec.Id`. The eval runner computes a fusion
+      score (per ADR-020 §E1) for the pair and compares it to the `Expected`
+      label.
+
+
+      Pairs are undirected for the fusion math (Jaccard and cosine are symmetric; the
+      stance signal is a 2x2 lookup). Source/target order in the YAML is therefore
+      authorial preference only and does not affect scoring.
+  CaseResult:
+    id: CaseResult
+    kind: record
+    file: apps/api/src/Lumen.Eval/Metrics/CaseResult.cs
+    range:
+      startLine: 4
+      endLine: 14
+    boundedContext: api
+    intent: Per-case eval result with retrieval metrics produced by EvalRunner
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: Per-case result returned by EvalRunner.
+  EvalRunner:
+    id: EvalRunner
+    kind: class
+    file: apps/api/src/Lumen.Eval/Runners/EvalRunner.cs
+    range:
+      startLine: 19
+      endLine: 126
+    boundedContext: api
+    intent: "Runs eval dataset cases sequentially: reset DB, seed, recall, score metrics"
+    layer: service
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: Issues TRUNCATE against eval DB
+      - type: security
+        desc: Destructive SQL relies on DB-name guard
+    methods:
+      - name: RunAsync
+        signature: (DatasetSpec, CancellationToken)
+        line: 28
+        intent: Iterate dataset cases and collect per-case results
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: RunCaseAsync
+        signature: (CaseSpec, CancellationToken)
+        line: 45
+        intent: Execute one eval case end-to-end and compute retrieval metrics
+        risks:
+          - external_io
+        calls:
+          - RetrievalMetrics
+        externalCalls:
+          - Stopwatch.StartNew
+          - CorpusSeederExtensions.GetCorpusSeeder
+          - RecallByQueryHandler
+          - RecallByQueryRequest
+          - CaseResult
+      - name: ResetDatabaseAsync
+        signature: (IServiceProvider, CancellationToken)
+        line: 112
+        intent: Truncate eval DB tables with CASCADE before seeding
+        risks:
+          - external_io
+          - security
+        calls: []
+        externalCalls:
+          - IDbConnection
+          - Dapper.SqlMapper.ExecuteAsync
+          - CommandDefinition
+        docComment: |-
+          TRUNCATE event_enrichments then events with CASCADE, restarting identity.
+          CASCADE truncates every table with an FK to events — currently event_enrichments
+          (ADR-019) and event_chunks (ADR-022) — so the eval DB is wiped clean for each case.
+          The eval DB is asserted to be named <c>lumen_eval</c> in EvalHostBuilder before we
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - CommandDefinition
+    docComment: |-
+      Runs every case in a dataset sequentially. Each case:
+      (1) truncates the eval DB; (2) seeds corpus; (3) invokes RecallByQueryHandler;
+      (4) translates retrieved event GUIDs back to case-local ids; (5) computes metrics.
+  DatasetSpec:
+    id: DatasetSpec
+    kind: class
+    file: apps/api/src/Lumen.Eval/Dataset/DatasetSpec.cs
+    range:
+      startLine: 21
+      endLine: 42
+    boundedContext: api
+    intent: Top-level eval dataset spec deserialized from cases.yaml
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Top-level dataset, deserialized from <c>cases.yaml</c>.
+      Two dataset kinds are supported:
+      <list type="bullet">
+        <item><c>retrieval</c> (default, ADR-021 v1/v2) — per-case corpus + query + expectations.</item>
+        <item><c>association-pairs</c> (ADR-021 §revisit, supports ADR-020a investigation) —
+              shared `Corpus` + `Pairs` at the top level. Each pair is
+              an independent should-link / shouldnt-link assertion evaluated by
+              <c>AssociationScoring.Score</c>.</item>
+      </list>
+      The shape is union-typed: retrieval datasets populate `Cases`; association
+      datasets populate `Corpus` and `Pairs`. <c>DatasetLoader</c>
+      validates that the populated fields match the declared `Kind`.
+  CaseSpec:
+    id: CaseSpec
+    kind: class
+    file: apps/api/src/Lumen.Eval/Dataset/DatasetSpec.cs
+    range:
+      startLine: 45
+      endLine: 56
+    boundedContext: api
+    intent: "One eval case: corpus + query + expectations"
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: "One eval case: corpus + query + expectations."
+  CorpusItemSpec:
+    id: CorpusItemSpec
+    kind: class
+    file: apps/api/src/Lumen.Eval/Dataset/DatasetSpec.cs
+    range:
+      startLine: 59
+      endLine: 88
+    boundedContext: api
+    intent: One corpus item to seed before running the query
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: One corpus item the case will seed before running the query.
+  QuerySpec:
+    id: QuerySpec
+    kind: class
+    file: apps/api/src/Lumen.Eval/Dataset/DatasetSpec.cs
+    range:
+      startLine: 90
+      endLine: 96
+    boundedContext: api
+    intent: Query text + top_k for an eval case
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - YamlDotNet.Serialization.YamlMember
+  ExpectationsSpec:
+    id: ExpectationsSpec
+    kind: class
+    file: apps/api/src/Lumen.Eval/Dataset/DatasetSpec.cs
+    range:
+      startLine: 98
+      endLine: 101
+    boundedContext: api
+    intent: Wraps retrieval expectations for a case
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+  RetrievalExpectationSpec:
+    id: RetrievalExpectationSpec
+    kind: class
+    file: apps/api/src/Lumen.Eval/Dataset/DatasetSpec.cs
+    range:
+      startLine: 103
+      endLine: 113
+    boundedContext: api
+    intent: "Retrieval expectations: must/must-not contain, ideal rank"
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - YamlDotNet.Serialization.YamlMember
+  CorpusSeeder:
+    id: CorpusSeeder
+    kind: class
+    file: apps/api/src/Lumen.Eval/Runners/CorpusSeeder.cs
+    range:
+      startLine: 26
+      endLine: 158
+    boundedContext: api
+    intent: Seeds eval corpus items into events + event_chunks for retrieval tests
+    layer: service
+    confidence: 0.86
+    risks:
+      - type: external_io
+        desc: DB inserts via event/chunk stores
+      - type: external_io
+        desc: embedding service network calls
+    methods:
+      - name: SeedAsync
+        signature: (CaseSpec, CancellationToken)
+        line: 60
+        intent: Embeds and stores each corpus text item, returns id map
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IEmbeddingService.EmbedPassageAsync
+          - IEventStore.InsertAsync
+          - Pgvector.Vector
+          - EventEntity
+      - name: ChunkAndStoreAsync
+        signature: (Guid, string, CancellationToken)
+        line: 92
+        intent: Chunks text, embeds each chunk, bulk-inserts event_chunks
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IChunker.Chunk
+          - IEmbeddingService.EmbedPassageAsync
+          - IEventChunkStore.InsertRangeAsync
+          - Pgvector.Vector
+          - EventChunkEntity
+      - name: BuildPayload
+        signature: (string, CorpusItemSpec)
+        line: 123
+        intent: Builds synthetic capture payload JSON for an event
+        risks: []
+        calls: []
+        externalCalls:
+          - JsonSerializer.Serialize
+          - JsonDocument.Parse
+      - name: ComputeHash
+        signature: (string)
+        line: 146
+        intent: SHA256 hex digest of text content
+        risks: []
+        calls: []
+        externalCalls:
+          - System.Text.Encoding.UTF8.GetBytes
+          - System.Security.Cryptography.SHA256.HashData
+          - Convert.ToHexString
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Seeds a case's corpus into the events table (and, per ADR-022, the event_chunks table)
+      before the query runs. For <c>kind: text</c>, builds an EventEntity (topic =
+      capture.url.ingested, payload = synthetic URL + title + markdown), inserts via IEventStore,
+      then chunks + embeds + inserts into event_chunks via IEventChunkStore so that the eval
+      hits the same retrieval path as production.
+      Returns a map case-local id → real event GUID so EvalRunner can translate
+      retrieved GUIDs back into expectation ids.
+  CorpusSeederExtensions:
+    id: CorpusSeederExtensions
+    kind: class
+    file: apps/api/src/Lumen.Eval/Runners/CorpusSeeder.cs
+    range:
+      startLine: 160
+      endLine: 171
+    boundedContext: api
+    intent: DI helper that resolves CorpusSeeder dependencies from IServiceProvider
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: GetCorpusSeeder
+        signature: (this IServiceProvider)
+        line: 163
+        intent: Constructs CorpusSeeder via service locator
+        risks: []
+        calls:
+          - CorpusSeeder
+        externalCalls:
+          - IEmbeddingService
+          - IEventStore
+          - IEventChunkStore
+          - IChunker
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+  DatasetLoader:
+    id: DatasetLoader
+    kind: class
+    file: apps/api/src/Lumen.Eval/Dataset/DatasetLoader.cs
+    range:
+      startLine: 7
+      endLine: 159
+    boundedContext: api
+    intent: Loads and validates a DatasetSpec from cases.yaml
+    layer: util
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: reads cases.yaml from filesystem
+    methods:
+      - name: Load
+        signature: (string datasetDir)
+        line: 18
+        intent: Read cases.yaml, deserialize, and validate spec
+        risks:
+          - external_io
+        calls:
+          - DatasetLoader
+        externalCalls:
+          - File.Exists
+          - File.ReadAllText
+          - Path.Combine
+          - DeserializerBuilder
+          - UnderscoredNamingConvention.Instance
+      - name: ValidateShape
+        signature: (DatasetSpec spec, string path)
+        line: 58
+        intent: Enforce shape rules per dataset kind
+        risks: []
+        calls:
+          - DatasetLoader
+        externalCalls: []
+      - name: ValidatePairs
+        signature: (DatasetSpec spec, string path)
+        line: 101
+        intent: Validate association-pair references and labels
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - File.ReadAllText
+        - Path.Combine
+        - DeserializerBuilder
+    docComment: Loads a `DatasetSpec` from a <c>cases.yaml</c> file.
+  ApiResult:
+    id: ApiResult
+    kind: record
+    file: apps/api/src/Lumen.Shared.Contracts/ApiResult.cs
+    range:
+      startLine: 5
+      endLine: 10
+    boundedContext: shared
+    intent: Generic API response envelope carrying success flag, data, or error
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+  ILlmService:
+    id: ILlmService
+    kind: interface
+    file: apps/api/src/Lumen.Shared.Contracts/ILlmService.cs
+    range:
+      startLine: 27
+      endLine: 40
+    boundedContext: shared
+    intent: Conversational LLM abstraction shared by recall/summary/etc.
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods:
+      - name: ChatAsync
+        signature: (IReadOnlyList<ChatMessage>, ChatOptions?, CancellationToken)
+        line: 35
+        intent: Synchronous single-shot chat call returning full answer
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          单次同步对话。把整段消息历史交给模型，等模型出完整答案后返回。
+          `messages`: 对话历史。第一条通常是 `ChatRole.System`。
+          `options`: 可选调用参数；<c>null</c> 表示用 service 默认配置。
+          `cancellationToken`: 取消令牌。取消后底层 HTTP 请求会被中断。
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      对话型 LLM 抽象。
+
+      由 Recall grounded ask、未来的联想 / 立场抽取 / 摘要等 LLM-using 链路共享。
+      单方法 `ChatAsync` 承载「我有一组消息，给我答案」这一最普适形态。
+
+
+      接口形态由 ADR-017 决定：
+      <list type="bullet">
+        <item>`ChatOptions.Model` 为 Phase 1.5 多模型路由预留——
+          Phase 1 实现层 ignored 但接口保留，未来不同 caller 传不同 model id 不需改接口。</item>
+        <item>`ChatResult.ReasoningTrace` 为切换到推理模型（如 DeepSeek-R1-Distill）预留——
+          非推理模型实现层固定为 <c>null</c>。</item>
+        <item>`ChatResult.FinishReason` 让 caller 能区分"模型主动收尾"和"超 max_tokens 被砍"，
+          grounded ask 端点用它决定要不要给前端提示"答案被截断"。</item>
+      </list>
+
+
+      Phase 1 默认实现 = Ollama sidecar HTTP via <c>POST /api/chat</c>，默认模型 Qwen2.5-7B-Instruct（详见 ADR-017）。
+      不在接口层暴露 streaming——重审条件见 ADR-017 §"adr_revisit_when" 第 (5) 条。
+  ChatMessage:
+    id: ChatMessage
+    kind: record
+    file: apps/api/src/Lumen.Shared.Contracts/ILlmService.cs
+    range:
+      startLine: 45
+      endLine: 45
+    boundedContext: shared
+    intent: "Single chat message: role + content."
+    layer: util
+    confidence: 0.98
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      对话单条消息。`Role`: 角色。
+      `Content`: 消息正文。
+  ChatRole:
+    id: ChatRole
+    kind: enum
+    file: apps/api/src/Lumen.Shared.Contracts/ILlmService.cs
+    range:
+      startLine: 48
+      endLine: 56
+    boundedContext: shared
+    intent: "Chat message role: system/user/assistant."
+    layer: util
+    confidence: 0.99
+    risks: []
+    methods:
+      - name: System
+        signature: ""
+        line: 50
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: User
+        signature: ""
+        line: 52
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: Assistant
+        signature: ""
+        line: 54
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: 对话角色。`Tool` / `ToolResponse` 等高级角色暂未引入。
+  ChatOptions:
+    id: ChatOptions
+    kind: record
+    file: apps/api/src/Lumen.Shared.Contracts/ILlmService.cs
+    range:
+      startLine: 69
+      endLine: 72
+    boundedContext: shared
+    intent: Optional per-call chat parameters (model/temperature/max tokens).
+    layer: util
+    confidence: 0.98
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      单次 chat 调用的可选参数。
+      所有字段为 <c>null</c> 表示沿用 service 默认（来自 <c>appsettings.json:Llm</c> + 注册表）。
+      `Model`: 
+      可选的目标模型 id。
+      预留给 Phase 1.5 多模型任务路由（见 ADR-017 §备选方案 C），
+      Phase 1 实现层目前忽略此字段并固定使用默认模型——不破坏接口契约。
+
+      `Temperature`: 采样温度，[0, 2]。<c>null</c> 表示用模型 / runtime 默认。
+      `MaxOutputTokens`: 最大生成 token 数。<c>null</c> 表示不显式限制（runtime 默认通常 ~2048）。
+  ChatResult:
+    id: ChatResult
+    kind: record
+    file: apps/api/src/Lumen.Shared.Contracts/ILlmService.cs
+    range:
+      startLine: 84
+      endLine: 87
+    boundedContext: shared
+    intent: "Chat result: answer text, optional reasoning trace, finish reason."
+    layer: util
+    confidence: 0.98
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      单次 chat 调用的结果。`Answer`: 
+      模型答案。已剥离 <c>&lt;think&gt;...&lt;/think&gt;</c> 推理块（若有）；
+      是可以直接呈现给用户的可见文本。
+
+      `ReasoningTrace`: 
+      推理模型（如 DeepSeek-R1-Distill）的内部 think 块原文，仅供调试 / 评估使用。
+      非推理模型固定返回 <c>null</c>。caller 不应把此字段当成"答案的一部分"展示给用户。
+
+      `FinishReason`: 结束原因。
+  FinishReason:
+    id: FinishReason
+    kind: enum
+    file: apps/api/src/Lumen.Shared.Contracts/ILlmService.cs
+    range:
+      startLine: 90
+      endLine: 100
+    boundedContext: shared
+    intent: Reason a chat completion ended.
+    layer: util
+    confidence: 0.99
+    risks: []
+    methods:
+      - name: Stop
+        signature: ""
+        line: 92
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: Length
+        signature: ""
+        line: 94
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: ContentFilter
+        signature: ""
+        line: 96
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: Error
+        signature: ""
+        line: 98
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: chat 结束原因。
+  RetrievalMetrics:
+    id: RetrievalMetrics
+    kind: class
+    file: apps/api/src/Lumen.Eval/Metrics/RetrievalMetrics.cs
+    range:
+      startLine: 7
+      endLine: 72
+    boundedContext: api
+    intent: Pure retrieval metrics (P@K, R@K, MRR, ideal-rank diff) over corpus ids.
+    layer: util
+    confidence: 0.95
+    risks:
+      - type: missing_test
+        desc: pure math helper without visible tests
+    methods:
+      - name: PrecisionAtK
+        signature: (IReadOnlyList<string>, IReadOnlyCollection<string>)
+        line: 10
+        intent: Precision@K over retrieved vs relevant ids.
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: Precision@K = |retrieved ∩ relevant| / |retrieved|.
+      - name: RecallAtK
+        signature: (IReadOnlyList<string>, IReadOnlyCollection<string>)
+        line: 22
+        intent: Recall@K over retrieved vs relevant ids.
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: Recall@K = |retrieved ∩ relevant| / |relevant|.
+      - name: MeanReciprocalRank
+        signature: (IReadOnlyList<string>, IReadOnlyCollection<string>)
+        line: 34
+        intent: "MRR: reciprocal of first relevant rank, else 0."
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: "Mean Reciprocal Rank: 1 / (rank of first relevant), or 0 if none."
+      - name: IdealRankDiff
+        signature: (IReadOnlyList<string>, IReadOnlyDictionary<string,int>)
+        line: 51
+        intent: Sum of |actual - ideal| ranks; missing => Count+1.
+        risks: []
+        calls: []
+        externalCalls:
+          - Math.Abs
+        docComment: |-
+          Sum of |actual_rank - ideal_rank| for each item the case calls out in ideal_rank.
+          Missing items count as rank = retrieved.Count + 1.
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Pure retrieval metrics, computed against retrieved ids vs expectations.
+      All inputs use case-local corpus ids (strings), not real event GUIDs.
+  IUserContext:
+    id: IUserContext
+    kind: interface
+    file: apps/api/src/Lumen.Shared.Contracts/IUserContext.cs
+    range:
+      startLine: 13
+      endLine: 19
+    boundedContext: shared
+    intent: Contract exposing the current request's acting user UUID
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods:
+      - name: UserId
+        signature: "{ get; }"
+        line: 18
+        intent: Current operating user UUID
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: 当前操作用户的 UUID。写入 <c>events.actor_id</c> 和未来业务表的 <c>user_id</c>。
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      当前请求的"操作用户"上下文。
+      由 ADR-014 (.NET 身份与认证) 引入。
+      Self-hosted 单人版下，实现固定返回 system UUID
+      (<c>00000000-0000-0000-0000-000000000001</c>)；
+      Cloud 版下，实现会从 OIDC token 解析真实用户 UUID。
+      业务代码必须依赖此接口，不得直接耦合具体实现。
+  AssociationEvalHostBuilder:
+    id: AssociationEvalHostBuilder
+    kind: class
+    file: apps/api/src/Lumen.Eval/AssociationEvalHostBuilder.cs
+    range:
+      startLine: 28
+      endLine: 56
+    boundedContext: api
+    intent: Minimal DI composition root for association-pairs eval (no DB).
+    layer: entry
+    confidence: 0.85
+    risks:
+      - type: external_io
+        desc: reads appsettings.json and env vars
+    methods:
+      - name: Build
+        signature: (string baseDirectory)
+        line: 28
+        intent: Builds ServiceProvider with config, logging, ONNX embedder.
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - ConfigurationBuilder
+          - AddOnnxEmbedding
+        docComment: |-
+          Minimal composition root for the <c>association-pairs</c> dataset kind.
+
+          Unlike `EvalHostBuilder`, this host:
+          <list type="bullet">
+            <item>Does NOT register Postgres, persistence, or migrations. Pair-wise eval
+                  computes scores entirely in-memory via <c>AssociationScoring.Score</c>
+                  and the in-process ONNX embedder; no database is touched.</item>
+            <item>Does NOT register Capture / Recall / Identity / Memory / Connect modules.
+                  The runner calls into Connect's <c>AssociationScoring</c> as a pure function
+                  via <c>InternalsVisibleTo</c>; no DI is needed.</item>
+            <item>Does NOT enforce the <c>lumen_eval</c> database name (no DB connection at all).</item>
+          </list>
+          Keeping this separate from the retrieval host means a developer can run
+          association eval on a machine without Postgres at all.
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - ConfigurationBuilder
+        - AddOnnxEmbedding
+    docComment: |-
+      Minimal composition root for the <c>association-pairs</c> dataset kind.
+
+      Unlike `EvalHostBuilder`, this host:
+      <list type="bullet">
+        <item>Does NOT register Postgres, persistence, or migrations. Pair-wise eval
+              computes scores entirely in-memory via <c>AssociationScoring.Score</c>
+              and the in-process ONNX embedder; no database is touched.</item>
+        <item>Does NOT register Capture / Recall / Identity / Memory / Connect modules.
+              The runner calls into Connect's <c>AssociationScoring</c> as a pure function
+              via <c>InternalsVisibleTo</c>; no DI is needed.</item>
+        <item>Does NOT enforce the <c>lumen_eval</c> database name (no DB connection at all).</item>
+      </list>
+      Keeping this separate from the retrieval host means a developer can run
+      association eval on a machine without Postgres at all.
+  AssociationMetrics:
+    id: AssociationMetrics
+    kind: class
+    file: apps/api/src/Lumen.Eval/Metrics/AssociationMetrics.cs
+    range:
+      startLine: 35
+      endLine: 182
+    boundedContext: api
+    intent: Pure functions for pair-wise association classification metrics (F1, AUC).
+    layer: util
+    confidence: 0.95
+    risks:
+      - type: missing_test
+        desc: numeric edge cases (ties, empty input) need tests
+    methods:
+      - name: F1AtThreshold
+        signature: (IReadOnlyList<double>, IReadOnlyList<bool>, double)
+        line: 42
+        intent: Computes F1/precision/recall at a given score threshold.
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: BestThresholdSweep
+        signature: (IReadOnlyList<double>, IReadOnlyList<bool>)
+        line: 75
+        intent: Sweeps observed scores to find threshold maximizing F1.
+        risks: []
+        calls:
+          - AssociationMetrics
+        externalCalls: []
+        docComment: |-
+          Sweeps every observed score as a candidate threshold and returns the one that maximizes F1.
+          Ties are broken by preferring the highest threshold (more conservative).
+      - name: RocAuc
+        signature: (IReadOnlyList<double>, IReadOnlyList<bool>)
+        line: 122
+        intent: Computes ROC AUC via Mann-Whitney U with tie-aware mid-ranks.
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          ROC AUC via the Mann-Whitney U statistic. Handles ties by averaging ranks.
+          Returns 0.5 for degenerate cases (all positives or all negatives).
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Pure functions for pair-wise association classification metrics.
+
+      Treats the fusion <c>score</c> as a continuous predictor and the gold label
+      (<c>should-link</c> = positive, <c>shouldnt-link</c> = negative; <c>unsure</c> pairs
+      must be excluded by the caller) as the ground truth. Provides:
+      <list type="bullet">
+        <item>`F1AtThreshold(IReadOnlyList{double}, IReadOnlyList{bool}, double)` —
+              classification metric at a chosen cutoff.</item>
+        <item>`BestThresholdSweep(IReadOnlyList{double}, IReadOnlyList{bool})` —
+              picks the threshold (over all observed scores) that maximizes F1; used to
+              report the "best you can do today" without committing to a production cutoff.</item>
+        <item>`RocAuc(IReadOnlyList{double}, IReadOnlyList{bool})` —
+              threshold-free ranking quality; robust to score scale changes between
+              candidate algorithms (X1 / X2 / X3 may emit very different score ranges).</item>
+      </list>
+
+
+      Implementation notes:
+      <list type="bullet">
+        <item>Ties are handled with greater-or-equal predicate at threshold; AUC uses the
+              Mann-Whitney U formulation which averages tied ranks, so it's the canonical
+              AUC even when many pairs share the same score (likely with the current
+              Jaccard-based formula where many pairs land at 0).</item>
+        <item>All functions reject mismatched array lengths via
+              `ArgumentException` — silent truncation would produce subtly wrong
+              metrics and we'd debug a phantom regression.</item>
+      </list>
+  MarkdownReportWriter:
+    id: MarkdownReportWriter
+    kind: class
+    file: apps/api/src/Lumen.Eval/Reports/MarkdownReportWriter.cs
+    range:
+      startLine: 13
+      endLine: 107
+    boundedContext: api
+    intent: Writes eval report as markdown per ADR-021 §F
+    layer: service
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: writes report file to disk
+    methods:
+      - name: Write
+        signature: (string, DatasetSpec, IReadOnlyList<CaseResult>, ReportEnvironment)
+        line: 15
+        intent: Generate markdown report file from eval results
+        risks:
+          - external_io
+        calls:
+          - ReportEnvironment
+        externalCalls:
+          - Path.GetDirectoryName
+          - Directory.CreateDirectory
+          - File.WriteAllText
+          - CultureInfo.InvariantCulture
+          - StringBuilder
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - Path.GetDirectoryName
+        - Directory.CreateDirectory
+        - File.WriteAllText
+    docComment: |-
+      Writes the eval report per ADR-021 §F: header + summary table + failures
+      section + per-case detail table + environment block.
+  ReportEnvironment:
+    id: ReportEnvironment
+    kind: record
+    file: apps/api/src/Lumen.Eval/Reports/MarkdownReportWriter.cs
+    range:
+      startLine: 109
+      endLine: 113
+    boundedContext: api
+    intent: Immutable carrier for report environment metadata
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+  AssociationPairResult:
+    id: AssociationPairResult
+    kind: record
+    file: apps/api/src/Lumen.Eval/Metrics/AssociationCaseResult.cs
+    range:
+      startLine: 14
+      endLine: 22
+    boundedContext: api
+    intent: Per-pair result for the association-pairs dataset kind.
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Per-pair result for the <c>association-pairs</c> dataset kind.
+      `Source`: Case-local source id.
+      `Target`: Case-local target id.
+      `Expected`: Gold label: <c>should-link</c> / <c>shouldnt-link</c> / <c>unsure</c>.
+      `Cosine`: Cosine similarity sub-score from ADR-020 §E1.
+      `TopicOverlap`: Jaccard overlap sub-score.
+      `StanceSignal`: Stance signal sub-score (0 or 1).
+      `Total`: Fused total score per ADR-020 §E1 weights.
+      `Rationale`: Annotator rationale (copied for audit).
+  AssociationRunMetrics:
+    id: AssociationRunMetrics
+    kind: record
+    file: apps/api/src/Lumen.Eval/Metrics/AssociationCaseResult.cs
+    range:
+      startLine: 41
+      endLine: 55
+    boundedContext: api
+    intent: Aggregate metrics for an association-pairs dataset run.
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Aggregate metrics for an association-pairs dataset run.
+      `Pairs`: Per-pair results (includes <c>unsure</c> rows for audit).
+      `ScoredPairCount`: Count of pairs included in metrics (<c>should-link + shouldnt-link</c>, excludes <c>unsure</c>).
+      `ShouldLinkCount`: Count of <c>should-link</c> labels.
+      `ShouldntLinkCount`: Count of <c>shouldnt-link</c> labels.
+      `MeanScoreShouldLink`: Mean fusion score across should-link pairs.
+      `MeanScoreShouldntLink`: Mean fusion score across shouldnt-link pairs.
+      `MeanCosineShouldLink`: Mean cosine across should-link pairs (diagnostic).
+      `MeanTopicOverlapShouldLink`: Mean topic_overlap across should-link pairs (Issue 2 indicator).
+      `MeanStanceSignalShouldLink`: Mean stance_signal across should-link pairs.
+      `BestThreshold`: Threshold maximizing F1 over the score-vs-label data.
+      `BestF1`: F1 score at `BestThreshold`.
+      `BestPrecision`: Precision at `BestThreshold`.
+      `BestRecall`: Recall at `BestThreshold`.
+      `Auc`: Area under the ROC curve, threshold-free ranking quality.
+  AssociationEvalRunner:
+    id: AssociationEvalRunner
+    kind: class
+    file: apps/api/src/Lumen.Eval/Runners/AssociationEvalRunner.cs
+    range:
+      startLine: 26
+      endLine: 171
+    boundedContext: api
+    intent: Evaluates association-pairs dataset by embedding, scoring, and aggregating metrics
+    layer: service
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: calls embedding service over network
+      - type: missing_test
+        desc: complex scoring pipeline without visible tests
+    methods:
+      - name: RunAsync
+        signature: (DatasetSpec, CancellationToken)
+        line: 39
+        intent: Embed corpus, score every pair, aggregate metrics
+        risks:
+          - external_io
+        calls:
+          - AssociationRunResult
+        externalCalls:
+          - IEmbeddingService
+          - AssociationScoring.Score
+          - AssociationCandidate
+          - AssociationPairResult
+          - Stopwatch.StartNew
+      - name: ComputeMetrics
+        signature: (IReadOnlyList<AssociationPairResult>)
+        line: 108
+        intent: Compute precision/recall/F1/AUC metrics from scored pairs
+        risks: []
+        calls: []
+        externalCalls:
+          - AssociationMetrics.BestThresholdSweep
+          - AssociationMetrics.RocAuc
+          - AssociationRunMetrics
+      - name: SafeMean
+        signature: (IEnumerable<double>)
+        line: 138
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: CosineSimilarity
+        signature: (float[], float[])
+        line: 144
+        intent: Compute cosine similarity between two embedding vectors
+        risks: []
+        calls: []
+        externalCalls:
+          - Math.Sqrt
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Evaluates an <c>association-pairs</c> dataset by:
+      (1) embedding each corpus item once via `IEmbeddingService.EmbedPassageAsync`;
+      (2) computing cosine similarity directly from the in-memory vectors (no DB round-trip);
+      (3) calling <c>AssociationScoring.Score</c> on every pair to get the §E1 fusion total;
+      (4) aggregating classification metrics against the gold labels.
+      The runner relies on <c>InternalsVisibleTo("Lumen.Eval")</c> granted by
+      <c>Lumen.Modules.Connect/AssemblyMarker.cs</c> to call <c>AssociationScoring.Score</c>
+      directly. This keeps the production type signatures uncluttered (no eval-only public API)
+      while still letting eval exercise the exact same scoring code path.
+  AssociationRunResult:
+    id: AssociationRunResult
+    kind: record
+    file: apps/api/src/Lumen.Eval/Runners/AssociationEvalRunner.cs
+    range:
+      startLine: 173
+      endLine: 177
+    boundedContext: api
+    intent: Immutable result of an association-pairs evaluation run
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+  SystemUserContext:
+    id: SystemUserContext
+    kind: class
+    file: apps/api/src/Lumen.Modules.Identity/SystemUserContext.cs
+    range:
+      startLine: 17
+      endLine: 25
+    boundedContext: shared
+    intent: Self-hosted IUserContext returning fixed system UUID
+    layer: service
+    confidence: 0.92
+    risks: []
+    methods:
+      - name: UserId
+        signature: get
+        line: 24
+        intent: Returns fixed system user UUID
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Self-hosted 单人版的 `IUserContext` 实现：
+      永远返回固定的 system UUID。
+      由 ADR-014 (.NET 身份与认证) 引入。
+
+      固定 UUID 为 <c>00000000-0000-0000-0000-000000000001</c>，
+      与未来 Cloud 版 <c>OidcUserContext</c> 同实现 `IUserContext`，
+      通过 DI 容器在 Host 启动时切换。
+  RecallModuleServiceCollectionExtensions:
+    id: RecallModuleServiceCollectionExtensions
+    kind: class
+    file: apps/api/src/Lumen.Modules.Recall/ModuleConfiguration.cs
+    range:
+      startLine: 9
+      endLine: 21
+    boundedContext: shared
+    intent: DI wiring for Recall module handlers, validators, and queries
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: AddRecallModule
+        signature: (this IServiceCollection)
+        line: 11
+        intent: Register Recall module services into DI container
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  IContentExtractor:
+    id: IContentExtractor
+    kind: interface
+    file: apps/api/src/Lumen.Shared.Contracts/IContentExtractor.cs
+    range:
+      startLine: 16
+      endLine: 27
+    boundedContext: shared
+    intent: Contract for fetching a URL and extracting body Markdown + metadata.
+    layer: service
+    confidence: 0.92
+    risks:
+      - type: external_io
+        desc: implementations perform HTTP fetches
+      - type: security
+        desc: SSRF risk if impl skips host validation
+    methods:
+      - name: ExtractAsync
+        signature: (string url, CancellationToken cancellationToken = default)
+        line: 27
+        intent: Fetch URL and return extracted content; impl must do SSRF check.
+        risks:
+          - external_io
+          - security
+        calls: []
+        externalCalls: []
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      从 URL 抓取并抽取「正文 Markdown + 元数据」的抽象。
+
+      由 Capture 模块在写入 URL 类型 event 时调用：用抽取出的正文 Markdown 去 embed，
+      才能把 e5-small 的召回质量真正发挥出来；用 URL 字符串本身去 embed 召回质量趋近随机。
+
+
+      抽取流水线在实现层定义（默认 = HTML → Readability → Markdown，单层 Tier 1）；
+      PDF / 多 Tier 抽取按 ADR-004 留给后续 ADR 演进。
+  ExtractedContent:
+    id: ExtractedContent
+    kind: record
+    file: apps/api/src/Lumen.Shared.Contracts/IContentExtractor.cs
+    range:
+      startLine: 38
+      endLine: 44
+    boundedContext: shared
+    intent: Immutable result of a single content-extraction attempt.
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      单次抽取的结果，对齐 ADR-004 §3 chunk 元数据字段。
+      `Title`: 页面标题；找不到时退化为 URL host。
+      `Markdown`: 正文 Markdown；可能为空字符串（页面无可识别正文）。
+      `ContentHash`: SHA-256(canonicalUrl + "\n" + Markdown) 的小写 hex 字符串；用于后续去重 / 增量重 embed。
+      `Extractor`: 抽取器标识，形如 <c>"smartreader+reversemarkdown@0.11.0+5.3.0"</c>。
+      `ExtractionConfidence`: 置信度 0..1；低于 0.3 表示抽取器对结果不信任。
+      `QualityReasons`: 质量备注列表（如 <c>"low-readability-score"</c> / <c>"empty-content"</c>），空表示无异常。
+  IEmbeddingService:
+    id: IEmbeddingService
+    kind: interface
+    file: apps/api/src/Lumen.Shared.Contracts/IEmbeddingService.cs
+    range:
+      startLine: 22
+      endLine: 39
+    boundedContext: shared
+    intent: Contract for encoding text into semantic vectors (query/passage split).
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods:
+      - name: EmbedQueryAsync
+        signature: (string, CancellationToken)
+        line: 30
+        intent: Encode a query text into an embedding vector.
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          把单段「查询文本」编码为向量。Recall 路径调用此方法。
+          `text`: 查询文本。空白字符串由实现层视为错误。
+          `cancellationToken`: 取消令牌。
+          <returns>向量值 + 模型标识（用于写入 / 校对 <c>events.embedding_model</c>）。</returns>
+      - name: EmbedPassageAsync
+        signature: (string, CancellationToken)
+        line: 38
+        intent: Encode a passage/document text into an embedding vector.
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          把单段「被存入文本」（passage / document）编码为向量。Capture 路径调用此方法。
+          `text`: 被存入文本。空白字符串由实现层视为错误。
+          `cancellationToken`: 取消令牌。
+          <returns>向量值 + 模型标识（写入 <c>events.embedding_model</c>）。</returns>
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      文本 → 语义向量 的抽象。
+
+      由 capture→embed→recall 主链引入。Capture 模块在写入 event 时调用 `EmbedPassageAsync`
+      把 payload 编码为向量；Recall 模块用 `EmbedQueryAsync` 把 query 编码为向量后做 cosine 检索。
+
+
+      接口被拆为「query / passage」两方法，是 ADR-015 决策的一部分。原因：
+      e5 / bge 等多语言 sentence transformer 在文本前要求加 <c>"query: "</c> / <c>"passage: "</c> 等
+      不对称前缀，省略前缀会显著降低召回质量；调用点必须语义自描述自己是查询方还是被查询方，
+      这条信息无法在调用点之外推断。
+
+
+      当前实现 = in-process Microsoft.ML.OnnxRuntime + Microsoft.ML.Tokenizers，
+      默认模型 multilingual-e5-small（384 维）。详见 ADR-015。
+  EmbeddingVector:
+    id: EmbeddingVector
+    kind: record
+    file: apps/api/src/Lumen.Shared.Contracts/IEmbeddingService.cs
+    range:
+      startLine: 46
+      endLine: 46
+    boundedContext: shared
+    intent: "Immutable result carrier: vector values plus model identifier."
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      单次 embedding 结果。
+      `Values`: 向量分量，长度必须等于 <c>events.embedding</c> 列的 <c>vector(N)</c> 维度。
+      `Model`: 模型标识（如 <c>multilingual-e5-small@384</c>）。用于模型迁移时识别旧向量。
+  CaptureModuleServiceCollectionExtensions:
+    id: CaptureModuleServiceCollectionExtensions
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/ModuleConfiguration.cs
+    range:
+      startLine: 14
+      endLine: 51
+    boundedContext: capture
+    intent: "DI wiring for the Capture module: stores, handlers, validators, worker"
+    layer: entry
+    confidence: 0.9
+    risks:
+      - type: high_coupling
+        desc: wires many module collaborators
+    methods:
+      - name: AddCaptureModule
+        signature: (this IServiceCollection, IConfiguration?)
+        line: 16
+        intent: Register Capture module services, options, and hosted worker
+        risks: []
+        calls: []
+        externalCalls:
+          - EventStore
+          - EventQuery
+          - EventChunkStore
+          - CaptureJobStore
+          - EventCurrentByUrlStore
+          - IngestUrlHandler
+          - ListCapturesHandler
+          - GetCaptureJobHandler
+          - IngestUrlValidator
+          - ListCapturesValidator
+          - PublicApi.CapturePublicApi
+          - CaptureJobWorker
+          - CaptureJobWorkerOptions
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+  AssociationReportWriter:
+    id: AssociationReportWriter
+    kind: class
+    file: apps/api/src/Lumen.Eval/Reports/AssociationReportWriter.cs
+    range:
+      startLine: 18
+      endLine: 121
+    boundedContext: api
+    intent: Writes markdown report for association-pairs eval dataset run
+    layer: util
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: writes markdown report to disk
+    methods:
+      - name: Write
+        signature: (string, AssociationRunResult, ReportEnvironment)
+        line: 20
+        intent: Render run metrics + pairs to markdown file at outputPath
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Directory.CreateDirectory
+          - File.WriteAllText
+          - Path.GetDirectoryName
+          - CultureInfo.InvariantCulture
+          - StringBuilder
+      - name: EscapeForCell
+        signature: (string?)
+        line: 117
+        intent: Escape pipes/newlines so freeform text fits a markdown cell
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - Directory.CreateDirectory
+        - File.WriteAllText
+        - Path.GetDirectoryName
+        - CultureInfo.InvariantCulture
+        - StringBuilder
+    docComment: |-
+      Writes a markdown report for an <c>association-pairs</c> dataset run.
+      Output structure mirrors `MarkdownReportWriter` for visual consistency
+      but the metric vocabulary is different: pair-wise classification (F1 / AUC / threshold)
+      instead of retrieval (P@K / R@K / MRR). Per ADR-021 §F these reports live under
+      <c>eval/runs/</c> and serve as the durable record of every Connect-module experiment.
+  IdentityModuleServiceCollectionExtensions:
+    id: IdentityModuleServiceCollectionExtensions
+    kind: class
+    file: apps/api/src/Lumen.Modules.Identity/ModuleConfiguration.cs
+    range:
+      startLine: 14
+      endLine: 24
+    boundedContext: shared
+    intent: DI registration entry for Identity module services
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: AddIdentityModule
+        signature: (this IServiceCollection)
+        line: 18
+        intent: Registers IUserContext with SystemUserContext implementation
+        risks: []
+        calls: []
+        externalCalls:
+          - IUserContext
+          - SystemUserContext
+        docComment: 注册 Identity 模块的服务（`IUserContext` 等）。
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Identity 模块 DI 注册入口。
+      由 ADR-014 (.NET 身份与认证) 引入。
+      Self-hosted 单人版下注册 <c>SystemUserContext</c>；
+      未来 Cloud 版下，此处会切换为 <c>OidcUserContext</c> + JwtBearer 中间件。
+  RecallRow:
+    id: RecallRow
+    kind: class
+    file: apps/api/src/Lumen.Modules.Recall/Persistence/RecallRow.cs
+    range:
+      startLine: 3
+      endLine: 11
+    boundedContext: shared
+    intent: Internal DTO row for recall query results from persistence layer
+    layer: repo
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  IDomainEvent:
+    id: IDomainEvent
+    kind: interface
+    file: apps/api/src/Lumen.Shared.Contracts/Events/IDomainEvent.cs
+    range:
+      startLine: 8
+      endLine: 8
+    boundedContext: shared
+    intent: Marker interface for in-process domain events (ADR-018)
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Marker interface for in-process domain events. Per ADR-018, events are dispatched
+      synchronously and serially via `IDomainEventDispatcher`; handlers run
+      in fail-soft mode (exceptions logged and continued, not rethrown).
+  EventQueryFilter:
+    id: EventQueryFilter
+    kind: record
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventQuery.cs
+    range:
+      startLine: 6
+      endLine: 6
+    boundedContext: capture
+    intent: Filter criteria for event queries by topic or topic prefix
+    layer: repo
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  PagedEvents:
+    id: PagedEvents
+    kind: record
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventQuery.cs
+    range:
+      startLine: 8
+      endLine: 8
+    boundedContext: capture
+    intent: Paged result carrying event items and total count
+    layer: repo
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  IEventQuery:
+    id: IEventQuery
+    kind: interface
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventQuery.cs
+    range:
+      startLine: 10
+      endLine: 13
+    boundedContext: capture
+    intent: Contract for querying paged capture events
+    layer: repo
+    confidence: 0.95
+    risks: []
+    methods:
+      - name: ListAsync
+        signature: (EventQueryFilter, int, int, CancellationToken)
+        line: 12
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  EventQuery:
+    id: EventQuery
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventQuery.cs
+    range:
+      startLine: 18
+      endLine: 42
+    boundedContext: capture
+    intent: Dapper-based reader returning paged EventEntity lists filtered by topic
+    layer: repo
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: executes DB query via Dapper
+    methods:
+      - name: ListAsync
+        signature: (EventQueryFilter, int, int, CancellationToken)
+        line: 20
+        intent: Builds a filtered, ordered paged query over EventEntity
+        risks:
+          - external_io
+        calls:
+          - EventQueryFilter
+          - PagedEvents
+        externalCalls:
+          - IDbConnection.Builder
+          - Dawning.ORM.Dapper
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+  IEventStore:
+    id: IEventStore
+    kind: interface
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventStore.cs
+    range:
+      startLine: 6
+      endLine: 22
+    boundedContext: capture
+    intent: Contract for persisting and reading capture EventEntity rows
+    layer: repo
+    confidence: 0.92
+    risks: []
+    methods:
+      - name: InsertAsync
+        signature: (EventEntity, CancellationToken)
+        line: 8
+        intent: Insert a new event row
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: GetByIdAsync
+        signature: (Guid, CancellationToken)
+        line: 21
+        intent: Load an event by primary key or null
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Loads a single `EventEntity` by primary key, or returns <c>null</c>.
+          Used by `PublicApi.CapturePublicApi` to serve cross-module reads
+          (ADR-019 stance/topic enrichment).
+          Implemented via `Dawning.ORM.Dapper.QueryBuilderExtensions` rather than
+          <c>GetAsync&lt;T&gt;</c>; the dynamic dispatch path in Dawning.ORM.Dapper ≤ 1.3.0
+          throws at runtime (RuntimeBinderException). The Builder path is static-generic and
+          also more amenable to future projection.
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  EventStore:
+    id: EventStore
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventStore.cs
+    range:
+      startLine: 24
+      endLine: 41
+    boundedContext: capture
+    intent: Dapper-backed repository for capture EventEntity rows
+    layer: repo
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: executes DB inserts and queries
+      - type: missing_test
+        desc: no tests visible alongside repo
+    methods:
+      - name: InsertAsync
+        signature: (EventEntity, CancellationToken)
+        line: 26
+        intent: Insert via Dawning.ORM.Dapper InsertAsync
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Dawning.ORM.Dapper.InsertAsync
+      - name: GetByIdAsync
+        signature: (Guid, CancellationToken)
+        line: 32
+        intent: Query event by id using Dawning Builder API
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Dawning.ORM.Dapper.Builder
+          - Dawning.ORM.Dapper.QueryBuilderExtensions
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  IRecallQuery:
+    id: IRecallQuery
+    kind: interface
+    file: apps/api/src/Lumen.Modules.Recall/Persistence/RecallQuery.cs
+    range:
+      startLine: 14
+      endLine: 21
+    boundedContext: shared
+    intent: Read-only contract for vector-similarity recall queries.
+    layer: repo
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: SearchAsync
+        signature: (Vector, string, int, CancellationToken)
+        line: 16
+        intent: Search events by vector + topic, return top-K matches.
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Recall 模块在 <c>events</c> + <c>event_chunks</c> 表上的只读视图。
+      Capture 模块拥有写入；Recall 通过自己的 read model + 自己的 SQL 做查询。
+      这种 cross-module read-on-shared-table 模式在 modular monolith 中允许，
+      因为 vector 检索的 SQL 形态与 Capture 的 ORM Insert 完全异质。
+  RecallQuery:
+    id: RecallQuery
+    kind: class
+    file: apps/api/src/Lumen.Modules.Recall/Persistence/RecallQuery.cs
+    range:
+      startLine: 23
+      endLine: 236
+    boundedContext: shared
+    intent: Two-stage vector recall with chunk oversample + idempotency filter.
+    layer: repo
+    confidence: 0.88
+    risks:
+      - type: external_io
+        desc: executes raw SQL via Dapper
+      - type: missing_test
+        desc: no visible tests for SQL paths
+    methods:
+      - name: SearchAsync
+        signature: (Vector, string, int, CancellationToken)
+        line: 43
+        intent: Try chunk-level search; fall back to full-document embedding.
+        risks: []
+        calls:
+          - RecallQuery
+        externalCalls: []
+      - name: SearchChunksAsync
+        signature: (Vector, string, int, CancellationToken)
+        line: 71
+        intent: Oversample chunk vector hits, group by event, then stitch.
+        risks:
+          - external_io
+        calls:
+          - RecallQuery
+        externalCalls:
+          - Dapper.CommandDefinition
+          - Dapper.SqlMapper.QueryAsync
+      - name: SearchFullDocumentAsync
+        signature: (Vector, string, int, CancellationToken)
+        line: 117
+        intent: Fallback cosine search against events.embedding column.
+        risks:
+          - external_io
+        calls:
+          - RecallQuery
+        externalCalls:
+          - Dapper.CommandDefinition
+          - Dapper.SqlMapper.QueryAsync
+      - name: FilterAndStitchAsync
+        signature: (IReadOnlyList<EventCandidate>, int, CancellationToken)
+        line: 167
+        intent: Apply current-event filter then attach scores to event rows.
+        risks: []
+        calls:
+          - RecallQuery
+        externalCalls:
+          - ICapturePublicApi.GetCurrentEventIdsAsync
+        docComment: |-
+          ADR-029 split-query tail: in-list filter via `ICapturePublicApi`,
+          then fetch event rows by id and stitch back with the scores.
+          Fail-soft edge case: if the Capture-owned <c>event_current_by_url</c> table
+          has no overlap with the candidates (pre-ADR-029 historic events that
+          somehow escaped migration 0010, or a transient race), we keep the original
+          candidate order rather than returning an empty list. Better to surface
+      - name: FetchEventsByIdAsync
+        signature: (IReadOnlyList<Guid>, CancellationToken)
+        line: 209
+        intent: Bulk fetch event rows by id list via Dapper.
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Dapper.CommandDefinition
+          - Dapper.SqlMapper.QueryAsync
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - Dapper.CommandDefinition
+        - Dapper.SqlMapper.QueryAsync
+        - ICapturePublicApi.GetCurrentEventIdsAsync
+  MemoryCaptured:
+    id: MemoryCaptured
+    kind: record
+    file: apps/api/src/Lumen.Shared.Contracts/Events/MemoryCaptured.cs
+    range:
+      startLine: 10
+      endLine: 10
+    boundedContext: shared
+    intent: Domain event raised after a capture event row is persisted
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Raised by Capture after a new event row has been successfully persisted.
+      First event defined per ADR-018; stance/topic/association events deferred to ADR-019/020.
+      `EventId`: Primary key of the persisted <c>events</c> row.
+      `Topic`: Event topic (e.g. <c>capture.url.ingested</c>).
+      `Timestamp`: Unix timestamp in milliseconds at the moment of capture.
+  MemoryEnriched:
+    id: MemoryEnriched
+    kind: record
+    file: apps/api/src/Lumen.Shared.Contracts/Events/MemoryEnriched.cs
+    range:
+      startLine: 28
+      endLine: 34
+    boundedContext: shared
+    intent: Domain event raised after stance/topic enrichment is persisted
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Raised by the Memory module's stance/topic enrichment handler (ADR-019) after both
+      the <c>stance</c> and <c>topics</c> rows have been successfully written to
+      <c>event_enrichments</c>. Drives downstream association (ADR-020 §B2).
+
+      Per ADR-020 §C3 the payload carries a small structured snapshot (stance enum,
+      short summary, topic phrases) so downstream consumers — first the Connect
+      association handler — can score relationships without re-fetching from the
+      enrichment store. The original event body (markdown, embeddings) stays in
+      <c>events</c> / <c>event_chunks</c> and is fetched on demand via
+      `PublicApi.ICapturePublicApi`.
+
+
+      Failure semantics follow ADR-018: handlers run synchronously, serially, and
+      fail-soft; an association handler exception is logged and swallowed.
+
+      `EventId`: Primary key of the underlying <c>events</c> row.
+      `Topic`: Capture event topic (e.g. <c>capture.url.ingested</c>) — same value carried on `MemoryCaptured`.
+      `Timestamp`: Unix timestamp in milliseconds at the moment of capture (mirrors `MemoryCaptured.Timestamp`; association ordering uses this).
+      `Stance`: Stance enum value, constrained to the whitelist enforced by the enrichment handler (<c>none</c>, <c>author_position</c>, <c>user_position</c>, <c>ambivalent</c>, <c>meta</c>).
+      `Summary`: Short free-text explanation of the stance (≤ 200 chars; may be empty when `Stance` is <c>none</c>).
+      `Topics`: Topic phrases extracted by the LLM (deduplicated, original order preserved, 1-7 entries per ADR-019 prompt contract).
+  LlmModelSpec:
+    id: LlmModelSpec
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Llm/LlmModelSpec.cs
+    range:
+      startLine: 11
+      endLine: 36
+    boundedContext: shared
+    intent: DTO describing a single LLM model entry in llm-models.json registry
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      单个 LLM 模型在 <c>apps/api/llm-models.json</c> 注册表中的形态。
+      字段命名按 ADR-017 §影响 "模型注册表" schema。
+      Phase 1 注册表只起描述作用（README / 健康检查 / 切换说明），
+      不参与运行时模型加载——Ollama sidecar 本身管模型生命周期。
+  LlmModelRegistryFile:
+    id: LlmModelRegistryFile
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Llm/LlmModelSpec.cs
+    range:
+      startLine: 39
+      endLine: 46
+    boundedContext: shared
+    intent: Deserialization root for llm-models.json registry file
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: <c>llm-models.json</c> 的反序列化根。
+  EventEntity:
+    id: EventEntity
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventEntity.cs
+    range:
+      startLine: 7
+      endLine: 35
+    boundedContext: capture
+    intent: Dapper-mapped row for the events table including embedding vector
+    layer: repo
+    confidence: 0.9
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+  CaptureJobWorker:
+    id: CaptureJobWorker
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Workers/CaptureJobWorker.cs
+    range:
+      startLine: 40
+      endLine: 197
+    boundedContext: capture
+    intent: BackgroundService draining capture_jobs serially with retry/crash recovery
+    layer: service
+    confidence: 0.9
+    risks:
+      - type: concurrency
+        desc: BackgroundService long-running loop
+      - type: external_io
+        desc: DB-backed job claim/update via store
+      - type: missing_test
+        desc: no inbound test references detected
+    methods:
+      - name: StartAsync
+        signature: (CancellationToken)
+        line: 49
+        intent: Reset stuck 'processing' rows before starting polling loop
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - ICaptureJobStore.ResetStuckProcessingAsync
+          - TimeProvider.GetUtcNow
+      - name: ExecuteAsync
+        signature: (CancellationToken)
+        line: 80
+        intent: Polling loop ticking on PeriodicTimer until cancellation
+        risks:
+          - concurrency
+        calls: []
+        externalCalls:
+          - PeriodicTimer
+      - name: TickAsync
+        signature: (CancellationToken)
+        line: 112
+        intent: Claim a pending job and dispatch to IIngestUrlExecutor
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - ICaptureJobStore.ClaimNextPendingAsync
+          - IIngestUrlExecutor.ExecuteAsync
+          - TimeProvider.GetUtcNow
+      - name: HandleExecutionFailureAsync
+        signature: (ICaptureJobStore, CaptureJobEntity, Exception, CancellationToken)
+        line: 145
+        intent: Mark failed or reschedule based on attempt count vs MaxAttempts
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - ICaptureJobStore.MarkFailedAsync
+          - ICaptureJobStore.RescheduleAsync
+          - TimeProvider.GetUtcNow
+    readingPriority: 1
+    readState: unread
+    isEntry: true
+    entryKind: worker
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - TimeProvider
+        - PeriodicTimer
+    docComment: |-
+      ADR-028 §决策: BackgroundService that drains <c>capture_jobs</c> serially —
+      one pending row per tick, single in-process worker (matches Ollama CPU serial).
+
+      <b>Lifecycle</b>: Singleton (BackgroundService). Uses
+      `IServiceScopeFactory` to spin a fresh DI scope per tick so the
+      scoped `IngestUrlHandler` + `ICaptureJobStore` + DB
+      connection get fresh instances without captive-dep pitfalls.
+
+      <b>Crash recovery</b>: `StartAsync` calls
+      `ICaptureJobStore.ResetStuckProcessingAsync` synchronously before
+      `BackgroundService.StartAsync` so any <c>processing</c> rows left
+      over from a killed/crashed previous run get flipped back to <c>pending</c>
+      (and become immediately eligible) before the loop starts.
+
+      <b>Cancellation</b>: <c>stoppingToken</c> propagates into both the
+      claim/dispatch path and `PeriodicTimer.WaitForNextTickAsync`.
+      An `OperationCanceledException` from
+      `IngestUrlHandler.ExecuteAsync` is treated as "in-flight attempt
+      did not finish" — the row stays <c>processing</c> and the next host start
+      will reset it via `ICaptureJobStore.ResetStuckProcessingAsync`.
+      We do not `ICaptureJobStore.MarkFailedAsync` or
+      `ICaptureJobStore.RescheduleAsync` on cancellation.
+
+      <b>Retry policy</b>: Non-cancellation exceptions consume one attempt.
+      While <c>attempt_count + 1 &lt; MaxAttempts</c> the row is rescheduled to
+      <c>pending</c> with <c>next_attempt_at = now + RetryDelays[attempt_count]</c>;
+      otherwise it transitions to <c>failed</c> (terminal). See ADR-028 §决策 D6–D8.
+  TextChunk:
+    id: TextChunk
+    kind: record
+    file: apps/api/src/Lumen.Shared.Infrastructure/Embeddings/IChunker.cs
+    range:
+      startLine: 8
+      endLine: 8
+    boundedContext: shared
+    intent: Immutable carrier for a single text chunk with ordinal and content.
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      单段被切出的 chunk。Ordinal 从 0 起递增, Text 是该 chunk 对应的原始文本片段。
+      `Ordinal`: 在源文档内的顺序, 从 0 开始。
+      `Text`: 该 chunk 的文本内容。embedder 将以此为 passage 输入。
+  IChunker:
+    id: IChunker
+    kind: interface
+    file: apps/api/src/Lumen.Shared.Infrastructure/Embeddings/IChunker.cs
+    range:
+      startLine: 18
+      endLine: 26
+    boundedContext: shared
+    intent: Contract for splitting text into ordered TextChunk segments.
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods:
+      - name: Chunk
+        signature: (string text)
+        line: 23
+        intent: Split input text into a list of chunks.
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: 切分一段文本。
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      把一段文本切成多个 `TextChunk`。
+      ADR-022 §B 决策: 默认实现为段落感知 + 滑窗保底。
+      实现应当幂等 (同输入同输出), 不依赖外部状态;
+      切分上限受 `ChunkingOptions.MaxChunksPerEvent` 限制, 调用方负责截断与告警。
+  CapturePublicApi:
+    id: CapturePublicApi
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/PublicApi/CapturePublicApi.cs
+    range:
+      startLine: 22
+      endLine: 77
+    boundedContext: capture
+    intent: Internal impl of ICapturePublicApi projecting EventEntity to EnrichmentSource DTO
+    layer: service
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: GetEnrichmentSourceAsync
+        signature: (Guid, CancellationToken)
+        line: 28
+        intent: Fetch event by id and project payload into EnrichmentSource
+        risks: []
+        calls: []
+        externalCalls:
+          - IEventStore.GetByIdAsync
+          - EnrichmentSource
+      - name: GetCurrentEventIdsAsync
+        signature: (IReadOnlyList<Guid>, CancellationToken)
+        line: 44
+        intent: Delegate to current-by-url store for filtering current event ids
+        risks: []
+        calls: []
+        externalCalls:
+          - IEventCurrentByUrlStore.GetCurrentEventIdsAsync
+      - name: ExtractFields
+        signature: (JsonDocument)
+        line: 53
+        intent: Read markdown/title/url from payload JSON (fail-soft)
+        risks: []
+        calls: []
+        externalCalls:
+          - JsonDocument.RootElement
+          - JsonValueKind.Object
+        docComment: |-
+          从 <c>events.payload</c> 中读出 enrichment 关心的字段。
+          字段缺失或类型不对时返回 <c>null</c>（fail-soft）——payload 形状会随着 capture 来源扩张
+          （ADR-004 §revisit），enrichment 模块不应该 crash。
+      - name: TryGetString
+        signature: (JsonElement, string)
+        line: 67
+        intent: Safely read a string property from a JsonElement
+        risks: []
+        calls: []
+        externalCalls:
+          - JsonElement.TryGetProperty
+          - JsonValueKind.String
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Capture 模块对 `ICapturePublicApi` 的内部实现。
+
+      ADR-018 §影响 §代码层 PublicApi 第一例：把 `EventEntity`（internal sealed）
+      投影成 `EnrichmentSource` DTO 给跨模块调用。Capture 的 entity / payload JSON
+      形状不出本模块。
+
+
+      payload JSON 形状契约：由 `Features.IngestUrl.IngestUrlHandler.BuildPayload` 写入。
+      字段名（<c>url</c> / <c>title</c> / <c>markdown</c>）锁定为 Capture 模块的对外契约的一部分——
+      改这些字段需要同步本类与 ICapturePublicApi 调用方。
+  IEnrichmentStore:
+    id: IEnrichmentStore
+    kind: interface
+    file: apps/api/src/Lumen.Modules.Memory/Persistence/EnrichmentStore.cs
+    range:
+      startLine: 19
+      endLine: 48
+    boundedContext: shared
+    intent: Contract for writing enrichment rows with idempotent replay semantics.
+    layer: repo
+    confidence: 0.92
+    risks: []
+    methods:
+      - name: InsertOkAsync
+        signature: (Guid, Guid, string, string, string, CancellationToken)
+        line: 26
+        intent: Insert success row; skip on (event_id, kind) conflict.
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          成功路径写入。
+          若 <c>(event_id, kind)</c> 已存在（无论 status）则静默跳过 —— 重放幂等。
+          <returns>实际写入的行数（0 或 1）。</returns>
+      - name: InsertFailedAsync
+        signature: (Guid, Guid, string, string, string, CancellationToken)
+        line: 43
+        intent: Insert/update failed placeholder row; preserve existing ok rows.
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Enrichment 行写入。
+
+      不走 Dawning.ORM.Dapper 的 <c>InsertAsync</c>——需要 <c>ON CONFLICT</c> 兜底重放幂等
+      （ADR-019 §决策 L1）。表名 / 列名硬编码在 SQL 字符串里，与 `EnrichmentEntity`
+      的 <c>[Column]</c> annotations 在同一文件夹下，改一处对照改另一处。
+
+
+      失败行 (<c>status='failed'</c>) 走单独方法，语义是"占位 + 留追溯指针"；详见 ADR-019 §决策 G2。
+  EnrichmentStore:
+    id: EnrichmentStore
+    kind: class
+    file: apps/api/src/Lumen.Modules.Memory/Persistence/EnrichmentStore.cs
+    range:
+      startLine: 50
+      endLine: 124
+    boundedContext: shared
+    intent: Dapper-backed writer for event_enrichments with ON CONFLICT idempotency.
+    layer: repo
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: writes to PostgreSQL via Dapper
+    methods:
+      - name: InsertOkAsync
+        signature: (Guid, Guid, string, string, string, CancellationToken)
+        line: 77
+        intent: Execute idempotent INSERT for successful enrichment row.
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Dapper.CommandDefinition
+          - Dapper.SqlMapper.ExecuteAsync
+      - name: InsertFailedAsync
+        signature: (Guid, Guid, string, string, string, CancellationToken)
+        line: 99
+        intent: Execute INSERT/UPDATE for failed enrichment placeholder.
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Dapper.CommandDefinition
+          - Dapper.SqlMapper.ExecuteAsync
+      - name: TruncateForColumn
+        signature: (string)
+        line: 123
+        intent: Cap error_reason length at 1KB to prevent oversize rows.
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - Dapper.CommandDefinition
+        - Dapper.SqlMapper.ExecuteAsync
+  LlmModelRegistry:
+    id: LlmModelRegistry
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Llm/LlmModelRegistry.cs
+    range:
+      startLine: 18
+      endLine: 78
+    boundedContext: shared
+    intent: Loads llm-models.json at startup and resolves LLM model specs by id
+    layer: repo
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: reads registry JSON from disk at construction
+    methods:
+      - name: LlmModelRegistry
+        signature: (string registryPath)
+        line: 30
+        intent: Reads and deserializes the LLM registry JSON file
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - File.Exists
+          - File.ReadAllText
+          - JsonSerializer.Deserialize
+        docComment: 从指定 JSON 文件加载注册表。
+      - name: DefaultModelId
+        signature: "{ get; }"
+        line: 57
+        intent: Exposes the default model id from the registry file
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: 未指定时使用的模型 id。
+      - name: GetById
+        signature: (string id)
+        line: 60
+        intent: Finds a model spec by id with a helpful error when missing
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: 按 id 查找模型；未找到时抛清晰错误。
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - File.ReadAllText
+        - JsonSerializer.Deserialize
+    docComment: |-
+      加载 <c>apps/api/llm-models.json</c> 并按 id 检索。
+
+      与 `Embeddings.EmbeddingModelRegistry` 形态平行但独立——
+      LLM 与 embedding 是两个不同链路（一个 sidecar、一个 in-process），
+      模型清单与默认 id 分别演进。
+
+
+      本类型在 DI 中是 singleton：注册时一次性读盘并解析；运行期不再访问 IO。
+  OllamaLlmOptions:
+    id: OllamaLlmOptions
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Llm/OllamaLlmOptions.cs
+    range:
+      startLine: 16
+      endLine: 44
+    boundedContext: shared
+    intent: Configuration options for Ollama LLM sidecar runtime
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Phase 1 默认 LLM runtime（Ollama sidecar）配置。绑定 section 名 = <c>Llm</c>。
+
+      字段全部无 secret，可以直接放进 <c>appsettings.json</c>。Phase 2 BYOK 落地时
+      会另开 section 名（例如 <c>Llm:Providers:OpenAI</c>）走 user-secrets。
+
+
+      默认值与 <c>llm-models.json</c> 的 <c>defaultModel</c> 保持一致；
+      显式 override 优先于注册表 default。
+  OllamaLlmService:
+    id: OllamaLlmService
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Llm/OllamaLlmService.cs
+    range:
+      startLine: 34
+      endLine: 170
+    boundedContext: shared
+    intent: ILlmService impl calling Ollama /api/chat via HttpClient
+    layer: service
+    confidence: 0.88
+    risks:
+      - type: external_io
+        desc: HTTP call to Ollama sidecar
+    methods:
+      - name: ChatAsync
+        signature: (IReadOnlyList<ChatMessage>, ChatOptions?, CancellationToken)
+        line: 56
+        intent: POST /api/chat to Ollama, parse response, strip think blocks
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IHttpClientFactory.CreateClient
+          - HttpClientJsonExtensions.PostAsJsonAsync
+          - HttpContentJsonExtensions.ReadFromJsonAsync
+          - HttpRequestException
+          - ChatResult
+      - name: ExtractThinkBlock
+        signature: (string)
+        line: 110
+        intent: Strip <think>...</think> blocks and join traces
+        risks: []
+        calls: []
+        externalCalls:
+          - Regex.Matches
+          - Regex.Replace
+      - name: MapFinishReason
+        signature: (string?)
+        line: 125
+        intent: Map Ollama done_reason to FinishReason enum
+        risks: []
+        calls: []
+        externalCalls:
+          - FinishReason
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - IHttpClientFactory
+    docComment: |-
+      Phase 1 默认 LLM 实现：调 Ollama sidecar HTTP <c>POST /api/chat</c>（non-streaming）。
+
+      实现选择：直接用 `HttpClient`（经 <c>IHttpClientFactory</c>）+ Ollama 原生 JSON schema，
+      不引入 OllamaSharp / Microsoft.Extensions.AI 等 SDK 抽象。
+      理由：
+      <list type="bullet">
+        <item>Ollama 的 <c>/api/chat</c> 是上游 backward-compat surface，比第三方 SDK 版本更稳。</item>
+        <item>测试用 fake `HttpMessageHandler` 即可拦截，无需 mock 第三方库。</item>
+        <item>Phase 2 切到 LiteLLM Proxy（OpenAI-compatible <c>/v1/chat/completions</c>）也是同形态 HTTP 调用，
+          迁移成本仅为换 schema 映射函数。</item>
+      </list>
+      这里背离了 ADR-017 §影响 "代码层" 中写的 "新增 NuGet 包 OllamaSharp" —— 主线决策（runtime / 模型 / 接口 /
+      prompt / slice）全部按 ADR，只是落地时为减少依赖与提升可测性改用 HttpClient。
+
+
+      <c>&lt;think&gt;...&lt;/think&gt;</c> 推理块剥离逻辑：
+      注册表 `LlmModelSpec.IsReasoning` 为 <c>true</c> 时尝试匹配并把内容塞进
+      `ChatResult.ReasoningTrace`；否则字段保持 <c>null</c>。
+      默认模型 Qwen2.5 非推理模型，此字段 Phase 1 始终为 <c>null</c>。
+  ICaptureJobStore:
+    id: ICaptureJobStore
+    kind: interface
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/CaptureJobStore.cs
+    range:
+      startLine: 11
+      endLine: 66
+    boundedContext: capture
+    intent: Outbox store contract for capture_jobs (ADR-028/029)
+    layer: repo
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: InsertPendingAsync
+        signature: (CaptureJobEntity, CancellationToken)
+        line: 13
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: GetByIdAsync
+        signature: (Guid, CancellationToken)
+        line: 19
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Loads a single `CaptureJobEntity` by primary key, or returns <c>null</c>.
+          Used by <c>GET /api/captures/jobs/{id}</c> for client polling (ADR-028 Slice 3).
+      - name: FindInFlightByCanonicalUrlAsync
+        signature: (string, Guid?, CancellationToken)
+        line: 28
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          ADR-029 Layer 1: looks up the in-flight job (status <c>pending</c> or <c>processing</c>)
+          whose canonical URL matches and whose actor matches the given `actorId`
+          (anonymous captures collide on the same nil GUID — see migration 0008). Returns
+          <c>null</c> if no in-flight row exists. Terminal rows (<c>done</c>/<c>failed</c>)
+          are ignored so users can legitimately re-capture a URL after a previous job finished.
+      - name: MarkDoneAsync
+        signature: (Guid, Guid, DateTime, CancellationToken)
+        line: 35
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Marks a job as <c>done</c> and records the produced `eventId`.
+          Returns the number of rows updated (0 if the job no longer exists).
+      - name: MarkFailedAsync
+        signature: (Guid, string, DateTime, CancellationToken)
+        line: 41
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Marks a job as <c>failed</c> (terminal) and records the last error.
+          Increments <c>attempt_count</c> by 1. Returns the number of rows updated.
+      - name: ClaimNextPendingAsync
+        signature: (DateTime, CancellationToken)
+        line: 49
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Atomically picks the oldest <c>pending</c> row whose <c>next_attempt_at</c>
+          is in the past, flips it to <c>processing</c>, and returns the resulting row.
+          Uses <c>FOR UPDATE SKIP LOCKED</c> so concurrent callers do not double-claim.
+          Returns <c>null</c> if no eligible row exists.
+      - name: RescheduleAsync
+        signature: (Guid, DateTime, string, DateTime, CancellationToken)
+        line: 57
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Reschedules a previously claimed job back to <c>pending</c> with an incremented
+          <c>attempt_count</c>, an updated <c>next_attempt_at</c> (caller decides the
+          backoff target), and the failure reason captured in <c>last_error</c>.
+          Returns the number of rows updated.
+      - name: ResetStuckProcessingAsync
+        signature: (DateTime, CancellationToken)
+        line: 65
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Crash recovery: flips every <c>processing</c> row back to <c>pending</c> with
+          <c>next_attempt_at = updatedAt</c> so the worker re-picks it on the next tick.
+          <c>attempt_count</c> is preserved — the original attempt did not finish, but it
+          also is not "another attempt" we want to count. Returns the number of rows reset.
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      ADR-028 outbox store for <c>capture_jobs</c>. Slice 1 exposed only the
+      terminal-state operations (insert / mark done / mark failed). Slice 2
+      extends with claim / reschedule / startup-reset for the worker.
+  CaptureJobStore:
+    id: CaptureJobStore
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/CaptureJobStore.cs
+    range:
+      startLine: 68
+      endLine: 319
+    boundedContext: capture
+    intent: Dapper-backed outbox store for capture_jobs with claim/retry semantics
+    layer: repo
+    confidence: 0.92
+    risks:
+      - type: external_io
+        desc: Direct SQL via Dapper against capture_jobs
+      - type: concurrency
+        desc: FOR UPDATE SKIP LOCKED claim semantics
+      - type: missing_test
+        desc: Repository SQL likely needs integration tests
+    methods:
+      - name: InsertPendingAsync
+        signature: (CaptureJobEntity, CancellationToken)
+        line: 75
+        intent: Insert a new pending capture job row
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IDbConnection.ExecuteAsync
+          - Dapper.CommandDefinition
+      - name: FindInFlightByCanonicalUrlAsync
+        signature: (string, Guid?, CancellationToken)
+        line: 107
+        intent: Look up in-flight job by canonical URL + actor
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IDbConnection.QuerySingleOrDefaultAsync
+          - Dapper.CommandDefinition
+          - CaptureJobStatus.Pending
+          - CaptureJobStatus.Processing
+      - name: GetByIdAsync
+        signature: (Guid, CancellationToken)
+        line: 152
+        intent: Load job by primary key for polling
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IDbConnection.QuerySingleOrDefaultAsync
+          - Dapper.CommandDefinition
+      - name: MarkDoneAsync
+        signature: (Guid, Guid, DateTime, CancellationToken)
+        line: 178
+        intent: Transition job to done with event id
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IDbConnection.ExecuteAsync
+          - Dapper.CommandDefinition
+          - CaptureJobStatus.Done
+      - name: MarkFailedAsync
+        signature: (Guid, string, DateTime, CancellationToken)
+        line: 202
+        intent: Transition job to terminal failed state
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IDbConnection.ExecuteAsync
+          - Dapper.CommandDefinition
+          - CaptureJobStatus.Failed
+      - name: ClaimNextPendingAsync
+        signature: (DateTime, CancellationToken)
+        line: 227
+        intent: Atomically claim oldest pending row via SKIP LOCKED
+        risks:
+          - external_io
+          - concurrency
+        calls: []
+        externalCalls:
+          - IDbConnection.QuerySingleOrDefaultAsync
+          - Dapper.CommandDefinition
+          - CaptureJobStatus.Pending
+          - CaptureJobStatus.Processing
+      - name: RescheduleAsync
+        signature: (Guid, DateTime, string, DateTime, CancellationToken)
+        line: 271
+        intent: Push job back to pending with backoff
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IDbConnection.ExecuteAsync
+          - Dapper.CommandDefinition
+          - CaptureJobStatus.Pending
+      - name: ResetStuckProcessingAsync
+        signature: (DateTime, CancellationToken)
+        line: 298
+        intent: Crash recovery — flip processing rows back to pending
+        risks:
+          - external_io
+          - concurrency
+        calls: []
+        externalCalls:
+          - IDbConnection.ExecuteAsync
+          - Dapper.CommandDefinition
+          - CaptureJobStatus.Pending
+          - CaptureJobStatus.Processing
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - IDbConnection.ExecuteAsync
+        - IDbConnection.QuerySingleOrDefaultAsync
+        - Dapper.CommandDefinition
+        - CaptureJobStatus.Processing
+  IEventChunkStore:
+    id: IEventChunkStore
+    kind: interface
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventChunkStore.cs
+    range:
+      startLine: 6
+      endLine: 13
+    boundedContext: capture
+    intent: Contract for batch-inserting event chunks sharing one EventId
+    layer: repo
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: InsertRangeAsync
+        signature: (IReadOnlyList<EventChunkEntity>, CancellationToken)
+        line: 12
+        intent: Insert contiguous chunks for a single event
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Inserts a batch of chunks for one event. Caller guarantees all entries share
+          the same <c>EventId</c> and have contiguous <c>Ordinal</c> values starting at 0.
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  EventChunkStore:
+    id: EventChunkStore
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventChunkStore.cs
+    range:
+      startLine: 15
+      endLine: 31
+    boundedContext: capture
+    intent: Dapper-backed repo that inserts event chunks one row at a time
+    layer: repo
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: writes rows to database via Dapper
+    methods:
+      - name: InsertRangeAsync
+        signature: (IReadOnlyList<EventChunkEntity>, CancellationToken)
+        line: 17
+        intent: Per-row insert of all chunks via Dapper
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Dawning.ORM.Dapper.InsertAsync
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  EnrichmentEntity:
+    id: EnrichmentEntity
+    kind: class
+    file: apps/api/src/Lumen.Modules.Memory/Persistence/EnrichmentEntity.cs
+    range:
+      startLine: 14
+      endLine: 47
+    boundedContext: shared
+    intent: Dapper-mapped row for event_enrichments table (polymorphic per kind).
+    layer: repo
+    confidence: 0.9
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      单条 enrichment 行（per <c>events.id</c> + per `Kind`）。
+      schema 见 <c>0004_create_event_enrichments.sql</c>。
+      表形态 polymorphic：所有 enrichment kind 共表，`Payload` 内 JSON 形状由 kind 决定。
+      详见 ADR-019 §决策 C2。
+  IDomainEventHandler:
+    id: IDomainEventHandler
+    kind: interface
+    file: apps/api/src/Lumen.Shared.Contracts/Events/IDomainEventHandler.cs
+    range:
+      startLine: 16
+      endLine: 20
+    boundedContext: shared
+    intent: Contract for in-process domain event handlers (fail-soft per ADR-018).
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods:
+      - name: HandleAsync
+        signature: (TEvent, CancellationToken)
+        line: 20
+        intent: Handle a single domain event instance.
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Handles a single in-process domain event. Implementations are registered via
+      <c>AddInProcessDomainEvents</c> (assembly scan) and resolved by
+      `IDomainEventDispatcher` per `IDomainEvent` type.
+      Per ADR-018:
+      <list type="bullet">
+        <item>Exceptions are logged and the next handler runs (fail-soft).</item>
+        <item>`OperationCanceledException` is propagated to the publisher (fail-fast).</item>
+        <item>Handlers must not assume transactional consistency with the publisher's write.</item>
+      </list>
+  CaptureJobEntity:
+    id: CaptureJobEntity
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/CaptureJobEntity.cs
+    range:
+      startLine: 5
+      endLine: 42
+    boundedContext: capture
+    intent: Dapper-mapped row entity for the capture_jobs table
+    layer: repo
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  CaptureJobStatus:
+    id: CaptureJobStatus
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/CaptureJobEntity.cs
+    range:
+      startLine: 44
+      endLine: 50
+    boundedContext: capture
+    intent: String constants for capture job status values
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  EventChunkEntity:
+    id: EventChunkEntity
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventChunkEntity.cs
+    range:
+      startLine: 6
+      endLine: 31
+    boundedContext: capture
+    intent: Dapper-mapped entity for an event_chunks row with embedding
+    layer: repo
+    confidence: 0.92
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+  ICapturePublicApi:
+    id: ICapturePublicApi
+    kind: interface
+    file: apps/api/src/Lumen.Shared.Contracts/PublicApi/ICapturePublicApi.cs
+    range:
+      startLine: 21
+      endLine: 55
+    boundedContext: shared
+    intent: Capture module's cross-module read contract for enrichment/recall
+    layer: service
+    confidence: 0.92
+    risks: []
+    methods:
+      - name: GetEnrichmentSourceAsync
+        signature: (Guid, CancellationToken)
+        line: 33
+        intent: Fetch enrichment-consumable projection of a capture event
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          取一条 capture 事件的"可被 enrichment 消费的源信息"。
+          `eventId`: capture 事件 id（来自 `Events.MemoryCaptured.EventId`）。
+          `cancellationToken`: 取消令牌。
+          <returns>
+          若事件存在则返回 `EnrichmentSource`；否则返回 <c>null</c>。
+          `EnrichmentSource.Markdown` 为 <c>null</c> 表示 capture 抽取失败的 fallback
+          路径（payload 只有 url），由调用方决定如何降级。
+          </returns>
+      - name: GetCurrentEventIdsAsync
+        signature: (IReadOnlyList<Guid>, CancellationToken)
+        line: 58
+        intent: Intersect candidate event ids with live current captures
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Capture 模块对外（其它模块）暴露的查询接口。
+
+      ADR-018 §影响 §代码层 锁定的"PublicApi 懒落地"原则：
+      只有当真实跨模块调用出现时才在 <c>Lumen.Shared.Contracts/PublicApi/</c> 下加接口。
+      本接口因 ADR-019 stance/topic enrichment handler 需要回查 capture 源 markdown 而落地。
+
+
+      写入仍由 Capture 模块内部持有（<c>IEventStore.InsertAsync</c>）；
+      其它模块永远不通过此接口写。
+
+
+      不暴露泛用 <c>GetByIdAsync</c>——方法名显式声明用途（enrichment source），
+      Capture 模块未来若收紧返回字段（如 strip 大附件 / 加访问审计）调用方不需要知道。
+  EnrichmentSource:
+    id: EnrichmentSource
+    kind: record
+    file: apps/api/src/Lumen.Shared.Contracts/PublicApi/ICapturePublicApi.cs
+    range:
+      startLine: 65
+      endLine: 70
+    boundedContext: shared
+    intent: Minimal capture-event projection consumed by enrichment chain
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Capture 事件给 enrichment 链路消费的最小投影。
+      `EventId`: 事件 id。
+      `Markdown`: 抽取后的正文 Markdown。若 capture 抽取失败为 <c>null</c>。
+      `Title`: 页面标题；可能为 <c>null</c>。
+      `Url`: 原始 URL；可能为 <c>null</c>（未来非 URL 来源 capture 时）。
+      `Timestamp`: capture 时刻的 Unix milliseconds。
+  IDomainEventDispatcher:
+    id: IDomainEventDispatcher
+    kind: interface
+    file: apps/api/src/Lumen.Shared.Contracts/Events/IDomainEventDispatcher.cs
+    range:
+      startLine: 8
+      endLine: 12
+    boundedContext: shared
+    intent: Contract for dispatching in-process domain events to handlers
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods:
+      - name: PublishAsync
+        signature: "<TEvent>(TEvent, CancellationToken) where TEvent : IDomainEvent"
+        line: 9
+        intent: Publish a domain event to all registered handlers
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Dispatches in-process domain events to all registered handlers per ADR-018.
+      Default implementation in <c>Lumen.Shared.Infrastructure.Events</c> is synchronous,
+      serial, and fail-soft.
+  CaptureJobWorkerOptions:
+    id: CaptureJobWorkerOptions
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Workers/CaptureJobWorkerOptions.cs
+    range:
+      startLine: 8
+      endLine: 37
+    boundedContext: capture
+    intent: "Options POCO: polling cadence + retry policy for CaptureJobWorker (ADR-028)"
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      ADR-028 §决策 D7/D8: polling cadence + retry policy for `CaptureJobWorker`.
+      Defaults match the ADR exactly: 5 s polling, [1 s, 5 s, 30 s] backoff, 3 attempts before terminal failure.
+      Bound from configuration section <c>Capture:JobWorker</c>; left unset = defaults below.
+  MemoryModuleServiceCollectionExtensions:
+    id: MemoryModuleServiceCollectionExtensions
+    kind: class
+    file: apps/api/src/Lumen.Modules.Memory/MemoryServiceCollectionExtensions.cs
+    range:
+      startLine: 18
+      endLine: 25
+    boundedContext: shared
+    intent: DI registration for Memory module enrichment persistence
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: AddMemoryModule
+        signature: (this IServiceCollection)
+        line: 18
+        intent: Register EnrichmentStore as IEnrichmentStore (scoped)
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Memory 模块 DI 注册。
+          ADR-019 首切片：注册 stance/topic enrich handler + 持久化层。
+          `StanceTopicEnrichHandler` 不在此显式注册——由
+          <c>Lumen.Shared.Infrastructure.Events.AddInProcessDomainEvents</c> 扫描
+          <c>AssemblyMarker</c> 所在程序集时自动发现并按 closed
+          `IDomainEventHandler{TEvent}` 接口注册。
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Memory 模块 DI 注册。
+      ADR-019 首切片：注册 stance/topic enrich handler + 持久化层。
+      `StanceTopicEnrichHandler` 不在此显式注册——由
+      <c>Lumen.Shared.Infrastructure.Events.AddInProcessDomainEvents</c> 扫描
+      <c>AssemblyMarker</c> 所在程序集时自动发现并按 closed
+      `IDomainEventHandler{TEvent}` 接口注册。
+  ChunkingOptions:
+    id: ChunkingOptions
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Embeddings/ChunkingOptions.cs
+    range:
+      startLine: 10
+      endLine: 31
+    boundedContext: shared
+    intent: Options POCO for text chunking config bound to Embedding section
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Chunking 配置, bind 到 <c>Embedding</c> section (与 `OnnxEmbeddingOptions` 同 section)。
+      默认值与 e5-small (<c>MaxSequenceLength = 512</c>) 对齐。
+      按 ADR-022 §B / §C 决策: paragraph-aware + sliding-window fallback, 硬上限 32 chunk/event。
+  IEventAssociationStore:
+    id: IEventAssociationStore
+    kind: interface
+    file: apps/api/src/Lumen.Modules.Connect/Persistence/EventAssociationStore.cs
+    range:
+      startLine: 22
+      endLine: 39
+    boundedContext: shared
+    intent: Contract for writing/reading event association edges
+    layer: repo
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: InsertManyAsync
+        signature: (IReadOnlyList<EventAssociationEntity>, CancellationToken)
+        line: 30
+        intent: Idempotent batch insert of association edges
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: ListForEventAsync
+        signature: (Guid, int, CancellationToken)
+        line: 36
+        intent: List associations touching a given event
+        risks: []
+        calls:
+          - AssociationReadRow
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Association 边写入 + 简单读取。
+
+      不走 Dawning.ORM.Dapper 的 <c>InsertAsync</c>——需要 <c>ON CONFLICT DO NOTHING</c>
+      兜底重放幂等（ADR-020 §D1）。SQL 字符串硬编码，与 `EventAssociationEntity`
+      的 <c>[Column]</c> 在同一文件夹下，改一处对照改另一处。
+
+
+      输入必须满足 `EventAssociationEntity.SourceId` &lt;
+      `EventAssociationEntity.TargetId`；该约束由调用方
+      （<c>AssociateOnMemoryEnrichedHandler</c>）在装配 entity 前规范化，
+      否则 DB CHECK 会直接拒掉行。
+  AssociationReadRow:
+    id: AssociationReadRow
+    kind: class
+    file: apps/api/src/Lumen.Modules.Connect/Persistence/EventAssociationStore.cs
+    range:
+      startLine: 44
+      endLine: 55
+    boundedContext: shared
+    intent: Read DTO for /api/recall/associations/{eventId}
+    layer: repo
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: GET /api/recall/associations/{eventId} 读取行。
+  EventAssociationStore:
+    id: EventAssociationStore
+    kind: class
+    file: apps/api/src/Lumen.Modules.Connect/Persistence/EventAssociationStore.cs
+    range:
+      startLine: 57
+      endLine: 143
+    boundedContext: shared
+    intent: Dapper-backed store for event association edges with idempotent upsert
+    layer: repo
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: Direct Postgres writes/reads via Dapper
+      - type: missing_test
+        desc: No companion test file detected
+    methods:
+      - name: InsertManyAsync
+        signature: (IReadOnlyList<EventAssociationEntity>, CancellationToken)
+        line: 96
+        intent: Insert each row with ON CONFLICT DO NOTHING
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Dapper.CommandDefinition
+          - Dapper.SqlMapper.ExecuteAsync
+          - IDbConnection
+      - name: ListForEventAsync
+        signature: (Guid, int, CancellationToken)
+        line: 121
+        intent: Query association edges on either side of an event
+        risks:
+          - external_io
+        calls:
+          - AssociationReadRow
+        externalCalls:
+          - Dapper.CommandDefinition
+          - Dapper.SqlMapper.QueryAsync
+          - IDbConnection
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - Dapper.CommandDefinition
+  MigrationRunner:
+    id: MigrationRunner
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Persistence/MigrationRunner.cs
+    range:
+      startLine: 7
+      endLine: 42
+    boundedContext: shared
+    intent: DbUp-based runner that applies embedded Postgres migrations at startup
+    layer: repo
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: executes DB migrations against Postgres
+    methods:
+      - name: RunLumenMigrations
+        signature: (this IServiceProvider, string)
+        line: 9
+        intent: Ensures DB exists and applies embedded Postgres migration scripts
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - DbUp.EnsureDatabase
+          - DbUp.DeployChanges
+      - name: LogMigrationsApplied
+        signature: (ILogger, int)
+        line: 41
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: LogMigrationFailed
+        signature: (ILogger, string, Exception)
+        line: 44
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - DbUp.EnsureDatabase
+        - DbUp.DeployChanges
+  ValidationFilter:
+    id: ValidationFilter
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Validation/ValidationFilter.cs
+    range:
+      startLine: 8
+      endLine: 34
+    boundedContext: shared
+    intent: Endpoint filter that runs FluentValidation against a typed argument
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: InvokeAsync
+        signature: (EndpointFilterInvocationContext, EndpointFilterDelegate)
+        line: 11
+        intent: Validates argument; short-circuits with BadRequest on failure
+        risks: []
+        calls: []
+        externalCalls:
+          - IValidator.ValidateAsync
+          - Results.BadRequest
+          - ApiResult.Fail
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - IValidator.ValidateAsync
+        - Results.BadRequest
+  IEventCurrentByUrlStore:
+    id: IEventCurrentByUrlStore
+    kind: interface
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventCurrentByUrlStore.cs
+    range:
+      startLine: 9
+      endLine: 41
+    boundedContext: capture
+    intent: Contract for event_current_by_url pointer table access (ADR-029 L3)
+    layer: repo
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: GetByCanonicalUrlAsync
+        signature: (string, CancellationToken)
+        line: 17
+        intent: Fetch current pointer row for a canonical URL
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Returns the current pointer for the given canonical URL, or <c>null</c>
+          if no capture for that URL has been recorded yet.
+          Used by `Features.IngestUrl.IngestUrlHandler.ExecuteAsync`
+          to decide content-hash short-circuit (ADR-029 Layer 2).
+      - name: GetCurrentEventIdsAsync
+        signature: (IReadOnlyList<Guid>, CancellationToken)
+        line: 26
+        intent: Filter event ids to those that are currently live
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Returns the subset of given event ids that are currently the live
+          capture for some URL. Used by Recall via
+          `Lumen.Shared.Contracts.PublicApi.ICapturePublicApi.GetCurrentEventIdsAsync`
+          to in-list filter chunk-search candidates.
+      - name: UpsertAsync
+        signature: (string, Guid, string?, DateTime, CancellationToken)
+        line: 34
+        intent: Insert or overwrite the current pointer for a URL
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          Upserts the current pointer for `canonicalUrl` to
+          `eventId`. If a row exists, all fields are overwritten —
+          the older event row remains in <c>events</c> per ADR-002 append-only,
+          it just stops being the "current" version.
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: "ADR-029 Layer 3: read/write access to <c>event_current_by_url</c>."
+  EventCurrentByUrlStore:
+    id: EventCurrentByUrlStore
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventCurrentByUrlStore.cs
+    range:
+      startLine: 43
+      endLine: 125
+    boundedContext: capture
+    intent: Dapper-backed store for the event_current_by_url pointer table
+    layer: repo
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: Direct SQL execution against PostgreSQL
+    methods:
+      - name: GetByCanonicalUrlAsync
+        signature: (string, CancellationToken)
+        line: 45
+        intent: Query the current pointer row by canonical URL
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Dapper.SqlMapper.QuerySingleOrDefaultAsync
+          - Dapper.CommandDefinition
+      - name: GetCurrentEventIdsAsync
+        signature: (IReadOnlyList<Guid>, CancellationToken)
+        line: 67
+        intent: Return ids that are still live via PG ANY(@Ids)
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Dapper.SqlMapper.QueryAsync
+          - Dapper.CommandDefinition
+      - name: UpsertAsync
+        signature: (string, Guid, string?, DateTime, CancellationToken)
+        line: 96
+        intent: Insert or overwrite the pointer row for a URL
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Dapper.SqlMapper.ExecuteAsync
+          - Dapper.CommandDefinition
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - Dapper.SqlMapper.QuerySingleOrDefaultAsync
+        - Dapper.SqlMapper.QueryAsync
+        - Dapper.SqlMapper.ExecuteAsync
+        - Dapper.CommandDefinition
+  EventAssociationEntity:
+    id: EventAssociationEntity
+    kind: class
+    file: apps/api/src/Lumen.Modules.Connect/Persistence/EventAssociationEntity.cs
+    range:
+      startLine: 15
+      endLine: 44
+    boundedContext: shared
+    intent: Dapper entity row for event_associations table (undirected edge)
+    layer: repo
+    confidence: 0.9
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      一条 association 边（无向，规范化为 source_id &lt; target_id）。
+      schema 见 <c>0006_create_event_associations.sql</c>。
+      ADR-020 §D1：association 是 event 间的关系行，与 per-event enrichment 属性
+      语义不同，故独立成表。`Components` 内 JSON 形状由 `Kind`
+      决定；首版 <c>composite</c> 是 <c>{cosine, topic_overlap, stance_signal}</c>。
+  IngestUrlHandler:
+    id: IngestUrlHandler
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Features/IngestUrl/IngestUrlHandler.cs
+    range:
+      startLine: 12
+      endLine: 377
+    boundedContext: capture
+    intent: "Enqueues and executes URL capture jobs: extract→embed→chunk→dispatch pipeline"
+    layer: service
+    confidence: 0.85
+    risks:
+      - type: external_io
+        desc: DB + HTTP extract + embed pipeline
+      - type: concurrency
+        desc: in-flight job coalesce + UNIQUE race
+      - type: high_coupling
+        desc: wires 11 collaborators via DI
+    methods:
+      - name: EnqueueAsync
+        signature: (IngestUrlRequest, CancellationToken)
+        line: 51
+        intent: "ADR-028/029 L1: enqueue pending job, coalesce in-flight duplicates"
+        risks:
+          - external_io
+          - concurrency
+        calls:
+          - UrlCanonicalizer
+        externalCalls:
+          - IUserContext
+          - ICaptureJobStore
+          - CaptureJobEntity
+          - CaptureJobStatus
+          - Npgsql.PostgresException
+        docComment: |-
+          ADR-028: writes a pending row into <c>capture_jobs</c> and returns the job id.
+          The HTTP endpoint <c>POST /api/captures/url</c> returns this id immediately as a
+          202 Accepted response; <c>CaptureJobWorker</c> picks the row up and runs
+          `ExecuteAsync`.
+          ADR-029 Layer 1: before inserting, the request is canonicalized and matched
+          against any in-flight job (status pending/processing) for the same
+          (canonical_url, actor). If one exists, its jobId is returned and no row is
+          inserted — network retries and rapid double-clicks collapse to one job.
+          Race-tolerant: if a concurrent submission inserts after the FindInFlight
+          check but before our Insert, the partial UNIQUE index on capture_jobs
+          causes a PostgresException (23505); we catch it, re-query, and return the
+          existing jobId. Terminal rows (done/failed) do not participate in this
+          match, so users can legitimately re-capture a URL later.
+      - name: ExecuteAsync
+        signature: (Guid, string, Guid?, CancellationToken)
+        line: 113
+        intent: "ADR-028: runs extract→embed→chunk→dispatch pipeline for one job"
+        risks:
+          - external_io
+        calls:
+          - UrlCanonicalizer
+        externalCalls:
+          - IEventCurrentByUrlStore
+          - IEventStore
+          - ICaptureJobStore
+          - IDomainEventDispatcher
+          - EventEntity
+          - MemoryCaptured
+        docComment: |-
+          ADR-028: runs the extract → embed → chunk → dispatch pipeline for one job and
+          marks the job <c>done</c> on success. Slice 2 will move the call site from
+          `HandleAsync` to <c>CaptureJobWorker</c>.
+          On success: marks the job <c>done</c> with the produced event id and returns the entity.
+          On failure: rethrows without touching the job row. The caller decides terminal vs retry —
+          `HandleAsync` (slice 1 sync wrapper) marks <c>failed</c> immediately;
+          <c>CaptureJobWorker</c> (slice 2) applies attempt_count-gated backoff before flipping
+          to terminal. Cancellation propagates untouched so request abort / shutdown do not
+          bake a permanent failure into the job row.
+      - name: TryExtractAsync
+        signature: (string, CancellationToken)
+        line: 207
+        intent: Fail-soft extraction; returns failed outcome on hard failure
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IContentExtractor
+      - name: TryEmbedAsync
+        signature: (string, CancellationToken)
+        line: 227
+        intent: Fail-soft embedding; null on failure for later backfill
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IEmbeddingService
+          - Pgvector.Vector
+      - name: TryChunkAndStoreAsync
+        signature: (Guid, string, CancellationToken)
+        line: 250
+        intent: "ADR-022 §E: chunk, embed each, persist; fail-soft"
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IChunker
+          - IEmbeddingService
+          - IEventChunkStore
+          - EventChunkEntity
+          - Pgvector.Vector
+      - name: BuildPayload
+        signature: (string, ExtractionOutcome)
+        line: 295
+        intent: Serialize URL + extraction result to JSON payload
+        risks: []
+        calls: []
+        externalCalls:
+          - JsonSerializer.SerializeToDocument
+      - name: Truncate
+        signature: (string, int)
+        line: 325
+        intent: Cap string length to integer-char ceiling
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - Npgsql.PostgresException
+        - JsonSerializer.SerializeToDocument
+  IngestUrlRequest:
+    id: IngestUrlRequest
+    kind: record
+    file: apps/api/src/Lumen.Modules.Capture/Features/IngestUrl/IngestUrlRequest.cs
+    range:
+      startLine: 3
+      endLine: 3
+    boundedContext: capture
+    intent: Request DTO carrying a URL to ingest into the capture pipeline
+    layer: controller
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+  UrlCanonicalizer:
+    id: UrlCanonicalizer
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Features/IngestUrl/UrlCanonicalizer.cs
+    range:
+      startLine: 23
+      endLine: 53
+    boundedContext: capture
+    intent: Minimal URL canonicalization for idempotency keys (ADR-029).
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods:
+      - name: Canonicalize
+        signature: (string url)
+        line: 25
+        intent: Lowercase scheme/host, strip default ports and fragment.
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      ADR-029 §决策 1: minimal URL canonicalization for idempotency keys.
+      v1 rules:
+      <list type="bullet">
+        <item>scheme lowercased</item>
+        <item>host lowercased</item>
+        <item>default ports (:80 for http, :443 for https) stripped</item>
+        <item>fragment (#...) stripped</item>
+      </list>
+      v1 intentionally does NOT strip tracking params (utm_*, fbclid, gclid),
+      does NOT lowercase the path, and does NOT reorder query params. Deferred
+      to v1.1 — see ADR-029 §revisit_when (1)/(2).
+
+      `IngestUrlValidator` rejects non-absolute and non-http(s)
+      URLs upstream; this method assumes its input is already validated.
+      On malformed input it returns the original string trimmed — never throws,
+      because the canonicalization output also lands in a NOT NULL column.
+  EventCurrentByUrlEntity:
+    id: EventCurrentByUrlEntity
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Persistence/EventCurrentByUrlEntity.cs
+    range:
+      startLine: 9
+      endLine: 24
+    boundedContext: capture
+    intent: Per-canonical-URL current pointer row (ADR-029 Layer 3)
+    layer: repo
+    confidence: 0.92
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      ADR-029 Layer 3: per-canonical-URL current pointer. One row points at the
+      `EventEntity` currently considered the live capture for that URL.
+  EmbeddingModelSpec:
+    id: EmbeddingModelSpec
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Embeddings/EmbeddingModelSpec.cs
+    range:
+      startLine: 10
+      endLine: 65
+    boundedContext: shared
+    intent: Schema for a single embedding model entry in models.json registry
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      单个模型在 <c>apps/api/models.json</c> 注册表中的形态。
+      字段命名按 ADR-015 §模型注册表 schema。
+      序列化由 `System.Text.Json` 默认 camelCase 处理（见 `EmbeddingModelRegistry`）。
+  EmbeddingModelRegistryFile:
+    id: EmbeddingModelRegistryFile
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Embeddings/EmbeddingModelSpec.cs
+    range:
+      startLine: 70
+      endLine: 77
+    boundedContext: shared
+    intent: Deserialization root for apps/api/models.json
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: <c>apps/api/models.json</c> 的反序列化根。
+  GlobalExceptionHandler:
+    id: GlobalExceptionHandler
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Errors/GlobalExceptionHandler.cs
+    range:
+      startLine: 45
+      endLine: 136
+    boundedContext: shared
+    intent: Maps uncaught exceptions to ApiResult JSON responses with status codes
+    layer: util
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: writes HTTP response body
+      - type: missing_test
+        desc: no visible test coverage
+    methods:
+      - name: TryHandleAsync
+        signature: (HttpContext, Exception, CancellationToken)
+        line: 44
+        intent: Classify exception, log, write JSON response
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - ApiResult.Fail
+          - HttpResponseJsonExtensions.WriteAsJsonAsync
+        docComment: |-
+          把未捕获异常统一映射为 `ApiResult{T}` 形态的 JSON 响应。
+          关闭 ADR-026 信号 4（ask endpoint 在 LLM HttpClient.Timeout 后泄露 TaskCanceledException 全栈）。
+
+          分类策略（按判定顺序）：
+
+          <list type="number">
+            <item>
+              <description>
+              客户端断开（<c>RequestAborted</c> 触发）→ 不响应、不日志（按 ASP.NET 框架惯例返回 <c>false</c>
+              让默认管线处理），避免误报为服务端错误。
+              </description>
+            </item>
+            <item>
+              <description>
+              上游超时（`TaskCanceledException` 且 <c>InnerException is TimeoutException</c>，
+              这是 .NET 5+ `System.Net.Http.HttpClient.Timeout` 触发后的标准包装）→ 504 +
+              <c>upstream_timeout</c>。
+              </description>
+            </item>
+            <item>
+              <description>
+              上游 HTTP 错误（`System.Net.Http.HttpRequestException`）→ 502 +
+              <c>upstream_error: {message}</c>。message 泄露给客户端是 ADR-014 self-hosted 单人语境下的
+              调试便利性优先选择；如未来转 Cloud 场景按 ADR-014 §Cloud 升级路径收紧。
+              </description>
+            </item>
+            <item>
+              <description>
+              其他未分类异常 → 500 + <c>internal_error ({traceId})</c>，并以 `LogLevel.Error`
+              记录完整堆栈。traceId 取 `HttpContext.TraceIdentifier`，便于在日志里 grep。
+              </description>
+            </item>
+          </list>
+      - name: Classify
+        signature: (Exception)
+        line: 90
+        intent: Map exception type to HTTP status and error code
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: LogUnhandled
+        signature: (ILogger, string, string, string, int, string, Exception)
+        line: 109
+        intent: Source-generated error log for 5xx failures
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: LogUpstreamFailure
+        signature: (ILogger, string, string, string, int, string, Exception)
+        line: 122
+        intent: Source-generated warning log for upstream failures
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      把未捕获异常统一映射为 `ApiResult{T}` 形态的 JSON 响应。
+      关闭 ADR-026 信号 4（ask endpoint 在 LLM HttpClient.Timeout 后泄露 TaskCanceledException 全栈）。
+
+      分类策略（按判定顺序）：
+
+      <list type="number">
+        <item>
+          <description>
+          客户端断开（<c>RequestAborted</c> 触发）→ 不响应、不日志（按 ASP.NET 框架惯例返回 <c>false</c>
+          让默认管线处理），避免误报为服务端错误。
+          </description>
+        </item>
+        <item>
+          <description>
+          上游超时（`TaskCanceledException` 且 <c>InnerException is TimeoutException</c>，
+          这是 .NET 5+ `System.Net.Http.HttpClient.Timeout` 触发后的标准包装）→ 504 +
+          <c>upstream_timeout</c>。
+          </description>
+        </item>
+        <item>
+          <description>
+          上游 HTTP 错误（`System.Net.Http.HttpRequestException`）→ 502 +
+          <c>upstream_error: {message}</c>。message 泄露给客户端是 ADR-014 self-hosted 单人语境下的
+          调试便利性优先选择；如未来转 Cloud 场景按 ADR-014 §Cloud 升级路径收紧。
+          </description>
+        </item>
+        <item>
+          <description>
+          其他未分类异常 → 500 + <c>internal_error ({traceId})</c>，并以 `LogLevel.Error`
+          记录完整堆栈。traceId 取 `HttpContext.TraceIdentifier`，便于在日志里 grep。
+          </description>
+        </item>
+      </list>
+  IngestUrlAcceptedResponse:
+    id: IngestUrlAcceptedResponse
+    kind: record
+    file: apps/api/src/Lumen.Modules.Capture/Features/IngestUrl/IngestUrlResponse.cs
+    range:
+      startLine: 9
+      endLine: 9
+    boundedContext: capture
+    intent: 202 Accepted response body for POST /api/captures/url with JobId.
+    layer: controller
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      ADR-028 Slice 3: response shape for <c>POST /api/captures/url</c>.
+      The endpoint returns 202 Accepted with this body plus a <c>Location</c> header
+      pointing at <c>GET /api/captures/jobs/{jobId}</c>. Clients poll the GET until
+      the job reaches <c>done</c> or <c>failed</c>.
+  AskByQueryHandler:
+    id: AskByQueryHandler
+    kind: class
+    file: apps/api/src/Lumen.Modules.Recall/Features/AskByQuery/AskByQueryHandler.cs
+    range:
+      startLine: 13
+      endLine: 104
+    boundedContext: shared
+    intent: "Grounded ask: retrieve top-K, prompt LLM, return answer with strong citations"
+    layer: service
+    confidence: 0.88
+    risks:
+      - type: external_io
+        desc: calls embedding, DB query, and LLM services
+    methods:
+      - name: HandleAsync
+        signature: (AskByQueryRequest, CancellationToken)
+        line: 33
+        intent: Embed query, retrieve snippets, invoke LLM, filter cited results
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - IEmbeddingService.EmbedQueryAsync
+          - Pgvector.Vector
+          - IRecallQuery.SearchAsync
+          - JsonDocument.Parse
+          - GroundedAskPrompts.ExtractSnippetText
+          - GroundedAskPrompts.PromptSnippet
+          - AskCitation
+          - ChatMessage
+          - GroundedAskPrompts.BuildUserPrompt
+          - ILlmService.ChatAsync
+          - ChatOptions
+          - AskByQueryResponse
+      - name: ExtractReferencedIndices
+        signature: (string)
+        line: 88
+        intent: Parse [n] citation markers from answer text
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: ResolveModelLabel
+        signature: (string)
+        line: 102
+        intent: Build placeholder model id from embedding model string
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          当前没有从 ILlmService 拿到模型 id 的路径——Phase 1 接口刻意不暴露实际模型。
+          用 embedding 模型字符串做"调用链路指纹"占位，Phase 1.5 多模型路由时扩展。
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Grounded ask handler（ADR-017 §决策 E1 首切片）：
+      query → top-K cosine retrieval → 组装 prompt → LLM → 解析答案 + 强引用 citation。
+  AskByQueryRequest:
+    id: AskByQueryRequest
+    kind: record
+    file: apps/api/src/Lumen.Modules.Recall/Features/AskByQuery/AskByQueryRequest.cs
+    range:
+      startLine: 9
+      endLine: 9
+    boundedContext: shared
+    intent: Grounded ask request DTO with query, top-K, optional topic filter
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Grounded ask 请求（ADR-017 §决策 首切片）。
+      `Q`: 自然语言问题。
+      `TopK`: 检索的 top-K 片段数。默认 5，上限 20（grounded ask 给 LLM 的上下文不应过大，否则 prompt 噪声压过信号）。
+      `Topic`: 可选 topic 过滤；默认只在 <c>capture.url.ingested</c> 中检索。
+  IIngestUrlExecutor:
+    id: IIngestUrlExecutor
+    kind: interface
+    file: apps/api/src/Lumen.Modules.Capture/Features/IngestUrl/IIngestUrlExecutor.cs
+    range:
+      startLine: 12
+      endLine: 15
+    boundedContext: capture
+    intent: Per-tick capture executor contract decoupling worker from handler shape
+    layer: service
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: ExecuteAsync
+        signature: (Guid, string, Guid?, CancellationToken)
+        line: 14
+        intent: Run one capture attempt for a claimed job row
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      ADR-028 §决策: lets <c>CaptureJobWorker</c> drive one capture attempt without depending
+      on `IngestUrlHandler`'s concrete shape (11 collaborators, sealed). Single method
+      matches the worker's per-tick contract: run extract → embed → chunk → dispatch for one
+      already-claimed job row; on success mark the row <c>done</c>; on failure rethrow without
+      touching the row (caller decides terminal vs retry).
+  IngestUrlValidator:
+    id: IngestUrlValidator
+    kind: class
+    file: apps/api/src/Lumen.Modules.Capture/Features/IngestUrl/IngestUrlValidator.cs
+    range:
+      startLine: 5
+      endLine: 18
+    boundedContext: capture
+    intent: FluentValidation rules for IngestUrlRequest payload
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: IngestUrlValidator
+        signature: ()
+        line: 7
+        intent: Configure validation rules for Url field
+        risks: []
+        calls: []
+        externalCalls:
+          - AbstractValidator.RuleFor
+      - name: BeAbsoluteHttpUrl
+        signature: (string?)
+        line: 15
+        intent: Check that string is an absolute http/https URL
+        risks: []
+        calls: []
+        externalCalls:
+          - Uri.TryCreate
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls:
+        - FluentValidation.AbstractValidator
+  AssociationCandidate:
+    id: AssociationCandidate
+    kind: class
+    file: apps/api/src/Lumen.Modules.Connect/Persistence/AssociationCandidateQuery.cs
+    range:
+      startLine: 14
+      endLine: 26
+    boundedContext: shared
+    intent: "Candidate neighbor row: pgvector ANN result + topics/stance signals"
+    layer: repo
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      单条候选邻居：从 pgvector ANN top-N 抓回，附带可融合的结构化信号（topics + stance）。
+      ADR-020 §E1：score 在内存里融合（cosine 由 SQL 预算好，topic_overlap / stance_signal
+      由 C# 在 <c>AssociationScoring</c> 算）；这里只负责加载候选 + 必要属性。
+  IAssociationCandidateQuery:
+    id: IAssociationCandidateQuery
+    kind: interface
+    file: apps/api/src/Lumen.Modules.Connect/Persistence/AssociationCandidateQuery.cs
+    range:
+      startLine: 28
+      endLine: 58
+    boundedContext: shared
+    intent: Contract for loading source embedding + ANN candidate neighbors
+    layer: repo
+    confidence: 0.95
+    risks: []
+    methods:
+      - name: LoadEmbeddingAsync
+        signature: (Guid, CancellationToken)
+        line: 34
+        intent: Load 384-d embedding for the source event; null if missing
+        risks: []
+        calls: []
+        externalCalls: []
+        docComment: |-
+          加载源事件的 384-d embedding。若 <c>events.embedding IS NULL</c>
+          （capture 时 embed 失败 / fall-back 写空）则返回 <see langword="null"/>，
+          上游 handler 直接 fail-soft 跳过本次 association。
+      - name: FetchAsync
+        signature: (Guid, Vector, int, CancellationToken)
+        line: 54
+        intent: Fetch top-N association candidates filtered by topics/embedding
+        risks: []
+        calls:
+          - AssociationCandidate
+        externalCalls: []
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+  AssociationCandidateQuery:
+    id: AssociationCandidateQuery
+    kind: class
+    file: apps/api/src/Lumen.Modules.Connect/Persistence/AssociationCandidateQuery.cs
+    range:
+      startLine: 60
+      endLine: 147
+    boundedContext: shared
+    intent: Dapper-backed query loading embedding + ANN candidates from Postgres
+    layer: repo
+    confidence: 0.9
+    risks:
+      - type: external_io
+        desc: Postgres queries via Dapper
+    methods:
+      - name: LoadEmbeddingAsync
+        signature: (Guid, CancellationToken)
+        line: 100
+        intent: Run SQL to fetch event's embedding column
+        risks:
+          - external_io
+        calls: []
+        externalCalls:
+          - Dapper.CommandDefinition
+          - Dapper.SqlMapper.QuerySingleOrDefaultAsync
+      - name: FetchAsync
+        signature: (Guid, Vector, int, CancellationToken)
+        line: 113
+        intent: Run ANN SQL + assemble AssociationCandidate rows from dynamic
+        risks:
+          - external_io
+        calls:
+          - AssociationCandidate
+        externalCalls:
+          - Dapper.CommandDefinition
+          - Dapper.SqlMapper.QueryAsync
+    readingPriority: 3
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - Dapper.CommandDefinition
+        - Dapper.SqlMapper.QuerySingleOrDefaultAsync
+        - Dapper.SqlMapper.QueryAsync
+  ParsedEnrichment:
+    id: ParsedEnrichment
+    kind: record
+    file: apps/api/src/Lumen.Modules.Memory/Features/Enrichment/StanceTopicPrompts.cs
+    range:
+      startLine: 235
+      endLine: 238
+    boundedContext: shared
+    intent: Immutable result of parsing LLM stance/topics answer.
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      LLM 单次调用解析后的结果。`Stance`: stance 枚举值，已 enforce 在 `StanceTopicPrompts.AllowedStanceValues` 内。
+      `Summary`: stance 自由文本说明（≤ 200 字）。stance=none 时可能是空字符串。
+      `Topics`: 主题数组（已去重去空，保留 LLM 给定顺序）。
+  AskCitation:
+    id: AskCitation
+    kind: record
+    file: apps/api/src/Lumen.Modules.Recall/Features/AskByQuery/AskByQueryResponse.cs
+    range:
+      startLine: 11
+      endLine: 16
+    boundedContext: shared
+    intent: Strong reference to an event cited in an LLM answer.
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      答案中引用的某条 event 的强引用——前端可点击跳转到原 capture。
+      `Index`: 在 prompt 中的编号（[1]、[2] ...），与 LLM 答案文本中的标注一一对应。
+      `EventId`: events.id，可用于跳回原 event。
+      `Url`: 原 capture URL（若 payload 中可解析）。
+      `Timestamp`: events.timestamp。
+      `Score`: cosine similarity 分数（从同款 recall 检索得来）。
+  AskByQueryResponse:
+    id: AskByQueryResponse
+    kind: record
+    file: apps/api/src/Lumen.Modules.Recall/Features/AskByQuery/AskByQueryResponse.cs
+    range:
+      startLine: 24
+      endLine: 29
+    boundedContext: shared
+    intent: Grounded ask response DTO with answer and citations.
+    layer: service
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      Grounded ask 响应。`Q`: 原始问题，便于前端回显。
+      `Answer`: LLM 输出的可见答案（已剥离 <c>&lt;think&gt;</c> 块）。
+      `Citations`: 答案所引用的 events 强引用列表，按 prompt 编号顺序。
+      `FinishReason`: LLM 结束原因；前端可据此提示"答案被截断"。
+      `Model`: 实际调用的模型 id（用于 eval 归因）。
+  GroundedAskPrompts:
+    id: GroundedAskPrompts
+    kind: class
+    file: apps/api/src/Lumen.Modules.Recall/Features/AskByQuery/GroundedAskPrompts.cs
+    range:
+      startLine: 21
+      endLine: 126
+    boundedContext: shared
+    intent: Prompt templates and snippet extraction for grounded ask feature
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: BuildUserPrompt
+        signature: (string, IReadOnlyList<PromptSnippet>)
+        line: 50
+        intent: Assemble numbered snippets + question into user prompt
+        risks: []
+        calls:
+          - PromptSnippet
+        externalCalls:
+          - StringBuilder
+      - name: FormatTimestamp
+        signature: (long)
+        line: 71
+        intent: Render unix ms timestamp as yyyy-MM-dd UTC
+        risks: []
+        calls: []
+        externalCalls:
+          - DateTimeOffset.FromUnixTimeMilliseconds
+          - CultureInfo.InvariantCulture
+      - name: ExtractSnippetText
+        signature: (JsonElement, int)
+        line: 92
+        intent: Pull title/markdown/url from event payload JSON into snippet
+        risks: []
+        calls: []
+        externalCalls:
+          - JsonElement.TryGetProperty
+          - JsonElement.GetString
+          - StringBuilder
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - StringBuilder
+        - JsonElement
+        - DateTimeOffset.FromUnixTimeMilliseconds
+        - CultureInfo.InvariantCulture
+    docComment: |-
+      Grounded ask 的 prompt 模板（ADR-017 §决策 "Prompt 用 const string"）。
+
+      不引入 Razor / Scriban / EmbeddedResource——MVP 体量下 prompt &lt; 20 个，模板逻辑近零，
+      C# 11 raw string + `StringBuilder` 足够。
+
+
+      citation 是强引用：prompt 里每个片段都附编号 + URL + ts，要求模型答案里用
+      <c>[1]</c>、<c>[2]</c> 这样的方括号编号引用；handler 用 `CitationPatternRegex`
+      把答案里出现过的编号反查到 `AskCitation` 上。
+  PromptSnippet:
+    id: PromptSnippet
+    kind: record
+    file: apps/api/src/Lumen.Modules.Recall/Features/AskByQuery/GroundedAskPrompts.cs
+    range:
+      startLine: 84
+      endLine: 84
+    boundedContext: shared
+    intent: Immutable snippet carrying text, url, and timestamp for prompts
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: unverified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: 从 events.payload JSON 中提取一条可读片段。
+  OnnxEmbeddingOptions:
+    id: OnnxEmbeddingOptions
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Embeddings/OnnxEmbeddingOptions.cs
+    range:
+      startLine: 13
+      endLine: 37
+    boundedContext: shared
+    intent: Options POCO for in-process ONNX embedding configuration
+    layer: util
+    confidence: 0.95
+    risks: []
+    methods: []
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: false
+      droppedCalls: []
+      droppedExternalCalls: []
+    docComment: |-
+      In-process ONNX embedding 配置。绑定 section 名 = <c>Embedding</c>。
+
+      与 ADR-014 self-hosted 单人版 + ADR-015 进程内 embedding 配套。
+      所有字段都可以放进 <c>appsettings.json</c>（不像 Azure 那个需要 user-secrets），
+      因为这里没有任何 secret——纯文件路径与模型 id。
+  OnnxEmbeddingService:
+    id: OnnxEmbeddingService
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Embeddings/OnnxEmbeddingService.cs
+    range:
+      startLine: 23
+      endLine: 174
+    boundedContext: shared
+    intent: In-process ONNX embedding service with tokenize+pool+L2-normalize pipeline
+    layer: service
+    confidence: 0.9
+    risks:
+      - type: concurrency
+        desc: Singleton service called concurrently across requests
+      - type: external_io
+        desc: Native ONNX runtime inference invocation
+    methods:
+      - name: .ctor
+        signature: (InferenceSession, SentencePieceTokenizer, EmbeddingModelSpec)
+        line: 32
+        intent: Wire dependencies and detect token_type_ids support
+        risks: []
+        calls: []
+        externalCalls:
+          - InferenceSession.InputMetadata
+      - name: EmbedQueryAsync
+        signature: (string, CancellationToken)
+        line: 44
+        intent: Embed a query with 'query:' prefix for e5 models
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: EmbedPassageAsync
+        signature: (string, CancellationToken)
+        line: 52
+        intent: Embed a document passage with 'passage:' prefix
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: ApplyPrefix
+        signature: (string, bool)
+        line: 60
+        intent: Apply e5-style query/passage prefix when spec requests it
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: EmbedSync
+        signature: (string)
+        line: 68
+        intent: Tokenize, run ONNX, mean-pool, L2-normalize into EmbeddingVector
+        risks:
+          - concurrency
+        calls: []
+        externalCalls:
+          - SentencePieceTokenizer.EncodeToIds
+          - DenseTensor
+          - NamedOnnxValue.CreateFromTensor
+          - InferenceSession.Run
+          - EmbeddingVector
+      - name: Dispose
+        signature: ()
+        line: 182
+        intent: Dispose underlying ONNX inference session
+        risks: []
+        calls: []
+        externalCalls:
+          - InferenceSession.Dispose
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - InferenceSession
+        - SentencePieceTokenizer
+        - NamedOnnxValue.CreateFromTensor
+    docComment: |-
+      In-process ONNX-based `IEmbeddingService`。
+      默认承载 multilingual-e5-small 等 XLM-RoBERTa 系 sentence transformer。
+
+      工作流：tokenize（SentencePiece，手动 BOS/EOS） → ONNX inference → masked mean pooling →
+      L2 normalize。输出维度由 `EmbeddingModelSpec.Dimensions` 决定，
+      必须等于 <c>events.embedding</c> 列的 <c>vector(N)</c>。
+
+
+      <b>线程安全</b>：`InferenceSession` 与 `Tokenizer` 在 ORT / Tokenizers
+      文档中均承诺读路径线程安全；本类被 DI 注册为 singleton，多请求并发调用 <c>Run</c>。
+  HtmlContentExtractor:
+    id: HtmlContentExtractor
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Extraction/HtmlContentExtractor.cs
+    range:
+      startLine: 26
+      endLine: 225
+    boundedContext: shared
+    intent: Fetches HTML, extracts readable content via SmartReader/fallback, converts to Markdown
+    layer: service
+    confidence: 0.9
+    risks:
+      - type: security
+        desc: SSRF guard around outbound HTTP fetch
+      - type: external_io
+        desc: Outbound HTTP and DNS lookups
+      - type: missing_test
+        desc: SSRF / fallback paths need coverage
+    methods:
+      - name: ExtractAsync
+        signature: (string url, CancellationToken)
+        line: 38
+        intent: Fetch URL, run readability, convert to Markdown with fallback
+        risks:
+          - external_io
+          - security
+        calls:
+          - HtmlSelectorFallback
+        externalCalls:
+          - IHttpClientFactory
+          - SmartReader.Reader.ParseArticle
+          - ReverseMarkdown.Converter
+          - HttpRequestException
+      - name: ComputeHash
+        signature: (string, string)
+        line: 122
+        intent: SHA256 hash of canonical URL + markdown
+        risks: []
+        calls: []
+        externalCalls:
+          - SHA256.HashData
+          - Encoding.UTF8
+      - name: BuildExtractorId
+        signature: (string primary)
+        line: 129
+        intent: Compose extractor id with library versions
+        risks: []
+        calls: []
+        externalCalls:
+          - SmartReader.Reader
+          - ReverseMarkdown.Converter
+      - name: AssertHostIsPublicAsync
+        signature: (string host, CancellationToken)
+        line: 139
+        intent: "SSRF guard: reject localhost and private/internal IPs"
+        risks:
+          - security
+          - external_io
+        calls: []
+        externalCalls:
+          - Dns.GetHostAddressesAsync
+          - HttpRequestException
+          - SocketException
+      - name: IsPrivate
+        signature: (IPAddress)
+        line: 173
+        intent: Classify IPv4/IPv6 as private/loopback/link-local/multicast
+        risks: []
+        calls: []
+        externalCalls:
+          - IPAddress.IsLoopback
+      - name: LogReadabilityRejected
+        signature: (ILogger, Uri, int)
+        line: 216
+        risks: []
+        calls: []
+        externalCalls: []
+      - name: LogFallbackUsed
+        signature: (ILogger, Uri, int)
+        line: 220
+        risks: []
+        calls: []
+        externalCalls: []
+    readingPriority: 2
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - IHttpClientFactory
+        - Dns.GetHostAddressesAsync
+        - SHA256.HashData
+        - HttpRequestException
+    docComment: |-
+      默认 HTML 抽取器：HttpClient 抓 → SmartReader（Readability 移植）解析 → ReverseMarkdown 转 Markdown。
+
+      HTTP 链路使用命名 client <c>lumen.extractor</c>（见 `ExtractionServiceCollectionExtensions`）：
+      10s 超时、4MB 响应上限、最多 5 次重定向、带 polite User-Agent。
+
+
+      SSRF 防护（OWASP A10:2021）：
+      拒绝非 http/https；DNS 解析后逐一检查 IP，拒绝 loopback / RFC1918 私网 / RFC6598 CGNAT /
+      link-local / multicast / IPv6 link-local / IPv6 unique-local。
+      这条边界在 self-hosted 部署里尤为重要：若用户在同一主机上跑 Postgres / Redis / Ollama，
+      攻击者构造 <c>http://127.0.0.1:5432/</c> 之类 URL 提交将可绕过 0-auth 边界探测内网。
+  HtmlSelectorFallback:
+    id: HtmlSelectorFallback
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Extraction/HtmlSelectorFallback.cs
+    range:
+      startLine: 23
+      endLine: 176
+    boundedContext: shared
+    intent: Fallback HTML body extractor via HtmlAgilityPack when SmartReader rejects page
+    layer: util
+    confidence: 0.9
+    risks: []
+    methods:
+      - name: TryExtract
+        signature: (string html)
+        line: 109
+        intent: Strip noise then return first matching body container's inner HTML + title
+        risks: []
+        calls: []
+        externalCalls:
+          - HtmlAgilityPack.HtmlDocument
+      - name: StripNoise
+        signature: (HtmlDocument doc)
+        line: 142
+        intent: Remove noisy tags, MediaWiki selectors, and HTML comments
+        risks: []
+        calls: []
+        externalCalls:
+          - HtmlAgilityPack.HtmlDocument
+      - name: ExtractTitle
+        signature: (HtmlDocument doc)
+        line: 177
+        intent: Pick title from <title> or first <h1>, de-entitized
+        risks: []
+        calls: []
+        externalCalls:
+          - HtmlAgilityPack.HtmlEntity.DeEntitize
+    readingPriority: 4
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - HtmlAgilityPack.HtmlDocument
+        - HtmlAgilityPack.HtmlEntity.DeEntitize
+    docComment: |-
+      SmartReader 拒判 (<c>IsReadable=false</c> 或 <c>Length=0</c>) 时的次级抽取兜底:
+      用 HtmlAgilityPack 走"已知主体容器选择器表",剥噪音元素,把候选块的 inner HTML 交还
+      调用方让 ReverseMarkdown 转 Markdown。
+
+      出现的动机: SmartReader 0.11.0 在 Wikipedia / Martin Fowler 这类信息密度极高、
+      但被 Readability 评分体系判为"导航繁多"的页面上会直接 <c>IsReadable=false</c>,
+      让上游 capture 退化到 URL-only embedding,直接拖累 enrichment / association /
+      retrieval 三层质量(见手测 2026-05-13: 3 个真 URL 全部 length=0)。
+
+
+      本兜底**不是**第二个 Readability。它只做"把信息密度最高的容器节点交出来",
+      由 ReverseMarkdown 完成 HTML→Markdown 转换。它放弃了"段落评分 / 候选合并"
+      这类启发式,换取在结构化 wiki / 文档型站点上的稳定性。
+  DapperConfiguration:
+    id: DapperConfiguration
+    kind: class
+    file: apps/api/src/Lumen.Shared.Infrastructure/Persistence/DapperConfiguration.cs
+    range:
+      startLine: 6
+      endLine: 20
+    boundedContext: shared
+    intent: One-time Dapper type-handler registration for Pgvector and JsonDocument
+    layer: util
+    confidence: 0.9
+    risks:
+      - type: concurrency
+        desc: uses Interlocked for one-time init flag
+    methods:
+      - name: EnsureInitialized
+        signature: ()
+        line: 10
+        intent: Idempotently register Dapper type handlers
+        risks:
+          - concurrency
+        calls: []
+        externalCalls:
+          - Interlocked.Exchange
+          - Dapper.SqlMapper.AddTypeHandler
+          - VectorTypeHandler
+          - JsonDocumentTypeHandler
+    readingPriority: 5
+    readState: unread
+    verification: verified
+    verificationDetails:
+      rangeAdjusted: true
+      droppedCalls: []
+      droppedExternalCalls:
+        - Dapper.SqlMapper.AddTypeHandler
+        - Interlocked.Exchange
+        - VectorTypeHandler
+edges:
+  - from: ConnectEndpoints
+    to: AssociationDto
+    kind: calls
+    verified: true
+  - from: ConnectEndpoints
+    to: AssociationListResponse
+    kind: calls
+    verified: true
+  - from: AssociationListResponse
+    to: AssociationDto
+    kind: calls
+    verified: true
+  - from: EvalRunner
+    to: RetrievalMetrics
+    kind: calls
+    verified: true
+  - from: DatasetSpec
+    to: CaseSpec
+    kind: calls
+    verified: true
+  - from: DatasetSpec
+    to: CorpusItemSpec
+    kind: calls
+    verified: true
+  - from: DatasetSpec
+    to: PairSpec
+    kind: calls
+    verified: true
+  - from: CaseSpec
+    to: CorpusItemSpec
+    kind: calls
+    verified: true
+  - from: CaseSpec
+    to: QuerySpec
+    kind: calls
+    verified: true
+  - from: CaseSpec
+    to: ExpectationsSpec
+    kind: calls
+    verified: true
+  - from: ExpectationsSpec
+    to: RetrievalExpectationSpec
+    kind: calls
+    verified: true
+  - from: CorpusSeederExtensions
+    to: CorpusSeeder
+    kind: calls
+    verified: true
+  - from: ChatMessage
+    to: ChatRole
+    kind: calls
+    verified: true
+  - from: ChatResult
+    to: FinishReason
+    kind: calls
+    verified: true
+  - from: MarkdownReportWriter
+    to: ReportEnvironment
+    kind: calls
+    verified: true
+  - from: AssociationRunMetrics
+    to: AssociationPairResult
+    kind: calls
+    verified: true
+  - from: AssociationEvalRunner
+    to: AssociationRunResult
+    kind: calls
+    verified: true
+  - from: IEmbeddingService
+    to: EmbeddingVector
+    kind: calls
+    verified: true
+  - from: IEventQuery
+    to: EventQueryFilter
+    kind: calls
+    verified: true
+  - from: IEventQuery
+    to: PagedEvents
+    kind: calls
+    verified: true
+  - from: EventQuery
+    to: IEventQuery
+    kind: calls
+    verified: true
+  - from: EventQuery
+    to: EventQueryFilter
+    kind: calls
+    verified: true
+  - from: EventQuery
+    to: PagedEvents
+    kind: calls
+    verified: true
+  - from: IEventStore
+    to: EventEntity
+    kind: calls
+    verified: true
+  - from: EventStore
+    to: IEventStore
+    kind: calls
+    verified: true
+  - from: EventStore
+    to: EventEntity
+    kind: calls
+    verified: true
+  - from: RecallQuery
+    to: IRecallQuery
+    kind: calls
+    verified: true
+  - from: LlmModelRegistryFile
+    to: LlmModelSpec
+    kind: calls
+    verified: true
+  - from: IChunker
+    to: TextChunk
+    kind: calls
+    verified: true
+  - from: CaptureJobStore
+    to: ICaptureJobStore
+    kind: calls
+    verified: true
+  - from: EventChunkStore
+    to: IEventChunkStore
+    kind: calls
+    verified: true
+  - from: CaptureJobEntity
+    to: CaptureJobStatus
+    kind: calls
+    verified: true
+  - from: ICapturePublicApi
+    to: EnrichmentSource
+    kind: calls
+    verified: true
+  - from: IEventAssociationStore
+    to: AssociationReadRow
+    kind: calls
+    verified: true
+  - from: EventAssociationStore
+    to: IEventAssociationStore
+    kind: calls
+    verified: true
+  - from: EventAssociationStore
+    to: AssociationReadRow
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: UrlCanonicalizer
+    kind: calls
+    verified: true
+  - from: EmbeddingModelRegistryFile
+    to: EmbeddingModelSpec
+    kind: calls
+    verified: true
+  - from: IngestUrlValidator
+    to: IngestUrlRequest
+    kind: calls
+    verified: true
+  - from: IAssociationCandidateQuery
+    to: AssociationCandidate
+    kind: calls
+    verified: true
+  - from: AssociationCandidateQuery
+    to: AssociationCandidate
+    kind: calls
+    verified: true
+  - from: AssociationCandidateQuery
+    to: IAssociationCandidateQuery
+    kind: calls
+    verified: true
+  - from: AskByQueryResponse
+    to: AskCitation
+    kind: calls
+    verified: true
+  - from: GroundedAskPrompts
+    to: PromptSnippet
+    kind: calls
+    verified: true
+  - from: HtmlContentExtractor
+    to: HtmlSelectorFallback
+    kind: calls
+    verified: true
+  - from: RecallEndpoints
+    to: ext:RecallByQueryHandler
+    kind: external_calls
+    verified: true
+  - from: RecallEndpoints
+    to: AskByQueryHandler
+    kind: calls
+    verified: true
+  - from: RecallEndpoints
+    to: ApiResult
+    kind: calls
+    verified: true
+  - from: RecallEndpoints
+    to: ValidationFilter
+    kind: calls
+    verified: true
+  - from: RecallEndpoints
+    to: ext:RecallByQueryRequest
+    kind: external_calls
+    verified: true
+  - from: RecallEndpoints
+    to: AskByQueryRequest
+    kind: calls
+    verified: true
+  - from: ConnectEndpoints
+    to: ext:IEventAssociationStore.ListForEventAsync
+    kind: external_calls
+    verified: true
+  - from: ConnectEndpoints
+    to: ext:JsonDocument.Parse
+    kind: external_calls
+    verified: true
+  - from: ConnectEndpoints
+    to: ext:ApiResult.Ok
+    kind: external_calls
+    verified: true
+  - from: ConnectEndpoints
+    to: ext:Results.Ok
+    kind: external_calls
+    verified: true
+  - from: CaptureEndpoints
+    to: ext:IngestUrlHandler.EnqueueAsync
+    kind: external_calls
+    verified: true
+  - from: CaptureEndpoints
+    to: ext:ListCapturesHandler.HandleAsync
+    kind: external_calls
+    verified: true
+  - from: CaptureEndpoints
+    to: ext:GetCaptureJobHandler.HandleAsync
+    kind: external_calls
+    verified: true
+  - from: CaptureEndpoints
+    to: IngestUrlAcceptedResponse
+    kind: calls
+    verified: true
+  - from: CaptureEndpoints
+    to: ext:ApiResult.Ok
+    kind: external_calls
+    verified: true
+  - from: CaptureEndpoints
+    to: ext:ApiResult.Fail
+    kind: external_calls
+    verified: true
+  - from: CaptureEndpoints
+    to: ext:Results.Accepted
+    kind: external_calls
+    verified: true
+  - from: CaptureEndpoints
+    to: ext:Results.Ok
+    kind: external_calls
+    verified: true
+  - from: CaptureEndpoints
+    to: ext:Results.NotFound
+    kind: external_calls
+    verified: true
+  - from: CaptureEndpoints
+    to: ValidationFilter
+    kind: calls
+    verified: true
+  - from: EvalHostBuilder
+    to: ext:ConfigurationBuilder
+    kind: external_calls
+    verified: true
+  - from: EvalHostBuilder
+    to: ext:NpgsqlConnectionStringBuilder
+    kind: external_calls
+    verified: true
+  - from: EvalHostBuilder
+    to: ext:AddLumenPersistence
+    kind: external_calls
+    verified: true
+  - from: EvalHostBuilder
+    to: ext:AddOnnxEmbedding
+    kind: external_calls
+    verified: true
+  - from: EvalHostBuilder
+    to: ext:AddHtmlContentExtractor
+    kind: external_calls
+    verified: true
+  - from: EvalHostBuilder
+    to: ext:AddIdentityModule
+    kind: external_calls
+    verified: true
+  - from: EvalHostBuilder
+    to: ext:AddCaptureModule
+    kind: external_calls
+    verified: true
+  - from: EvalHostBuilder
+    to: ext:AddRecallModule
+    kind: external_calls
+    verified: true
+  - from: EvalHostBuilder
+    to: ext:AddInProcessDomainEvents
+    kind: external_calls
+    verified: true
+  - from: EvalHostBuilder
+    to: ext:RunLumenMigrations
+    kind: external_calls
+    verified: true
+  - from: EvalHostBuilder
+    to: ext:AssemblyMarker
+    kind: external_calls
+    verified: true
+  - from: EvalRunner
+    to: ext:RecallByQueryHandler
+    kind: external_calls
+    verified: true
+  - from: EvalRunner
+    to: ext:RecallByQueryRequest
+    kind: external_calls
+    verified: true
+  - from: EvalRunner
+    to: CorpusSeederExtensions
+    kind: calls
+    verified: true
+  - from: EvalRunner
+    to: ext:Dapper
+    kind: external_calls
+    verified: true
+  - from: EvalRunner
+    to: ext:IDbConnection
+    kind: external_calls
+    verified: true
+  - from: EvalRunner
+    to: ext:CommandDefinition
+    kind: external_calls
+    verified: true
+  - from: EvalRunner
+    to: CaseResult
+    kind: calls
+    verified: true
+  - from: QuerySpec
+    to: ext:YamlDotNet.Serialization.YamlMember
+    kind: external_calls
+    verified: true
+  - from: RetrievalExpectationSpec
+    to: ext:YamlDotNet.Serialization.YamlMember
+    kind: external_calls
+    verified: true
+  - from: CorpusSeeder
+    to: IEmbeddingService
+    kind: calls
+    verified: true
+  - from: CorpusSeeder
+    to: IEventStore
+    kind: calls
+    verified: true
+  - from: CorpusSeeder
+    to: IEventChunkStore
+    kind: calls
+    verified: true
+  - from: CorpusSeeder
+    to: IChunker
+    kind: calls
+    verified: true
+  - from: CorpusSeeder
+    to: ext:Pgvector.Vector
+    kind: external_calls
+    verified: true
+  - from: DatasetLoader
+    to: ext:File.Exists
+    kind: external_calls
+    verified: true
+  - from: DatasetLoader
+    to: ext:File.ReadAllText
+    kind: external_calls
+    verified: true
+  - from: DatasetLoader
+    to: ext:Path.Combine
+    kind: external_calls
+    verified: true
+  - from: DatasetLoader
+    to: ext:DeserializerBuilder
+    kind: external_calls
+    verified: true
+  - from: DatasetLoader
+    to: ext:UnderscoredNamingConvention.Instance
+    kind: external_calls
+    verified: true
+  - from: RetrievalMetrics
+    to: ext:Math.Abs
+    kind: external_calls
+    verified: true
+  - from: AssociationEvalHostBuilder
+    to: ext:ConfigurationBuilder
+    kind: external_calls
+    verified: true
+  - from: AssociationEvalHostBuilder
+    to: ext:AddOnnxEmbedding
+    kind: external_calls
+    verified: true
+  - from: MarkdownReportWriter
+    to: ext:Path.GetDirectoryName
+    kind: external_calls
+    verified: true
+  - from: MarkdownReportWriter
+    to: ext:Directory.CreateDirectory
+    kind: external_calls
+    verified: true
+  - from: MarkdownReportWriter
+    to: ext:File.WriteAllText
+    kind: external_calls
+    verified: true
+  - from: AssociationEvalRunner
+    to: IEmbeddingService
+    kind: calls
+    verified: true
+  - from: AssociationEvalRunner
+    to: ext:AssociationScoring
+    kind: external_calls
+    verified: true
+  - from: AssociationEvalRunner
+    to: AssociationCandidate
+    kind: calls
+    verified: true
+  - from: AssociationEvalRunner
+    to: AssociationMetrics
+    kind: calls
+    verified: true
+  - from: AssociationEvalRunner
+    to: AssociationRunMetrics
+    kind: calls
+    verified: true
+  - from: AssociationEvalRunner
+    to: AssociationPairResult
+    kind: calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: EventStore
+    kind: calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: EventQuery
+    kind: calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: EventChunkStore
+    kind: calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: CaptureJobStore
+    kind: calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: EventCurrentByUrlStore
+    kind: calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: IngestUrlHandler
+    kind: calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: ext:ListCapturesHandler
+    kind: external_calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: ext:GetCaptureJobHandler
+    kind: external_calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: IngestUrlValidator
+    kind: calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: ext:ListCapturesValidator
+    kind: external_calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: CapturePublicApi
+    kind: calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: CaptureJobWorker
+    kind: calls
+    verified: true
+  - from: CaptureModuleServiceCollectionExtensions
+    to: CaptureJobWorkerOptions
+    kind: calls
+    verified: true
+  - from: AssociationReportWriter
+    to: ext:Directory.CreateDirectory
+    kind: external_calls
+    verified: true
+  - from: AssociationReportWriter
+    to: ext:File.WriteAllText
+    kind: external_calls
+    verified: true
+  - from: AssociationReportWriter
+    to: ext:Path.GetDirectoryName
+    kind: external_calls
+    verified: true
+  - from: AssociationReportWriter
+    to: ext:CultureInfo.InvariantCulture
+    kind: external_calls
+    verified: true
+  - from: AssociationReportWriter
+    to: ext:StringBuilder
+    kind: external_calls
+    verified: true
+  - from: IdentityModuleServiceCollectionExtensions
+    to: IUserContext
+    kind: calls
+    verified: true
+  - from: IdentityModuleServiceCollectionExtensions
+    to: SystemUserContext
+    kind: calls
+    verified: true
+  - from: EventQuery
+    to: ext:Dawning.ORM.Dapper
+    kind: external_calls
+    verified: true
+  - from: EventStore
+    to: ext:Dawning.ORM.Dapper
+    kind: external_calls
+    verified: true
+  - from: EventStore
+    to: ext:IDbConnection
+    kind: external_calls
+    verified: true
+  - from: RecallQuery
+    to: ext:Dapper.CommandDefinition
+    kind: external_calls
+    verified: true
+  - from: RecallQuery
+    to: ext:Dapper.SqlMapper.QueryAsync
+    kind: external_calls
+    verified: true
+  - from: RecallQuery
+    to: ext:ICapturePublicApi.GetCurrentEventIdsAsync
+    kind: external_calls
+    verified: true
+  - from: EventEntity
+    to: ext:JsonDocument.Parse
+    kind: external_calls
+    verified: true
+  - from: CaptureJobWorker
+    to: ext:BackgroundService
+    kind: external_calls
+    verified: true
+  - from: CaptureJobWorker
+    to: ICaptureJobStore
+    kind: calls
+    verified: true
+  - from: CaptureJobWorker
+    to: IIngestUrlExecutor
+    kind: calls
+    verified: true
+  - from: CaptureJobWorker
+    to: CaptureJobWorkerOptions
+    kind: calls
+    verified: true
+  - from: CaptureJobWorker
+    to: ext:TimeProvider
+    kind: external_calls
+    verified: true
+  - from: CaptureJobWorker
+    to: ext:PeriodicTimer
+    kind: external_calls
+    verified: true
+  - from: CapturePublicApi
+    to: IEventStore
+    kind: calls
+    verified: true
+  - from: CapturePublicApi
+    to: IEventCurrentByUrlStore
+    kind: calls
+    verified: true
+  - from: CapturePublicApi
+    to: EnrichmentSource
+    kind: calls
+    verified: true
+  - from: EnrichmentStore
+    to: ext:Dapper.CommandDefinition
+    kind: external_calls
+    verified: true
+  - from: EnrichmentStore
+    to: ext:Dapper.SqlMapper.ExecuteAsync
+    kind: external_calls
+    verified: true
+  - from: LlmModelRegistry
+    to: ext:File.Exists
+    kind: external_calls
+    verified: true
+  - from: LlmModelRegistry
+    to: ext:File.ReadAllText
+    kind: external_calls
+    verified: true
+  - from: LlmModelRegistry
+    to: ext:JsonSerializer.Deserialize
+    kind: external_calls
+    verified: true
+  - from: OllamaLlmService
+    to: ext:IHttpClientFactory
+    kind: external_calls
+    verified: true
+  - from: OllamaLlmService
+    to: LlmModelSpec
+    kind: calls
+    verified: true
+  - from: OllamaLlmService
+    to: OllamaLlmOptions
+    kind: calls
+    verified: true
+  - from: OllamaLlmService
+    to: ChatResult
+    kind: calls
+    verified: true
+  - from: OllamaLlmService
+    to: FinishReason
+    kind: calls
+    verified: true
+  - from: OllamaLlmService
+    to: ext:Regex
+    kind: external_calls
+    verified: true
+  - from: CaptureJobStore
+    to: ext:IDbConnection.ExecuteAsync
+    kind: external_calls
+    verified: true
+  - from: CaptureJobStore
+    to: ext:IDbConnection.QuerySingleOrDefaultAsync
+    kind: external_calls
+    verified: true
+  - from: CaptureJobStore
+    to: ext:Dapper.CommandDefinition
+    kind: external_calls
+    verified: true
+  - from: CaptureJobStore
+    to: ext:CaptureJobStatus.Pending
+    kind: external_calls
+    verified: true
+  - from: CaptureJobStore
+    to: ext:CaptureJobStatus.Processing
+    kind: external_calls
+    verified: true
+  - from: CaptureJobStore
+    to: ext:CaptureJobStatus.Done
+    kind: external_calls
+    verified: true
+  - from: CaptureJobStore
+    to: ext:CaptureJobStatus.Failed
+    kind: external_calls
+    verified: true
+  - from: EventChunkStore
+    to: ext:Dawning.ORM.Dapper.InsertAsync
+    kind: external_calls
+    verified: true
+  - from: EnrichmentEntity
+    to: ext:JsonDocument.Parse
+    kind: external_calls
+    verified: true
+  - from: EventChunkEntity
+    to: ext:Pgvector.Vector
+    kind: external_calls
+    verified: true
+  - from: EventAssociationStore
+    to: ext:Dapper.CommandDefinition
+    kind: external_calls
+    verified: true
+  - from: EventAssociationStore
+    to: ext:IDbConnection
+    kind: external_calls
+    verified: true
+  - from: MigrationRunner
+    to: ext:DbUp.EnsureDatabase
+    kind: external_calls
+    verified: true
+  - from: MigrationRunner
+    to: ext:DbUp.DeployChanges
+    kind: external_calls
+    verified: true
+  - from: ValidationFilter
+    to: ext:IValidator.ValidateAsync
+    kind: external_calls
+    verified: true
+  - from: ValidationFilter
+    to: ext:Results.BadRequest
+    kind: external_calls
+    verified: true
+  - from: ValidationFilter
+    to: ext:ApiResult.Fail
+    kind: external_calls
+    verified: true
+  - from: EventCurrentByUrlStore
+    to: ext:Dapper.SqlMapper.QuerySingleOrDefaultAsync
+    kind: external_calls
+    verified: true
+  - from: EventCurrentByUrlStore
+    to: ext:Dapper.SqlMapper.QueryAsync
+    kind: external_calls
+    verified: true
+  - from: EventCurrentByUrlStore
+    to: ext:Dapper.SqlMapper.ExecuteAsync
+    kind: external_calls
+    verified: true
+  - from: EventCurrentByUrlStore
+    to: ext:Dapper.CommandDefinition
+    kind: external_calls
+    verified: true
+  - from: EventCurrentByUrlStore
+    to: ext:IDbConnection
+    kind: external_calls
+    verified: true
+  - from: EventAssociationEntity
+    to: ext:JsonDocument.Parse
+    kind: external_calls
+    verified: true
+  - from: IngestUrlHandler
+    to: IEventStore
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: IEventChunkStore
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: ICaptureJobStore
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: IEventCurrentByUrlStore
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: IUserContext
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: IContentExtractor
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: IEmbeddingService
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: IChunker
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: IDomainEventDispatcher
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: CaptureJobEntity
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: EventEntity
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: EventChunkEntity
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: MemoryCaptured
+    kind: calls
+    verified: true
+  - from: IngestUrlHandler
+    to: ext:Pgvector.Vector
+    kind: external_calls
+    verified: true
+  - from: IngestUrlHandler
+    to: ext:Npgsql.PostgresException
+    kind: external_calls
+    verified: true
+  - from: IngestUrlHandler
+    to: ext:JsonSerializer.SerializeToDocument
+    kind: external_calls
+    verified: true
+  - from: GlobalExceptionHandler
+    to: ext:ApiResult.Fail
+    kind: external_calls
+    verified: true
+  - from: AskByQueryHandler
+    to: IEmbeddingService
+    kind: calls
+    verified: true
+  - from: AskByQueryHandler
+    to: IRecallQuery
+    kind: calls
+    verified: true
+  - from: AskByQueryHandler
+    to: ILlmService
+    kind: calls
+    verified: true
+  - from: AskByQueryHandler
+    to: ext:Pgvector.Vector
+    kind: external_calls
+    verified: true
+  - from: AskByQueryHandler
+    to: GroundedAskPrompts
+    kind: calls
+    verified: true
+  - from: IngestUrlValidator
+    to: ext:FluentValidation.AbstractValidator
+    kind: external_calls
+    verified: true
+  - from: AssociationCandidateQuery
+    to: ext:Dapper.CommandDefinition
+    kind: external_calls
+    verified: true
+  - from: AssociationCandidateQuery
+    to: ext:Dapper.SqlMapper.QuerySingleOrDefaultAsync
+    kind: external_calls
+    verified: true
+  - from: AssociationCandidateQuery
+    to: ext:Dapper.SqlMapper.QueryAsync
+    kind: external_calls
+    verified: true
+  - from: GroundedAskPrompts
+    to: ext:StringBuilder
+    kind: external_calls
+    verified: true
+  - from: GroundedAskPrompts
+    to: ext:JsonElement
+    kind: external_calls
+    verified: true
+  - from: GroundedAskPrompts
+    to: ext:DateTimeOffset.FromUnixTimeMilliseconds
+    kind: external_calls
+    verified: true
+  - from: GroundedAskPrompts
+    to: ext:CultureInfo.InvariantCulture
+    kind: external_calls
+    verified: true
+  - from: OnnxEmbeddingService
+    to: ext:InferenceSession
+    kind: external_calls
+    verified: true
+  - from: OnnxEmbeddingService
+    to: ext:SentencePieceTokenizer
+    kind: external_calls
+    verified: true
+  - from: OnnxEmbeddingService
+    to: ext:NamedOnnxValue.CreateFromTensor
+    kind: external_calls
+    verified: true
+  - from: OnnxEmbeddingService
+    to: EmbeddingVector
+    kind: calls
+    verified: true
+  - from: HtmlContentExtractor
+    to: ext:IHttpClientFactory
+    kind: external_calls
+    verified: true
+  - from: HtmlContentExtractor
+    to: ext:SmartReader.Reader
+    kind: external_calls
+    verified: true
+  - from: HtmlContentExtractor
+    to: ext:ReverseMarkdown.Converter
+    kind: external_calls
+    verified: true
+  - from: HtmlContentExtractor
+    to: ext:Dns.GetHostAddressesAsync
+    kind: external_calls
+    verified: true
+  - from: HtmlContentExtractor
+    to: ext:SHA256.HashData
+    kind: external_calls
+    verified: true
+  - from: HtmlContentExtractor
+    to: ext:Encoding.UTF8
+    kind: external_calls
+    verified: true
+  - from: HtmlContentExtractor
+    to: ext:HttpRequestException
+    kind: external_calls
+    verified: true
+  - from: HtmlSelectorFallback
+    to: ext:HtmlAgilityPack.HtmlDocument
+    kind: external_calls
+    verified: true
+  - from: HtmlSelectorFallback
+    to: ext:HtmlAgilityPack.HtmlEntity.DeEntitize
+    kind: external_calls
+    verified: true
+  - from: DapperConfiguration
+    to: ext:Dapper.SqlMapper.AddTypeHandler
+    kind: external_calls
+    verified: true
+  - from: DapperConfiguration
+    to: ext:Interlocked.Exchange
+    kind: external_calls
+    verified: true
+  - from: DapperConfiguration
+    to: ext:VectorTypeHandler
+    kind: external_calls
+    verified: true
+  - from: DapperConfiguration
+    to: ext:JsonDocumentTypeHandler
+    kind: external_calls
+    verified: true
+externalDeps:
+  - name: RecallByQueryHandler
+    kind: package
+  - name: RecallByQueryRequest
+    kind: package
+  - name: IEventAssociationStore.ListForEventAsync
+    kind: package
+  - name: JsonDocument.Parse
+    kind: package
+  - name: ApiResult.Ok
+    kind: package
+  - name: Results.Ok
+    kind: package
+  - name: IngestUrlHandler.EnqueueAsync
+    kind: package
+  - name: ListCapturesHandler.HandleAsync
+    kind: package
+  - name: GetCaptureJobHandler.HandleAsync
+    kind: package
+  - name: ApiResult.Fail
+    kind: package
+  - name: Results.Accepted
+    kind: package
+  - name: Results.NotFound
+    kind: package
+  - name: ConfigurationBuilder
+    kind: package
+  - name: NpgsqlConnectionStringBuilder
+    kind: package
+  - name: AddLumenPersistence
+    kind: package
+  - name: AddOnnxEmbedding
+    kind: package
+  - name: AddHtmlContentExtractor
+    kind: package
+  - name: AddIdentityModule
+    kind: package
+  - name: AddCaptureModule
+    kind: package
+  - name: AddRecallModule
+    kind: package
+  - name: AddInProcessDomainEvents
+    kind: package
+  - name: RunLumenMigrations
+    kind: package
+  - name: AssemblyMarker
+    kind: package
+  - name: Dapper
+    kind: package
+  - name: IDbConnection
+    kind: package
+  - name: CommandDefinition
+    kind: package
+  - name: YamlDotNet.Serialization.YamlMember
+    kind: package
+  - name: Pgvector.Vector
+    kind: package
+  - name: File.Exists
+    kind: package
+  - name: File.ReadAllText
+    kind: package
+  - name: Path.Combine
+    kind: package
+  - name: DeserializerBuilder
+    kind: package
+  - name: UnderscoredNamingConvention.Instance
+    kind: package
+  - name: Math.Abs
+    kind: package
+  - name: Path.GetDirectoryName
+    kind: package
+  - name: Directory.CreateDirectory
+    kind: package
+  - name: File.WriteAllText
+    kind: package
+  - name: AssociationScoring
+    kind: package
+  - name: ListCapturesHandler
+    kind: package
+  - name: GetCaptureJobHandler
+    kind: package
+  - name: ListCapturesValidator
+    kind: package
+  - name: CultureInfo.InvariantCulture
+    kind: package
+  - name: StringBuilder
+    kind: package
+  - name: Dawning.ORM.Dapper
+    kind: package
+  - name: Dapper.CommandDefinition
+    kind: package
+  - name: Dapper.SqlMapper.QueryAsync
+    kind: package
+  - name: ICapturePublicApi.GetCurrentEventIdsAsync
+    kind: package
+  - name: BackgroundService
+    kind: package
+  - name: TimeProvider
+    kind: package
+  - name: PeriodicTimer
+    kind: package
+  - name: Dapper.SqlMapper.ExecuteAsync
+    kind: package
+  - name: JsonSerializer.Deserialize
+    kind: package
+  - name: IHttpClientFactory
+    kind: package
+  - name: Regex
+    kind: package
+  - name: IDbConnection.ExecuteAsync
+    kind: package
+  - name: IDbConnection.QuerySingleOrDefaultAsync
+    kind: package
+  - name: CaptureJobStatus.Pending
+    kind: package
+  - name: CaptureJobStatus.Processing
+    kind: package
+  - name: CaptureJobStatus.Done
+    kind: package
+  - name: CaptureJobStatus.Failed
+    kind: package
+  - name: Dawning.ORM.Dapper.InsertAsync
+    kind: package
+  - name: DbUp.EnsureDatabase
+    kind: package
+  - name: DbUp.DeployChanges
+    kind: package
+  - name: IValidator.ValidateAsync
+    kind: package
+  - name: Results.BadRequest
+    kind: package
+  - name: Dapper.SqlMapper.QuerySingleOrDefaultAsync
+    kind: package
+  - name: Npgsql.PostgresException
+    kind: package
+  - name: JsonSerializer.SerializeToDocument
+    kind: package
+  - name: FluentValidation.AbstractValidator
+    kind: package
+  - name: JsonElement
+    kind: package
+  - name: DateTimeOffset.FromUnixTimeMilliseconds
+    kind: package
+  - name: InferenceSession
+    kind: package
+  - name: SentencePieceTokenizer
+    kind: package
+  - name: NamedOnnxValue.CreateFromTensor
+    kind: package
+  - name: SmartReader.Reader
+    kind: package
+  - name: ReverseMarkdown.Converter
+    kind: package
+  - name: Dns.GetHostAddressesAsync
+    kind: package
+  - name: SHA256.HashData
+    kind: package
+  - name: Encoding.UTF8
+    kind: package
+  - name: HttpRequestException
+    kind: package
+  - name: HtmlAgilityPack.HtmlDocument
+    kind: package
+  - name: HtmlAgilityPack.HtmlEntity.DeEntitize
+    kind: package
+  - name: Dapper.SqlMapper.AddTypeHandler
+    kind: package
+  - name: Interlocked.Exchange
+    kind: package
+  - name: VectorTypeHandler
+    kind: package
+  - name: JsonDocumentTypeHandler
+    kind: package
+rootIntent: ASP.NET Core host program that boots the Lumen API and registers all module services, middleware, and root routes.
+narrative: "Read Program.cs first: it composes the application by registering persistence, embeddings, LLM, extraction, identity, capture, memory, connect, and recall modules. It wires global exception handling, dev-only CORS, runs migrations, exposes a liveness probe at /health, and delegates feature routes to module-specific Map*Endpoints extensions. Follow any AddXxxModule or MapXxxEndpoints call to drill into the corresponding module."
+suggestedEntryNodes:
+  - RecallEndpoints
+  - ConnectEndpoints
+  - CaptureEndpoints
+  - EvalHostBuilder
+  - EvalRunner
+  - DatasetSpec
+  - CorpusSeeder
+  - DatasetLoader
+  - ILlmService
+  - AssociationMetrics
+  - MarkdownReportWriter
+  - AssociationEvalRunner
+  - IContentExtractor
+  - IEmbeddingService
+  - CaptureModuleServiceCollectionExtensions
+  - EventQuery
+  - IEventStore
+  - EventStore
+  - RecallQuery
+  - CaptureJobWorker
+  - IChunker
+  - CapturePublicApi
+  - IEnrichmentStore
+  - OllamaLlmService
+  - ICaptureJobStore
+  - IEventChunkStore
+  - ICapturePublicApi
+  - EventAssociationStore
+  - IngestUrlHandler
+  - AskByQueryHandler
+  - AssociationCandidateQuery
+  - GroundedAskPrompts
+  - OnnxEmbeddingService
+  - HtmlContentExtractor
+  - HtmlSelectorFallback
+readingOrder:
+  - CaptureModuleServiceCollectionExtensions
+  - IngestUrlHandler
+  - IContentExtractor
+  - IEventChunkStore
+  - ICaptureJobStore
+  - IEventCurrentByUrlStore
+  - EventEntity
+  - IEventStore
+  - EventChunkEntity
+  - UrlCanonicalizer
+  - IUserContext
+  - IEmbeddingService
+  - EmbeddingVector
+  - IChunker
+  - TextChunk
+  - IDomainEventDispatcher
+  - CaptureJobEntity
+  - CaptureJobStatus
+  - MemoryCaptured
+  - CaptureJobWorker
+  - IIngestUrlExecutor
+  - CaptureJobWorkerOptions
+  - CaptureJobStore
+  - EventStore
+  - EventQuery
+  - IEventQuery
+  - EventQueryFilter
+  - PagedEvents
+  - EventChunkStore
+  - EventCurrentByUrlStore
+  - IngestUrlValidator
+  - IngestUrlRequest
+  - CapturePublicApi
+  - EnrichmentSource
+  - AssociationEvalRunner
+  - AssociationMetrics
+  - AssociationRunResult
+  - AssociationCandidate
+  - AssociationRunMetrics
+  - AssociationPairResult
+  - OllamaLlmService
+  - LlmModelSpec
+  - OllamaLlmOptions
+  - ChatResult
+  - FinishReason
+  - EvalRunner
+  - RetrievalMetrics
+  - CorpusSeederExtensions
+  - CorpusSeeder
+  - CaseResult
+  - DatasetSpec
+  - CaseSpec
+  - CorpusItemSpec
+  - QuerySpec
+  - ExpectationsSpec
+  - RetrievalExpectationSpec
+  - PairSpec
+  - IdentityModuleServiceCollectionExtensions
+  - SystemUserContext
+  - EventAssociationStore
+  - IEventAssociationStore
+  - AssociationReadRow
+  - AssociationCandidateQuery
+  - IAssociationCandidateQuery
+  - ChatMessage
+  - ChatRole
+  - LlmModelRegistryFile
+  - EmbeddingModelRegistryFile
+  - EmbeddingModelSpec
+  - AskByQueryResponse
+  - AskCitation
+  - ICapturePublicApi
+  - MarkdownReportWriter
+  - ReportEnvironment
+  - OnnxEmbeddingService
+  - HtmlContentExtractor
+  - HtmlSelectorFallback
+  - RecallQuery
+  - IRecallQuery
+  - ChatOptions
+  - ExtractedContent
+  - RecallRow
+  - IDomainEvent
+  - MemoryEnriched
+  - ChunkingOptions
+  - ParsedEnrichment
+  - OnnxEmbeddingOptions
+  - IEnrichmentStore
+  - EventCurrentByUrlEntity
+  - DatasetLoader
+  - RecallModuleServiceCollectionExtensions
+  - AssociationReportWriter
+  - EnrichmentStore
+  - LlmModelRegistry
+  - EnrichmentEntity
+  - MemoryModuleServiceCollectionExtensions
+  - MigrationRunner
+  - EventAssociationEntity
+  - DapperConfiguration
+  - EvalHostBuilder
+  - AssociationEvalHostBuilder
+  - RecallEndpoints
+  - AskByQueryHandler
+  - GroundedAskPrompts
+  - PromptSnippet
+  - ILlmService
+  - ValidationFilter
+  - ApiResult
+  - AskByQueryRequest
+  - CaptureEndpoints
+  - IngestUrlAcceptedResponse
+  - ConnectEndpoints
+  - AssociationDto
+  - AssociationListResponse
+  - IDomainEventHandler
+  - GlobalExceptionHandler

@@ -24,6 +24,8 @@ export interface MockupClass {
   confidence: number;
   readState: 'unread' | 'read';
   intent: string;
+  /** Project entry-point flag. Webview pins these to dagre's leftmost rank. */
+  isEntry?: boolean;
   /** Verbatim source-doc comment for the class itself. */
   docComment?: string;
   methods: {
@@ -185,6 +187,7 @@ export function adaptGraphForMockup(
     confidence: n.confidence,
     readState: n.readState === 'read' ? 'read' : 'unread',
     intent: n.intent,
+    isEntry: n.isEntry,
     docComment: n.docComment,
     methods: n.methods.map(m => ({
       name: m.name,

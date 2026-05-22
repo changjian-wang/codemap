@@ -26,6 +26,13 @@ export interface MockupClass {
   intent: string;
   /** Project entry-point flag. Webview pins these to dagre's leftmost rank. */
   isEntry?: boolean;
+  /**
+   * True when this class is reached by ≥30% of the entry methods in
+   * {@link MockupData.entries}. Used by focus-mode to render the class
+   * in a muted "shared row" at the bottom of the canvas. Entry classes
+   * are never marked shared regardless of reachability.
+   */
+  isShared?: boolean;
   /** Verbatim source-doc comment for the class itself. */
   docComment?: string;
   methods: {
@@ -59,6 +66,31 @@ export interface MockupEdge {
   to: string;
   kind: 'calls' | 'external_calls';
   verified: boolean;
+}
+
+/**
+ * A single navigable entry-point method, used by focus-mode to drive
+ * subgraph selection. One {@link MockupEntryMethod} is emitted per
+ * method on every class with {@link MockupClass.isEntry} = true.
+ */
+export interface MockupEntryMethod {
+  /** Owning class id (matches a {@link MockupClass.id}). */
+  classId: string;
+  /** Method name (matches a {@link MockupClass.methods}[].name on the owning class). */
+  methodName: string;
+  /** Method signature, copied verbatim from the owning class. */
+  signature: string;
+  /** LLM-emitted intent for the method; `''` when the analyzer did not produce one. */
+  intent: string;
+  /** Risks copied from the owning class's method record. */
+  risks: string[];
+  /**
+   * Class ids reachable from the owning class via class-to-class `calls`
+   * edges (cycle-safe BFS). Does NOT include the owning class itself;
+   * focus-mode renders the subgraph as `reachableClassIds ∪ {classId}`.
+   * `external_calls` edges and `ext:*` targets are never traversed.
+   */
+  reachableClassIds: string[];
 }
 
 export interface MockupChatTurn {
@@ -116,6 +148,12 @@ export interface MockupData {
   externalDeps: MockupExternalDep[];
   edges: MockupEdge[];
   chatTurns: MockupChatTurn[];
+  /**
+   * Per-entry-method navigation surface consumed by focus-mode. Empty when
+   * the graph has no `isEntry: true` classes (e.g. legacy graphs or
+   * minimal fixtures).
+   */
+  entries: MockupEntryMethod[];
   stats?: MockupStats;
   meta?: MockupMeta;
 }
@@ -235,11 +273,17 @@ export function adaptGraphForMockup(
     unverifiedCount: classes.filter(c => c.verification === 'unverified').length,
   };
 
+  const { entries, sharedClassIds } = computeFocusModeMetadata(classes, edges);
+  for (const c of classes) {
+    if (sharedClassIds.has(c.id)) c.isShared = true;
+  }
+
   return {
     classes,
     externalDeps,
     edges,
     chatTurns,
+    entries,
     stats: derivedStats,
     meta: { ...(meta ?? {}), bcLabels: labelForSlot },
   };
@@ -260,4 +304,93 @@ function prettifyBc(raw: string): string {
   // Cap at 18 chars so the chip stays one line.
   const capped = tail.length > 18 ? tail.slice(0, 17) + '…' : tail;
   return capped.charAt(0).toUpperCase() + capped.slice(1);
+}
+
+/**
+ * Build the focus-mode navigation surface: one {@link MockupEntryMethod}
+ * per method on every `isEntry: true` class, plus the set of class ids
+ * that qualify as "shared" (reached by ≥30% of the entry methods).
+ *
+ * Exposed for unit testing. Pure function, called once at the tail end
+ * of {@link adaptGraphForMockup}.
+ */
+export function computeFocusModeMetadata(
+  classes: MockupClass[],
+  edges: MockupEdge[],
+): { entries: MockupEntryMethod[]; sharedClassIds: Set<string> } {
+  const classIds = new Set(classes.map(c => c.id));
+
+  // Adjacency on class-to-class `calls` edges only. External edges
+  // (`external_calls` / `ext:*` targets) are never traversed — focus-mode
+  // operates on classes, not on the externals row.
+  const adjacency = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.kind !== 'calls') continue;
+    if (!classIds.has(e.from) || !classIds.has(e.to)) continue;
+    const list = adjacency.get(e.from);
+    if (list) list.push(e.to);
+    else adjacency.set(e.from, [e.to]);
+  }
+
+  const entries: MockupEntryMethod[] = [];
+  const reachableCache = new Map<string, string[]>();
+  for (const c of classes) {
+    if (!c.isEntry) continue;
+    let reachable = reachableCache.get(c.id);
+    if (!reachable) {
+      reachable = bfsReachable(c.id, adjacency);
+      reachableCache.set(c.id, reachable);
+    }
+    for (const m of c.methods) {
+      entries.push({
+        classId: c.id,
+        methodName: m.name,
+        signature: m.sig,
+        intent: m.intent ?? '',
+        risks: m.risks,
+        reachableClassIds: reachable,
+      });
+    }
+  }
+
+  const sharedClassIds = new Set<string>();
+  if (entries.length > 0) {
+    const entryClassIds = new Set(entries.map(e => e.classId));
+    const reachCount = new Map<string, number>();
+    for (const entry of entries) {
+      for (const id of entry.reachableClassIds) {
+        reachCount.set(id, (reachCount.get(id) ?? 0) + 1);
+      }
+    }
+    // Integer comparison avoids float-equality surprises at the 30% boundary.
+    // `count / entries.length >= 0.30`  ⇔  `count * 100 >= entries.length * 30`.
+    const denomTimes30 = entries.length * 30;
+    for (const [id, count] of reachCount.entries()) {
+      if (entryClassIds.has(id)) continue;
+      if (count * 100 >= denomTimes30) sharedClassIds.add(id);
+    }
+  }
+
+  return { entries, sharedClassIds };
+}
+
+function bfsReachable(
+  start: string,
+  adjacency: Map<string, string[]>,
+): string[] {
+  const reachable: string[] = [];
+  const visited = new Set<string>([start]);
+  const queue: string[] = [start];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    const neighbors = adjacency.get(cur);
+    if (!neighbors) continue;
+    for (const n of neighbors) {
+      if (visited.has(n)) continue;
+      visited.add(n);
+      reachable.push(n);
+      queue.push(n);
+    }
+  }
+  return reachable;
 }

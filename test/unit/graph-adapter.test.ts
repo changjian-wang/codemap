@@ -233,3 +233,208 @@ describe('adaptGraphForMockup', () => {
     });
   });
 });
+
+describe('focus-mode metadata (Slice 1)', () => {
+  // Minimal CodeNode factory; tests below opt-in to isEntry by spreading.
+  const mkNode = (
+    id: string,
+    overrides: Partial<{ isEntry: boolean; methods: { name: string; signature: string; line: number; risks: string[]; intent?: string }[] }> = {},
+  ) => ({
+    id,
+    kind: 'class' as const,
+    file: `src/${id}.ts`,
+    range: { startLine: 1, endLine: 10 },
+    boundedContext: 'host',
+    intent: '',
+    confidence: 0.9,
+    risks: [],
+    methods: overrides.methods ?? [],
+    readingPriority: 1,
+    readState: 'unread' as const,
+    verification: 'verified' as const,
+    isEntry: overrides.isEntry,
+  });
+
+  it('emits no entries and marks nothing shared when no class is isEntry', () => {
+    const g: CodeMapGraph = {
+      rootRequest: '',
+      scope: '',
+      nodes: {
+        A: mkNode('A', { methods: [{ name: 'm', signature: '()', line: 1, risks: [] }] }),
+        B: mkNode('B'),
+      },
+      edges: [{ from: 'A', to: 'B', kind: 'calls', verified: true }],
+      externalDeps: [],
+    };
+    const out = adaptGraphForMockup(g);
+    expect(out.entries).toEqual([]);
+    expect(out.classes.every(c => c.isShared === undefined)).toBe(true);
+  });
+
+  it('emits one entry per method on every isEntry: true class', () => {
+    const g: CodeMapGraph = {
+      rootRequest: '',
+      scope: '',
+      nodes: {
+        Endpoint: mkNode('Endpoint', {
+          isEntry: true,
+          methods: [
+            { name: 'getOne', signature: '(id)', line: 1, risks: [], intent: 'fetch a single record' },
+            { name: 'listAll', signature: '()', line: 5, risks: ['security'] },
+          ],
+        }),
+        Helper: mkNode('Helper'),
+      },
+      edges: [],
+      externalDeps: [],
+    };
+    const out = adaptGraphForMockup(g);
+    expect(out.entries).toHaveLength(2);
+    expect(out.entries[0]).toEqual({
+      classId: 'Endpoint',
+      methodName: 'getOne',
+      signature: '(id)',
+      intent: 'fetch a single record',
+      risks: [],
+      reachableClassIds: [],
+    });
+    expect(out.entries[1]!.methodName).toBe('listAll');
+    expect(out.entries[1]!.risks).toEqual(['security']);
+    expect(out.entries[1]!.intent).toBe(''); // missing → ''
+  });
+
+  it('walks class-to-class calls edges (BFS reachability)', () => {
+    // A → B → C → D, entry on A.
+    const g: CodeMapGraph = {
+      rootRequest: '',
+      scope: '',
+      nodes: {
+        A: mkNode('A', { isEntry: true, methods: [{ name: 'run', signature: '()', line: 1, risks: [] }] }),
+        B: mkNode('B'),
+        C: mkNode('C'),
+        D: mkNode('D'),
+      },
+      edges: [
+        { from: 'A', to: 'B', kind: 'calls', verified: true },
+        { from: 'B', to: 'C', kind: 'calls', verified: true },
+        { from: 'C', to: 'D', kind: 'calls', verified: true },
+      ],
+      externalDeps: [],
+    };
+    const reachable = adaptGraphForMockup(g).entries[0]!.reachableClassIds.sort();
+    expect(reachable).toEqual(['B', 'C', 'D']);
+  });
+
+  it('terminates on cycles', () => {
+    // A → B → A (cycle).
+    const g: CodeMapGraph = {
+      rootRequest: '',
+      scope: '',
+      nodes: {
+        A: mkNode('A', { isEntry: true, methods: [{ name: 'run', signature: '()', line: 1, risks: [] }] }),
+        B: mkNode('B'),
+      },
+      edges: [
+        { from: 'A', to: 'B', kind: 'calls', verified: true },
+        { from: 'B', to: 'A', kind: 'calls', verified: true },
+      ],
+      externalDeps: [],
+    };
+    const out = adaptGraphForMockup(g);
+    // BFS skips the start node — reachable is just {B}, not {A,B}.
+    expect(out.entries[0]!.reachableClassIds).toEqual(['B']);
+  });
+
+  it('never traverses external_calls edges', () => {
+    const g: CodeMapGraph = {
+      rootRequest: '',
+      scope: '',
+      nodes: {
+        A: mkNode('A', { isEntry: true, methods: [{ name: 'run', signature: '()', line: 1, risks: [] }] }),
+      },
+      edges: [
+        { from: 'A', to: 'ext:lodash', kind: 'external_calls', verified: true },
+      ],
+      externalDeps: [{ name: 'lodash', kind: 'package' }],
+    };
+    expect(adaptGraphForMockup(g).entries[0]!.reachableClassIds).toEqual([]);
+  });
+
+  it('marks a class shared when reached by ≥30% of entries (boundary inclusive)', () => {
+    // 10 entry methods total. Shared reached by exactly 3 of them → 30% → shared.
+    // Borderline reached by 2 → 20% → not shared.
+    const entryClass = (id: string, reachTargets: string[]) => ({
+      ...mkNode(id, { isEntry: true, methods: [{ name: 'run', signature: '()', line: 1, risks: [] }] }),
+    });
+    const nodes: Record<string, ReturnType<typeof mkNode>> = {
+      Shared: mkNode('Shared'),
+      Borderline: mkNode('Borderline'),
+    };
+    const edges: { from: string; to: string; kind: 'calls'; verified: boolean }[] = [];
+    for (let i = 0; i < 10; i++) {
+      const id = `E${i}`;
+      nodes[id] = entryClass(id, []);
+      if (i < 3) edges.push({ from: id, to: 'Shared', kind: 'calls', verified: true });
+      if (i < 2) edges.push({ from: id, to: 'Borderline', kind: 'calls', verified: true });
+    }
+    const g: CodeMapGraph = { rootRequest: '', scope: '', nodes, edges, externalDeps: [] };
+    const out = adaptGraphForMockup(g);
+    expect(out.classes.find(c => c.id === 'Shared')!.isShared).toBe(true);
+    expect(out.classes.find(c => c.id === 'Borderline')!.isShared).toBeUndefined();
+  });
+
+  it('never marks an entry class as shared, even if reached by every entry', () => {
+    // EntryA → EntryB → EntryC; all three are isEntry. EntryB and EntryC
+    // would qualify by reachability alone (≥30%) but must stay unmarked.
+    const g: CodeMapGraph = {
+      rootRequest: '',
+      scope: '',
+      nodes: {
+        A: mkNode('A', { isEntry: true, methods: [{ name: 'run', signature: '()', line: 1, risks: [] }] }),
+        B: mkNode('B', { isEntry: true, methods: [{ name: 'run', signature: '()', line: 1, risks: [] }] }),
+        C: mkNode('C', { isEntry: true, methods: [{ name: 'run', signature: '()', line: 1, risks: [] }] }),
+        NonEntry: mkNode('NonEntry'),
+      },
+      edges: [
+        { from: 'A', to: 'B', kind: 'calls', verified: true },
+        { from: 'B', to: 'C', kind: 'calls', verified: true },
+        { from: 'A', to: 'NonEntry', kind: 'calls', verified: true },
+        { from: 'B', to: 'NonEntry', kind: 'calls', verified: true },
+        { from: 'C', to: 'NonEntry', kind: 'calls', verified: true },
+      ],
+      externalDeps: [],
+    };
+    const out = adaptGraphForMockup(g);
+    expect(out.classes.find(c => c.id === 'A')!.isShared).toBeUndefined();
+    expect(out.classes.find(c => c.id === 'B')!.isShared).toBeUndefined();
+    expect(out.classes.find(c => c.id === 'C')!.isShared).toBeUndefined();
+    // NonEntry is reached by every entry → definitely shared.
+    expect(out.classes.find(c => c.id === 'NonEntry')!.isShared).toBe(true);
+  });
+
+  it('reuses BFS result across all methods of the same entry class', () => {
+    // Sanity: a class with 3 methods produces 3 entries, all sharing the
+    // same reachable set (reference equality).
+    const g: CodeMapGraph = {
+      rootRequest: '',
+      scope: '',
+      nodes: {
+        E: mkNode('E', {
+          isEntry: true,
+          methods: [
+            { name: 'a', signature: '()', line: 1, risks: [] },
+            { name: 'b', signature: '()', line: 2, risks: [] },
+            { name: 'c', signature: '()', line: 3, risks: [] },
+          ],
+        }),
+        T: mkNode('T'),
+      },
+      edges: [{ from: 'E', to: 'T', kind: 'calls', verified: true }],
+      externalDeps: [],
+    };
+    const out = adaptGraphForMockup(g);
+    expect(out.entries).toHaveLength(3);
+    expect(out.entries[0]!.reachableClassIds).toBe(out.entries[1]!.reachableClassIds);
+    expect(out.entries[1]!.reachableClassIds).toBe(out.entries[2]!.reachableClassIds);
+  });
+});

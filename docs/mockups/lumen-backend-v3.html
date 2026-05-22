@@ -303,6 +303,57 @@
       color: var(--vs-text-dim); font-style: italic;
     }
 
+    /* ====== FOCUS BAR (Slice 3) ====== */
+    /* Sits inside .graph-pane just below .filter-bar; advertises which
+       entry method is focused and exposes the 1/2/3/∞ depth slider. The
+       bar is always visible — there's no "exit to all" until Slice 4. */
+    .focus-bar {
+      position: absolute; top: 50px; left: 12px;
+      z-index: 70;
+      display: flex; align-items: center; gap: 8px;
+      max-width: calc(100% - 230px);
+      background: rgba(20,20,20,0.72);
+      border: 1px solid var(--vs-border); border-radius: 4px;
+      padding: 4px 8px; font-size: 11px;
+      backdrop-filter: blur(2px);
+    }
+    .focus-bar .focus-pill {
+      background: var(--vs-accent); color: #fff;
+      font-weight: 600; letter-spacing: 0.5px;
+      padding: 2px 6px; border-radius: 3px;
+      font-size: 9.5px;
+    }
+    .focus-bar .focus-target {
+      font-family: "Consolas", monospace;
+      color: var(--vs-text-dim);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      min-width: 0;
+    }
+    .focus-bar .focus-class  { color: var(--vs-text); }
+    .focus-bar .focus-method { color: var(--vs-accent); font-weight: 600; }
+    .focus-bar .focus-dot    { color: var(--vs-text-dim); margin: 0 2px; }
+    .focus-bar .focus-spacer { flex: 1; min-width: 8px; }
+    .focus-bar .depth-label {
+      color: var(--vs-text-dim); font-size: 10.5px;
+      letter-spacing: 0.3px;
+    }
+    .focus-bar .depth-seg {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 20px; height: 20px; padding: 0 5px;
+      border: 1px solid var(--vs-border); border-right-width: 0;
+      background: rgba(255,255,255,0.04); color: var(--vs-text-dim);
+      font-family: "Consolas", monospace; font-size: 11px;
+      cursor: pointer; user-select: none;
+    }
+    .focus-bar .depth-seg:first-of-type { border-radius: 3px 0 0 3px; }
+    .focus-bar .depth-seg:last-of-type  {
+      border-radius: 0 3px 3px 0; border-right-width: 1px;
+    }
+    .focus-bar .depth-seg:hover { background: rgba(255,255,255,0.09); }
+    .focus-bar .depth-seg.active {
+      background: var(--vs-accent); color: #fff; border-color: var(--vs-accent);
+    }
+
     /* ====== GRAPH ====== */
     .graph-pane {
       position: relative;
@@ -925,6 +976,21 @@
         <div class="chip" data-filter="hide-external">⊘ Hide external</div>
       </div>
 
+      <div class="focus-bar" id="focusBar">
+        <span class="focus-pill">FOCUS</span>
+        <span class="focus-target">
+          <span id="focusClassName" class="focus-class">—</span>
+          <span class="focus-dot">·</span>
+          <span id="focusMethodName" class="focus-method">—</span>
+        </span>
+        <span class="focus-spacer"></span>
+        <span class="depth-label">Depth</span>
+        <div class="depth-seg" data-depth="1">1</div>
+        <div class="depth-seg" data-depth="2">2</div>
+        <div class="depth-seg" data-depth="3">3</div>
+        <div class="depth-seg active" data-depth="inf">∞</div>
+      </div>
+
       <div id="cy"></div>
 
       <div class="minimap" id="minimap">
@@ -1511,6 +1577,24 @@ const cy = cytoscape({
     },
     { selector: 'node.cls.r-read', style: { 'opacity': 0.45 } },
     {
+      // Slice 3 — shared classes (reached by ≥30% of entry methods). Smaller
+      // box, muted palette, dashed border. positionSharedRow() pins these to
+      // a bottom band after each focus-mode layout.
+      selector: 'node.cls.shared-cls',
+      style: {
+        'width': 100,
+        'height': 32,
+        'padding': 4,
+        'background-color': '#1c1c1c',
+        'border-style': 'dashed',
+        'border-color': '#444',
+        'border-width': 1,
+        'opacity': 0.6,
+        'color': '#8a8a8a',
+        'font-size': 9,
+      }
+    },
+    {
       // Interface: pure contract — ellipse + faint cyan tint. bc/verification
       // styling still applies through .bc-* and .v-* classes.
       selector: 'node.cls.kind-interface',
@@ -1620,6 +1704,213 @@ const cy = cytoscape({
   ]
 });
 
+// ---------- Focus mode (Slice 3) ----------
+// Pick one entry method → render only its reachable subgraph. Reachability
+// is computed at view time by BFS over class-to-class `calls` edges (cycle-
+// safe; `external_calls` and `ext:*` nodes are not BFS roots). External-dep
+// nodes that any focused class points at are still surfaced, so the leaf
+// "I/O boundary" stays visible. The focus is intentionally sticky — Slice 4
+// adds the Focus/All toggle and breadcrumb history.
+let currentFocus = null;             // { classId, methodName } | null
+let currentDepth = Infinity;         // 1 | 2 | 3 | Infinity
+let __cmFocusSet    = new Set();     // class ids included by depth BFS
+let __cmFocusExtSet = new Set();     // ext:* ids reachable from focus set
+
+function __buildClassAdjacency() {
+  const adj = new Map();
+  EDGES.forEach(e => {
+    if (e.kind !== 'calls') return;
+    if (typeof e.from !== 'string' || typeof e.to !== 'string') return;
+    if (e.from.startsWith('ext:') || e.to.startsWith('ext:')) return;
+    if (!adj.has(e.from)) adj.set(e.from, []);
+    adj.get(e.from).push(e.to);
+  });
+  return adj;
+}
+
+function bfsAtDepth(originClassId, depth) {
+  const visited = new Set([originClassId]);
+  if (depth <= 0) return visited;
+  const adj = __buildClassAdjacency();
+  const queue = [[originClassId, 0]];
+  while (queue.length > 0) {
+    const [cur, dist] = queue.shift();
+    if (dist >= depth) continue;
+    for (const next of (adj.get(cur) || [])) {
+      if (!visited.has(next)) {
+        visited.add(next);
+        queue.push([next, dist + 1]);
+      }
+    }
+  }
+  return visited;
+}
+
+function getExtNodesInScope(focusSet) {
+  const ext = new Set();
+  EDGES.forEach(e => {
+    if (e.kind !== 'external_calls') return;
+    if (typeof e.to !== 'string' || !e.to.startsWith('ext:')) return;
+    if (focusSet.has(e.from)) ext.add(e.to);
+  });
+  return ext;
+}
+
+function isInFocus(nodeId) {
+  if (!currentFocus) return true;
+  return __cmFocusSet.has(nodeId) || __cmFocusExtSet.has(nodeId);
+}
+
+function ensureSharedness() {
+  // If the extension adapter already populated isShared we leave it alone.
+  // Standalone mockup browsing computes it from ENTRIES so the visual still
+  // demoes consistently.
+  if (CLASSES.some(c => c.isShared !== undefined)) return;
+  if (ENTRIES.length === 0) return;
+  const reachCount = new Map();
+  ENTRIES.forEach(e => {
+    new Set(e.reachableClassIds).forEach(id => {
+      reachCount.set(id, (reachCount.get(id) || 0) + 1);
+    });
+  });
+  const entryClassIds = new Set(ENTRIES.map(e => e.classId));
+  CLASSES.forEach(c => {
+    if (entryClassIds.has(c.id)) { c.isShared = false; return; }
+    const cnt = reachCount.get(c.id) || 0;
+    c.isShared = cnt * 100 >= ENTRIES.length * 30;
+  });
+}
+
+function applyFocusMask() {
+  // Run after applyFilters has set per-element display from chip state.
+  // Focus mask is the final override: anything outside the focus subgraph
+  // is force-hidden regardless of chip selection.
+  if (!currentFocus) return;
+  cy.nodes().forEach(n => {
+    const id = n.id();
+    if (!isInFocus(id)) n.style('display', 'none');
+  });
+  cy.edges().forEach(e => {
+    const src = e.source();
+    const tgt = e.target();
+    if (src.style('display') === 'none' || tgt.style('display') === 'none') {
+      e.style('display', 'none');
+    }
+  });
+}
+
+function layoutFocus() {
+  // Re-run dagre on whatever is currently visible so the subgraph fills the
+  // canvas. We reuse __cmLayoutOpts unchanged — small subgraphs render fine
+  // with the existing dagre control-point routing.
+  const visible = cy.elements().filter(el => el.style('display') !== 'none');
+  if (visible.length === 0) return;
+  visible.layout({ ...__cmLayoutOpts, fit: true, padding: 50 }).run();
+  positionSharedRow();
+}
+
+function positionSharedRow() {
+  // Pin shared nodes to a row below the main subgraph. dagre will place them
+  // somewhere in the middle ranks by default; we override to keep the call
+  // chain visually linear.
+  const visible = cy.nodes().filter(n => n.style('display') !== 'none');
+  const shared = visible.filter(n => n.hasClass('shared-cls'));
+  if (shared.length === 0) return;
+  const nonShared = visible.difference(shared);
+  if (nonShared.length === 0) return;
+  const xs = nonShared.map(n => n.position('x'));
+  const ys = nonShared.map(n => n.position('y'));
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  const spanX = Math.max(maxX - minX, 240);
+  const targetY = maxY + 90;
+  const n = shared.length;
+  shared.forEach((node, i) => {
+    const x = n === 1 ? (minX + maxX) / 2 : minX + (spanX / (n - 1)) * i;
+    node.position({ x, y: targetY });
+  });
+  cy.fit(visible, 50);
+}
+
+function highlightOutlineMethod(classId, methodName) {
+  document.querySelectorAll('.outline-method.active, .outline-class.active')
+    .forEach(el => el.classList.remove('active'));
+  if (!classId) return;
+  const sel = `.outline-method[data-class-id="${CSS.escape(classId)}"][data-method="${CSS.escape(methodName)}"]`;
+  const row = document.querySelector(sel);
+  if (!row) return;
+  row.classList.add('active');
+  const methodsContainer = row.parentElement;
+  if (methodsContainer) methodsContainer.classList.remove('collapsed');
+  const header = methodsContainer && methodsContainer.previousElementSibling;
+  if (header && header.classList.contains('outline-class')) {
+    header.classList.remove('collapsed');
+  }
+  row.scrollIntoView({ block: 'nearest' });
+}
+
+function updateFocusBar() {
+  const cls = document.getElementById('focusClassName');
+  const mth = document.getElementById('focusMethodName');
+  if (cls) cls.textContent = currentFocus ? currentFocus.classId    : '—';
+  if (mth) mth.textContent = currentFocus ? currentFocus.methodName : '—';
+  document.querySelectorAll('.focus-bar .depth-seg').forEach(seg => {
+    const d = seg.dataset.depth;
+    const val = d === 'inf' ? Infinity : parseInt(d, 10);
+    seg.classList.toggle('active', val === currentDepth);
+  });
+}
+
+function setFocus(classId, methodName) {
+  currentFocus = { classId, methodName };
+  __cmFocusSet    = bfsAtDepth(classId, currentDepth);
+  __cmFocusExtSet = getExtNodesInScope(__cmFocusSet);
+  // Chip filters first (they still apply within the focus subgraph), then
+  // mask, then layout. Order matters: chip mutations call applyFilters which
+  // would otherwise un-hide elements the focus mask had hidden.
+  applyFilters();
+  layoutFocus();
+  updateFocusBar();
+  highlightOutlineMethod(classId, methodName);
+}
+
+function setDepth(d) {
+  currentDepth = d;
+  if (currentFocus) {
+    setFocus(currentFocus.classId, currentFocus.methodName);
+  } else {
+    updateFocusBar();
+  }
+}
+
+function initFocusMode() {
+  ensureSharedness();
+  CLASSES.forEach(c => {
+    if (!c.isShared) return;
+    const n = cy.getElementById(c.id);
+    if (!n.empty()) n.addClass('shared-cls');
+  });
+  document.querySelectorAll('.focus-bar .depth-seg').forEach(seg => {
+    seg.addEventListener('click', () => {
+      const d = seg.dataset.depth;
+      setDepth(d === 'inf' ? Infinity : parseInt(d, 10));
+    });
+  });
+  // Auto-focus the first entry method by readingPriority of its owning class
+  // so the canvas is never empty on load. No-op if there are no entries.
+  if (ENTRIES.length > 0) {
+    const ordered = [...ENTRIES].sort((a, b) => {
+      const ca = CLASSES.find(c => c.id === a.classId);
+      const cb = CLASSES.find(c => c.id === b.classId);
+      return ((ca && ca.readingPriority) || 999) - ((cb && cb.readingPriority) || 999);
+    });
+    setFocus(ordered[0].classId, ordered[0].methodName);
+  } else {
+    updateFocusBar();
+  }
+}
+
 // ---------- Outline ----------
 // Slice 2: render `READING ORDER` as a 3-level tree
 // (bc → entry class → method). bc-group collapse machinery is reused; the
@@ -1682,9 +1973,8 @@ function renderOutline() {
       `;
       row.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        // Slice 2: log-only. Slice 3 will turn this into a focus-subgraph
-        // render.
-        console.log('would focus on', c.id, m.methodName);
+        // Slice 3 — enter focus mode on this entry method.
+        setFocus(c.id, m.methodName);
       });
       methodsList.appendChild(row);
     });
@@ -2691,6 +2981,9 @@ function applyFilters() {
     if (filterState.hideExternal && e.data('kind') === 'external_calls') show = false;
     e.style('display', show ? 'element' : 'none');
   });
+  // Slice 3: focus mask runs last so the focus subgraph wins over chip
+  // filters. With no current focus this is a no-op.
+  applyFocusMask();
   applyOutlineFilters();
 }
 
@@ -2897,6 +3190,10 @@ renderOutline();
 renderChat();
 renderStats();
 initMinimap();
+// Slice 3: focus mode auto-selects the first entry method so the canvas
+// loads in focus view by design — there is no "all-graph" landing until
+// Slice 4 brings back the Focus/All toggle.
+initFocusMode();
 // Hide bc chips that map to empty slots — clicking them would just produce
 // an empty graph + empty outline, which is more confusing than helpful.
 ['host', 'capture', 'recall', 'shared'].forEach(slot => {

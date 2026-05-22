@@ -14,6 +14,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as YAML from 'yaml';
 import { scoreGraph, type GoldenSample } from '../src/eval/score';
 import type { CodeMapGraph } from '../src/shared/types';
 
@@ -55,13 +56,19 @@ function parseArgs(argv: string[]): CliArgs {
   return out as CliArgs;
 }
 
-function readJson<T>(file: string): T {
+function readGraph<T>(file: string): T {
+  // Accept both JSON and YAML exports. The webview's "Export → YAML" is
+  // the default these days; "Export → JSON" still works. Detection is by
+  // extension (`.yaml` / `.yml`); `yaml.parse` happily handles JSON too,
+  // so unknown extensions fall through to the YAML path safely.
   const abs = path.resolve(file);
   const raw = fs.readFileSync(abs, 'utf-8');
+  const ext = path.extname(abs).toLowerCase();
   try {
-    return JSON.parse(raw) as T;
+    if (ext === '.json') return JSON.parse(raw) as T;
+    return YAML.parse(raw) as T;
   } catch (e) {
-    console.error(`Failed to parse JSON: ${abs}`);
+    console.error(`Failed to parse ${ext === '.json' ? 'JSON' : 'YAML'}: ${abs}`);
     throw e;
   }
 }
@@ -72,8 +79,8 @@ function fmt(n: number): string {
 
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
-  const actual = readJson<CodeMapGraph>(args.actual);
-  const golden = readJson<GoldenSample>(args.golden);
+  const actual = readGraph<CodeMapGraph>(args.actual);
+  const golden = readGraph<GoldenSample>(args.golden);
   const sc = scoreGraph(actual, golden);
 
   if (args.json) {

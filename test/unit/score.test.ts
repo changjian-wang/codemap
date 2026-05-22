@@ -197,4 +197,129 @@ describe('scoreGraph', () => {
       expect(r.edges.recall).toBe(1);
     });
   });
+
+  describe('ext: name canonicalisation (v0.0.7 — bare ↔ FQN aliasing)', () => {
+    it('collapses bare ↔ FQN of the same external symbol into one edge', () => {
+      // actual emits bare `ext:AssemblyMarker`; golden carries the FQN
+      // `ext:Lumen.Modules.Capture.AssemblyMarker`. Before v0.0.7 this
+      // counted as one missing + one extra; now they collapse to a hit.
+      const actual = G(
+        [N('A', 'a.ts')],
+        [{ from: 'A', to: 'ext:AssemblyMarker' }],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['A'],
+        edges: [
+          { from: 'A', to: 'ext:Lumen.Modules.Capture.AssemblyMarker', kind: 'external_calls' },
+        ],
+      };
+      const r = scoreGraph(actual, golden);
+      expect(r.edges.precision).toBe(1);
+      expect(r.edges.recall).toBe(1);
+      expect(r.diff.missingEdges).toEqual([]);
+      expect(r.diff.extraEdges).toEqual([]);
+    });
+
+    it('is symmetric — golden bare vs actual FQN also collapses', () => {
+      const actual = G(
+        [N('A', 'a.ts')],
+        [{ from: 'A', to: 'ext:Pgvector.Vector' }],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['A'],
+        edges: [{ from: 'A', to: 'ext:Vector', kind: 'external_calls' }],
+      };
+      const r = scoreGraph(actual, golden);
+      expect(r.edges.precision).toBe(1);
+      expect(r.edges.recall).toBe(1);
+    });
+
+    it('does NOT collide two distinct FQN namespaces sharing a type name', () => {
+      // Both ext:Foo.Marker and ext:Bar.Marker should stay distinct —
+      // collapse only happens when at least one side is bare.
+      const actual = G(
+        [N('A', 'a.ts')],
+        [{ from: 'A', to: 'ext:Foo.Marker' }],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['A'],
+        edges: [{ from: 'A', to: 'ext:Bar.Marker', kind: 'external_calls' }],
+      };
+      const r = scoreGraph(actual, golden);
+      expect(r.edges.precision).toBe(0);
+      expect(r.edges.recall).toBe(0);
+      expect(r.diff.missingEdges).toEqual([{ from: 'A', to: 'ext:Bar.Marker' }]);
+      expect(r.diff.extraEdges).toEqual([{ from: 'A', to: 'ext:Foo.Marker' }]);
+    });
+
+    it('leaves non-ext: edges untouched (workspace symbols never canonicalise)', () => {
+      // Workspace classes are identified by short id only; we must not
+      // treat `Foo.Bar` as an aliasable FQN here. (This is a defensive
+      // test — workspace ids never contain dots — but pins the contract.)
+      const actual = G(
+        [N('Foo', 'a.ts'), N('Bar', 'b.ts')],
+        [{ from: 'Foo', to: 'Bar' }],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['Foo', 'Bar'],
+        edges: [{ from: 'Foo', to: 'Bar' }],
+      };
+      const r = scoreGraph(actual, golden);
+      expect(r.edges.precision).toBe(1);
+      expect(r.edges.recall).toBe(1);
+    });
+
+    it('applies ignoreEdgeToPrefixes BEFORE canonicalisation', () => {
+      // `ext:System.Foo` is ignored, so the bare `ext:Foo` from actual
+      // should NOT canonicalise to the filtered-out FQN.
+      const actual = G(
+        [N('A', 'a.ts')],
+        [{ from: 'A', to: 'ext:Foo' }],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['A'],
+        edges: [{ from: 'A', to: 'ext:System.Foo', kind: 'external_calls' }],
+        ignoreEdgeToPrefixes: ['ext:System'],
+      };
+      const r = scoreGraph(actual, golden);
+      // After ignore filter: golden side has nothing; actual still has
+      // bare ext:Foo, which becomes an extra (legitimate — golden filtered it).
+      expect(r.edges.recall).toBe(0); // 0/0 → defined as 0
+      expect(r.diff.extraEdges).toEqual([{ from: 'A', to: 'ext:Foo' }]);
+    });
+
+    it('three-way collapse: bare + two FQNs collapse onto the longest', () => {
+      // actual has bare + short FQN, golden has long FQN.
+      // All three should collapse to the longest form.
+      const actual = G(
+        [N('A', 'a.ts'), N('B', 'b.ts'), N('C', 'c.ts')],
+        [
+          { from: 'A', to: 'ext:Marker' },
+          { from: 'B', to: 'ext:Capture.Marker' },
+        ],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['A', 'B', 'C'],
+        edges: [
+          { from: 'A', to: 'ext:Lumen.Modules.Capture.Marker', kind: 'external_calls' },
+          { from: 'B', to: 'ext:Lumen.Modules.Capture.Marker', kind: 'external_calls' },
+          { from: 'C', to: 'ext:Lumen.Modules.Capture.Marker', kind: 'external_calls' },
+        ],
+      };
+      const r = scoreGraph(actual, golden);
+      // A and B match after canonicalisation, C is genuinely missing.
+      expect(r.edges.precision).toBe(1);
+      expect(r.edges.recall).toBeCloseTo(2 / 3);
+      expect(r.diff.missingEdges).toEqual([
+        { from: 'C', to: 'ext:Lumen.Modules.Capture.Marker' },
+      ]);
+      expect(r.diff.extraEdges).toEqual([]);
+    });
+  });
 });

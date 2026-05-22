@@ -354,6 +354,74 @@
       background: var(--vs-accent); color: #fff; border-color: var(--vs-accent);
     }
 
+    /* ====== FOCUS BAR — Slice 4 add-ons ====== */
+    /* Back/Forward arrows, Focus/All toggle, BC breadcrumb chip. Mode-all
+       state dims out the per-method UI (BC, method name, depth slider)
+       since nothing in that row applies when you're viewing the whole
+       graph. */
+    .focus-bar .focus-nav {
+      display: inline-flex; gap: 2px; margin-right: 2px;
+    }
+    .focus-bar .focus-arrow {
+      width: 22px; height: 22px; padding: 0;
+      background: rgba(255,255,255,0.08); color: var(--vs-text);
+      border: 1px solid var(--vs-border); border-radius: 3px;
+      font-family: "Consolas", monospace; font-size: 13px; font-weight: 700;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .focus-bar .focus-arrow:hover:not(:disabled) {
+      background: rgba(255,255,255,0.16);
+      border-color: var(--vs-accent);
+    }
+    .focus-bar .focus-arrow:disabled {
+      opacity: 0.25; color: var(--vs-text-dim); cursor: default;
+    }
+    .focus-bar .focus-mode-toggle {
+      display: inline-flex; gap: 0; margin-right: 4px;
+    }
+    .focus-bar .focus-mode-btn {
+      height: 22px; padding: 0 8px;
+      background: rgba(255,255,255,0.04); color: var(--vs-text-dim);
+      border: 1px solid var(--vs-border); border-right-width: 0;
+      font-family: "Consolas", monospace; font-size: 11px;
+      cursor: pointer;
+    }
+    .focus-bar .focus-mode-btn:first-child { border-radius: 3px 0 0 3px; }
+    .focus-bar .focus-mode-btn:last-child  {
+      border-radius: 0 3px 3px 0; border-right-width: 1px;
+    }
+    .focus-bar .focus-mode-btn:hover { background: rgba(255,255,255,0.09); }
+    .focus-bar .focus-mode-btn.active {
+      background: var(--vs-accent); color: #fff; border-color: var(--vs-accent);
+    }
+    .focus-bar .focus-bc {
+      font-family: "Consolas", monospace; font-size: 10.5px;
+      font-weight: 600;
+      padding: 2px 7px; border-radius: 3px;
+      color: #1e1e1e; background: var(--vs-text-dim);
+    }
+    .focus-bar .focus-bc.host    { background: var(--bc-host); }
+    .focus-bar .focus-bc.capture { background: var(--bc-capture); }
+    .focus-bar .focus-bc.recall  { background: var(--bc-recall); color: #fff; }
+    .focus-bar .focus-bc.shared  { background: var(--bc-shared); color: #fff; }
+    .focus-bar .focus-bc:empty { display: none; }
+    .focus-bar .focus-crumb { color: var(--vs-text-dim); margin: 0 2px; }
+    .focus-bar .focus-bc:empty + .focus-crumb { display: none; }
+    .focus-bar.mode-all .focus-bc,
+    .focus-bar.mode-all .focus-crumb,
+    .focus-bar.mode-all .focus-dot,
+    .focus-bar.mode-all #focusMethodName {
+      display: none;
+    }
+    .focus-bar.mode-all .depth-label,
+    .focus-bar.mode-all .depth-seg {
+      opacity: 0.4; pointer-events: none;
+    }
+    .focus-bar.mode-all .focus-pill {
+      background: var(--vs-text-dim); color: #fff;
+    }
+
     /* ====== GRAPH ====== */
     .graph-pane {
       position: relative;
@@ -977,8 +1045,18 @@
       </div>
 
       <div class="focus-bar" id="focusBar">
-        <span class="focus-pill">FOCUS</span>
+        <div class="focus-nav">
+          <button class="focus-arrow" id="focusBack" title="Back" disabled>‹</button>
+          <button class="focus-arrow" id="focusForward" title="Forward" disabled>›</button>
+        </div>
+        <div class="focus-mode-toggle">
+          <button class="focus-mode-btn active" data-mode="focus">Focus</button>
+          <button class="focus-mode-btn" data-mode="all">All</button>
+        </div>
+        <span class="focus-pill" id="focusPill">FOCUS</span>
         <span class="focus-target">
+          <span id="focusBc" class="focus-bc"></span>
+          <span class="focus-crumb">›</span>
           <span id="focusClassName" class="focus-class">—</span>
           <span class="focus-dot">·</span>
           <span id="focusMethodName" class="focus-method">—</span>
@@ -1716,6 +1794,12 @@ let currentDepth = Infinity;         // 1 | 2 | 3 | Infinity
 let __cmFocusSet    = new Set();     // class ids included by depth BFS
 let __cmFocusExtSet = new Set();     // ext:* ids reachable from focus set
 
+// Slice 4: mode + browser-style history.
+let mode = 'focus';                  // 'focus' | 'all'
+let historyStack = [];               // [{ classId, methodName }, ...]
+let historyIndex = -1;
+const HISTORY_CAP = 50;
+
 function __buildClassAdjacency() {
   const adj = new Map();
   EDGES.forEach(e => {
@@ -1785,6 +1869,7 @@ function applyFocusMask() {
   // Run after applyFilters has set per-element display from chip state.
   // Focus mask is the final override: anything outside the focus subgraph
   // is force-hidden regardless of chip selection.
+  if (mode === 'all') return;          // Slice 4: All mode shows everything.
   if (!currentFocus) return;
   cy.nodes().forEach(n => {
     const id = n.id();
@@ -1851,10 +1936,31 @@ function highlightOutlineMethod(classId, methodName) {
 }
 
 function updateFocusBar() {
-  const cls = document.getElementById('focusClassName');
-  const mth = document.getElementById('focusMethodName');
-  if (cls) cls.textContent = currentFocus ? currentFocus.classId    : '—';
-  if (mth) mth.textContent = currentFocus ? currentFocus.methodName : '—';
+  const bar  = document.getElementById('focusBar');
+  const pill = document.getElementById('focusPill');
+  const bc   = document.getElementById('focusBc');
+  const cls  = document.getElementById('focusClassName');
+  const mth  = document.getElementById('focusMethodName');
+  if (bar) bar.classList.toggle('mode-all', mode === 'all');
+  if (pill) pill.textContent = mode === 'all' ? 'ALL' : 'FOCUS';
+  if (mode === 'all') {
+    if (bc)  { bc.textContent = ''; bc.className = 'focus-bc'; }
+    if (cls) cls.textContent = `whole graph (${CLASSES.length} classes)`;
+    if (mth) mth.textContent = '';
+  } else if (currentFocus) {
+    const c = CLASSES.find(x => x.id === currentFocus.classId);
+    const bcVal = (c && c.bc) || '';
+    if (bc)  { bc.textContent = bcVal; bc.className = 'focus-bc' + (bcVal ? ' ' + bcVal : ''); }
+    if (cls) cls.textContent = currentFocus.classId;
+    if (mth) mth.textContent = currentFocus.methodName;
+  } else {
+    if (bc)  { bc.textContent = ''; bc.className = 'focus-bc'; }
+    if (cls) cls.textContent = '—';
+    if (mth) mth.textContent = '—';
+  }
+  document.querySelectorAll('.focus-mode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
   document.querySelectorAll('.focus-bar .depth-seg').forEach(seg => {
     const d = seg.dataset.depth;
     const val = d === 'inf' ? Infinity : parseInt(d, 10);
@@ -1862,7 +1968,79 @@ function updateFocusBar() {
   });
 }
 
+function layoutAll() {
+  // All mode: lay out everything with the original dagre opts so taxi
+  // routing stays consistent with how the canvas first booted.
+  cy.elements().layout({ ...__cmLayoutOpts, fit: true, padding: 50 }).run();
+}
+
+function pushHistory(classId, methodName) {
+  // Drop forward branch when the user navigates away mid-stack — same as
+  // browser history semantics.
+  historyStack = historyStack.slice(0, historyIndex + 1);
+  const last = historyStack[historyStack.length - 1];
+  if (last && last.classId === classId && last.methodName === methodName) {
+    updateHistoryButtons();
+    return;
+  }
+  historyStack.push({ classId, methodName });
+  if (historyStack.length > HISTORY_CAP) {
+    const drop = historyStack.length - HISTORY_CAP;
+    historyStack = historyStack.slice(drop);
+  }
+  historyIndex = historyStack.length - 1;
+  updateHistoryButtons();
+}
+
+function navigateHistory(delta) {
+  const idx = historyIndex + delta;
+  if (idx < 0 || idx >= historyStack.length) return;
+  historyIndex = idx;
+  const { classId, methodName } = historyStack[idx];
+  if (mode !== 'focus') {
+    mode = 'focus';
+  }
+  applyFocusInternal(classId, methodName);
+  updateHistoryButtons();
+}
+
+function updateHistoryButtons() {
+  const back = document.getElementById('focusBack');
+  const fwd  = document.getElementById('focusForward');
+  if (back) back.disabled = historyIndex <= 0;
+  if (fwd)  fwd.disabled  = historyIndex >= historyStack.length - 1;
+}
+
+function setMode(newMode) {
+  if (newMode !== 'focus' && newMode !== 'all') return;
+  if (mode === newMode) return;
+  mode = newMode;
+  if (mode === 'all') {
+    applyFilters();
+    layoutAll();
+    updateFocusBar();
+  } else if (currentFocus) {
+    applyFocusInternal(currentFocus.classId, currentFocus.methodName);
+  } else if (ENTRIES.length > 0) {
+    // Toggled All → Focus before any focus was set: pick the default entry.
+    const ordered = pickDefaultEntry();
+    if (ordered) setFocus(ordered.classId, ordered.methodName);
+    else updateFocusBar();
+  } else {
+    updateFocusBar();
+  }
+}
+
 function setFocus(classId, methodName) {
+  // Public entry: also pushes onto history and forces back into Focus mode
+  // when called from All. Depth changes / history navigation go through
+  // applyFocusInternal directly so they don't pollute the stack.
+  if (mode !== 'focus') mode = 'focus';
+  pushHistory(classId, methodName);
+  applyFocusInternal(classId, methodName);
+}
+
+function applyFocusInternal(classId, methodName) {
   currentFocus = { classId, methodName };
   __cmFocusSet    = bfsAtDepth(classId, currentDepth);
   __cmFocusExtSet = getExtNodesInScope(__cmFocusSet);
@@ -1877,11 +2055,22 @@ function setFocus(classId, methodName) {
 
 function setDepth(d) {
   currentDepth = d;
-  if (currentFocus) {
-    setFocus(currentFocus.classId, currentFocus.methodName);
+  if (mode === 'focus' && currentFocus) {
+    // Depth is a view-only knob — don't push history.
+    applyFocusInternal(currentFocus.classId, currentFocus.methodName);
   } else {
     updateFocusBar();
   }
+}
+
+function pickDefaultEntry() {
+  if (ENTRIES.length === 0) return null;
+  const ordered = [...ENTRIES].sort((a, b) => {
+    const ca = CLASSES.find(c => c.id === a.classId);
+    const cb = CLASSES.find(c => c.id === b.classId);
+    return ((ca && ca.readingPriority) || 999) - ((cb && cb.readingPriority) || 999);
+  });
+  return ordered[0];
 }
 
 function initFocusMode() {
@@ -1897,15 +2086,19 @@ function initFocusMode() {
       setDepth(d === 'inf' ? Infinity : parseInt(d, 10));
     });
   });
+  // Slice 4: Focus / All toggle + Back / Forward arrows.
+  document.querySelectorAll('.focus-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => setMode(btn.dataset.mode));
+  });
+  const backBtn = document.getElementById('focusBack');
+  const fwdBtn  = document.getElementById('focusForward');
+  if (backBtn) backBtn.addEventListener('click', () => navigateHistory(-1));
+  if (fwdBtn)  fwdBtn.addEventListener('click',  () => navigateHistory(1));
   // Auto-focus the first entry method by readingPriority of its owning class
   // so the canvas is never empty on load. No-op if there are no entries.
-  if (ENTRIES.length > 0) {
-    const ordered = [...ENTRIES].sort((a, b) => {
-      const ca = CLASSES.find(c => c.id === a.classId);
-      const cb = CLASSES.find(c => c.id === b.classId);
-      return ((ca && ca.readingPriority) || 999) - ((cb && cb.readingPriority) || 999);
-    });
-    setFocus(ordered[0].classId, ordered[0].methodName);
+  const def = pickDefaultEntry();
+  if (def) {
+    setFocus(def.classId, def.methodName);
   } else {
     updateFocusBar();
   }

@@ -16,6 +16,15 @@ row at the bottom spread evenly across the canvas. Toggling back to
 Focus mode restores the original dagre bezier edges, so the redesign
 costs nothing when you're zoomed in on one entry.
 
+Focus Mode also drills per-method now. v0.0.8 set focus on a method but
+BFS'd from the owning class, so clicking different methods of the same
+entry class produced identical subgraphs — the user saw the panel
+selection move but the graph never changed. The focus set now uses the
+analyzer's per-method `reachableClassIds` when an entry method is
+selected, so clicking `RecallEndpoints.Search` vs `RecallEndpoints.Ask`
+yields visibly different subgraphs (Ask pulls in `OllamaLlmService` and
+`GroundedAskPromptsV2`; Search doesn't).
+
 Scope: webview only. The extension host, analyzer, and LSP calibrator
 are unchanged. All edits live in `docs/mockups/lumen-backend-v3.html`,
 which is consumed both standalone and by the webview panel.
@@ -51,6 +60,15 @@ which is consumed both standalone and by the webview panel.
   point of the tree. Depth badges (`here` / `+N` / `—`) still render
   but they no longer drive ordering — `highlightOutlineMethod()`
   handles active feedback via a row highlight in place.
+- **`focusSetForCurrent()` — method-rooted BFS.** New helper called
+  from `applyFocusInternal()`. When the active focus carries a
+  `methodName` and an `ENTRIES` row matches `(classId, methodName)`,
+  the focus set is `{classId} ∪ entry.reachableClassIds` instead of
+  the class-rooted depth BFS, so the graph reflects what that specific
+  method calls. `getDepthsFromFocus()` mirrors the restriction: its
+  BFS through class adjacency stops at edges leaving the method's
+  reach, so the outline depth badges line up with the visible graph
+  rather than the broader class-level fan-out.
 
 ## 0.0.8 — 2026-05-22
 

@@ -1857,6 +1857,19 @@ function bfsAtDepth(originClassId, depth) {
   return visited;
 }
 
+// Method-rooted focus: prefer the analyzer's per-method reach when an ENTRIES
+// row matches, so clicking different methods of the same entry class yields
+// different subgraphs. Depth slider is class-scoped: when focused on a method
+// we use the method's transitive reach unconditionally; the slider keeps
+// working when focus is on a class without a method.
+function focusSetForCurrent(classId, methodName, depth) {
+  if (methodName) {
+    const entry = ENTRIES.find(e => e.classId === classId && e.methodName === methodName);
+    if (entry) return new Set([classId, ...entry.reachableClassIds]);
+  }
+  return bfsAtDepth(classId, depth);
+}
+
 function getExtNodesInScope(focusSet) {
   const ext = new Set();
   EDGES.forEach(e => {
@@ -1868,16 +1881,26 @@ function getExtNodesInScope(focusSet) {
 }
 
 // Slice 5: depth-from-focus over the forward class-to-class `calls` graph.
-// Used to re-rank the outline tree so the user's reading order reflects the
-// currently focused call chain instead of the static `readingPriority`.
+// Used to drive the outline's depth badges so the user can tell at a glance
+// which classes are part of the currently focused call chain. When the focus
+// is a method, restrict BFS expansion to the method's transitive reach so the
+// badges line up with the graph's per-method subgraph instead of the broader
+// class-level fan-out.
 function getDepthsFromFocus() {
   if (!currentFocus) return null;
   const adj = __buildClassAdjacency();
   const depths = new Map([[currentFocus.classId, 0]]);
+  let allowed = null;
+  if (currentFocus.methodName) {
+    const entry = ENTRIES.find(e =>
+      e.classId === currentFocus.classId && e.methodName === currentFocus.methodName);
+    if (entry) allowed = new Set([currentFocus.classId, ...entry.reachableClassIds]);
+  }
   const queue = [[currentFocus.classId, 0]];
   while (queue.length > 0) {
     const [cur, dist] = queue.shift();
     for (const next of (adj.get(cur) || [])) {
+      if (allowed && !allowed.has(next)) continue;
       if (!depths.has(next)) {
         depths.set(next, dist + 1);
         queue.push([next, dist + 1]);
@@ -2231,7 +2254,7 @@ function setFocus(classId, methodName) {
 
 function applyFocusInternal(classId, methodName) {
   currentFocus = { classId, methodName };
-  __cmFocusSet    = bfsAtDepth(classId, currentDepth);
+  __cmFocusSet    = focusSetForCurrent(classId, methodName, currentDepth);
   __cmFocusExtSet = getExtNodesInScope(__cmFocusSet);
   // Chip filters first (they still apply within the focus subgraph), then
   // mask, then layout. Order matters: chip mutations call applyFilters which

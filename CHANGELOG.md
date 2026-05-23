@@ -19,11 +19,13 @@ costs nothing when you're zoomed in on one entry.
 Focus Mode also drills per-method now. v0.0.8 set focus on a method but
 BFS'd from the owning class, so clicking different methods of the same
 entry class produced identical subgraphs — the user saw the panel
-selection move but the graph never changed. The focus set now uses the
-analyzer's per-method `reachableClassIds` when an entry method is
-selected, so clicking `RecallEndpoints.Search` vs `RecallEndpoints.Ask`
-yields visibly different subgraphs (Ask pulls in `OllamaLlmService` and
-`GroundedAskPromptsV2`; Search doesn't).
+selection move but the graph never changed. Two layers had to change:
+the webview now drives the focus set from each entry's
+`reachableClassIds`, and the adapter now computes those per method
+(seeded from the method's `calls`) instead of giving every method on
+an entry class the same class-level BFS. Clicking
+`RecallEndpoints.Search` vs `RecallEndpoints.Ask` now yields visibly
+different subgraphs.
 
 Scope: webview only. The extension host, analyzer, and LSP calibrator
 are unchanged. All edits live in `docs/mockups/lumen-backend-v3.html`,
@@ -89,6 +91,17 @@ which is consumed both standalone and by the webview panel.
   helper deliberately skips `focusNodeOnGraph()` — `layoutFocus()` has
   already fit the subgraph to the viewport, and animating to center on
   a single node would override that.
+- **`computeFocusModeMetadata()` builds per-method reachable sets.**
+  Previously every method on the same entry class shared one
+  class-level BFS result, so clicking different methods produced
+  identical subgraphs on real analyzer output (the mockup fixture
+  hand-wrote divergent `reachableClassIds`, masking this on synthetic
+  data). The reach for each entry method is now seeded from that
+  method's `calls` (LLM-attributed targets, narrowed to valid class
+  ids) and expanded through the shared class adjacency. Methods with
+  no per-method `calls` fall back to the class-level reach, so
+  analyzers that skip per-method attribution still get a sensible
+  default.
 
 ## 0.0.8 — 2026-05-22
 

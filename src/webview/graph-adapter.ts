@@ -333,15 +333,24 @@ export function computeFocusModeMetadata(
   }
 
   const entries: MockupEntryMethod[] = [];
-  const reachableCache = new Map<string, string[]>();
   for (const c of classes) {
     if (!c.isEntry) continue;
-    let reachable = reachableCache.get(c.id);
-    if (!reachable) {
-      reachable = bfsReachable(c.id, adjacency);
-      reachableCache.set(c.id, reachable);
-    }
     for (const m of c.methods) {
+      // Per-method BFS: seed with the method's own `calls` (LLM-reported
+      // class names, narrowed to valid class ids) and expand through the
+      // shared class-level adjacency. Falling back to the class-level
+      // reach when a method has no `calls` entries keeps a sensible
+      // default for analyzer outputs that skip per-method attribution.
+      const directSeeds: string[] = [];
+      for (const target of m.calls ?? []) {
+        const className = target.split('.')[0];
+        if (className && className !== c.id && classIds.has(className)) {
+          directSeeds.push(className);
+        }
+      }
+      const reachable = directSeeds.length > 0
+        ? bfsReachableFromSeeds(directSeeds, adjacency, c.id)
+        : bfsReachable(c.id, adjacency);
       entries.push({
         classId: c.id,
         methodName: m.name,
@@ -381,6 +390,39 @@ function bfsReachable(
   const reachable: string[] = [];
   const visited = new Set<string>([start]);
   const queue: string[] = [start];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    const neighbors = adjacency.get(cur);
+    if (!neighbors) continue;
+    for (const n of neighbors) {
+      if (visited.has(n)) continue;
+      visited.add(n);
+      reachable.push(n);
+      queue.push(n);
+    }
+  }
+  return reachable;
+}
+
+/**
+ * Multi-source BFS used by per-method focus reach. `owner` is excluded from
+ * the result (the owning class is added back as part of the focus set on the
+ * webview side via `{classId} ∪ reachableClassIds`).
+ */
+function bfsReachableFromSeeds(
+  seeds: string[],
+  adjacency: Map<string, string[]>,
+  owner: string,
+): string[] {
+  const reachable: string[] = [];
+  const visited = new Set<string>([owner]);
+  const queue: string[] = [];
+  for (const s of seeds) {
+    if (visited.has(s)) continue;
+    visited.add(s);
+    reachable.push(s);
+    queue.push(s);
+  }
   while (queue.length > 0) {
     const cur = queue.shift()!;
     const neighbors = adjacency.get(cur);

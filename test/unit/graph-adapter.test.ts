@@ -412,9 +412,42 @@ describe('focus-mode metadata (Slice 1)', () => {
     expect(out.classes.find(c => c.id === 'NonEntry')!.isShared).toBe(true);
   });
 
-  it('reuses BFS result across all methods of the same entry class', () => {
-    // Sanity: a class with 3 methods produces 3 entries, all sharing the
-    // same reachable set (reference equality).
+  it('produces per-method reachable sets seeded from method.calls', () => {
+    // Two methods on an entry class with distinct `calls` should each get
+    // their own reachable set, narrowed to what that method actually reaches
+    // (plus transitive BFS through class-level adjacency).
+    const g: CodeMapGraph = {
+      rootRequest: '',
+      scope: '',
+      nodes: {
+        E: mkNode('E', {
+          isEntry: true,
+          methods: [
+            { name: 'a', signature: '()', line: 1, risks: [], calls: ['T1'] },
+            { name: 'b', signature: '()', line: 2, risks: [], calls: ['T2'] },
+          ],
+        }),
+        T1: mkNode('T1'),
+        T2: mkNode('T2'),
+      },
+      edges: [
+        { from: 'E', to: 'T1', kind: 'calls', verified: true },
+        { from: 'E', to: 'T2', kind: 'calls', verified: true },
+      ],
+      externalDeps: [],
+    };
+    const out = adaptGraphForMockup(g);
+    expect(out.entries).toHaveLength(2);
+    const reachA = out.entries[0]!.reachableClassIds;
+    const reachB = out.entries[1]!.reachableClassIds;
+    expect(reachA).toEqual(['T1']);
+    expect(reachB).toEqual(['T2']);
+  });
+
+  it('falls back to class-level reach when a method has no calls', () => {
+    // Methods with empty/missing `calls` use the class-level adjacency BFS
+    // so analyzer outputs that skip per-method attribution still get a
+    // sensible focus subgraph.
     const g: CodeMapGraph = {
       rootRequest: '',
       scope: '',
@@ -424,7 +457,6 @@ describe('focus-mode metadata (Slice 1)', () => {
           methods: [
             { name: 'a', signature: '()', line: 1, risks: [] },
             { name: 'b', signature: '()', line: 2, risks: [] },
-            { name: 'c', signature: '()', line: 3, risks: [] },
           ],
         }),
         T: mkNode('T'),
@@ -433,8 +465,8 @@ describe('focus-mode metadata (Slice 1)', () => {
       externalDeps: [],
     };
     const out = adaptGraphForMockup(g);
-    expect(out.entries).toHaveLength(3);
-    expect(out.entries[0]!.reachableClassIds).toBe(out.entries[1]!.reachableClassIds);
-    expect(out.entries[1]!.reachableClassIds).toBe(out.entries[2]!.reachableClassIds);
+    expect(out.entries).toHaveLength(2);
+    expect(out.entries[0]!.reachableClassIds).toEqual(['T']);
+    expect(out.entries[1]!.reachableClassIds).toEqual(['T']);
   });
 });

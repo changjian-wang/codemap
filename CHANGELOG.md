@@ -4,6 +4,47 @@ All notable changes to this extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+All Mode now reads as horizontal bc swimlanes. Before this change, All
+mode dumped every class into one dagre LR slab where bc was encoded only
+by node color — useful for "show me everything" but not for "where does
+the capture pipeline live vs recall". The new layout post-processes
+dagre's positions so each bc gets its own horizontal band (host on top,
+then capture / recall, then shared), and `ext:*` nodes drop to a single
+row at the bottom spread evenly across the canvas. Toggling back to
+Focus mode restores the original dagre bezier edges, so the redesign
+costs nothing when you're zoomed in on one entry.
+
+Scope: webview only. The extension host, analyzer, and LSP calibrator
+are unchanged. All edits live in `docs/mockups/lumen-backend-v3.html`,
+which is consumed both standalone and by the webview panel.
+
+### Added
+- **`docs/mockups/lumen-backend-v3.html` — `applySwimlanes()`.** After
+  dagre lays out the full graph, classes are bucketed into the four
+  fixed bc slots (`host` / `capture` / `recall` / `shared`) used by
+  the data layer's bc remap, and re-stacked at a fixed pitch within
+  each band. Band heights are computed independently per band so a
+  dense band doesn't force everyone into stretched spacing. `ext:*`
+  nodes skip banding and get pinned to a single horizontal row below
+  the last band, spread evenly across the core layout's X span.
+- **`fitWithTopReserve()` helper.** Manual zoom + pan replacing
+  `cy.fit()` for All mode — reserves 110px at the top so the host
+  band's topmost node (typically `Program`) clears the floating
+  Focus / All / Depth toolbar overlay.
+- **Edge taxi routing.** While banded, edges switch to cytoscape's
+  `taxi` curve style with horizontal direction. Dagre's per-edge
+  control points were captured pre-translation and produce visually
+  broken curves once nodes are translated, so taxi recomputes
+  L-shaped paths at render time.
+
+### Changed
+- **`setMode()` — exit hook for swimlanes.** Toggling away from All
+  mode calls `clearSwimlanes()` to remove the taxi edge style, so
+  Focus mode reverts to the original `unbundled-bezier` curves that
+  use dagre's control points.
+
 ## 0.0.8 — 2026-05-22
 
 Focus Mode redesign. Closes #2. The webview's READING ORDER panel was

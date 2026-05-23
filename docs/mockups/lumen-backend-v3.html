@@ -2016,9 +2016,146 @@ function updateFocusBar() {
 }
 
 function layoutAll() {
-  // All mode: lay out everything with the original dagre opts so taxi
-  // routing stays consistent with how the canvas first booted.
-  cy.elements().layout({ ...__cmLayoutOpts, fit: true, padding: 50 }).run();
+  // All mode: run dagre LR for rank ordering, then post-process Y so the
+  // canvas reads as horizontal bc swimlanes (host on top, capture/recall in
+  // the middle, shared + ext nodes at the bottom). Edges are switched to
+  // cytoscape's auto taxi routing because the dagre control points captured
+  // pre-translation no longer match the post-translation source/target line.
+  cy.elements().layout({ ...__cmLayoutOpts, fit: false, padding: 50 }).run();
+  applySwimlanes();
+  const visible = cy.elements().filter(el => el.style('display') !== 'none');
+  if (visible.length > 0) fitWithTopReserve(visible, 110, 30);
+}
+
+// cy.fit centers the bbox in the viewport which puts the host band's
+// topmost node behind the floating focus bar overlay. Manual fit reserves
+// vertical space at the top so the layout's first row clears the toolbar.
+function fitWithTopReserve(visible, topReserve, padding) {
+  const bb = visible.boundingBox();
+  if (bb.w <= 0 || bb.h <= 0) return;
+  const container = cy.container();
+  const cw = container.clientWidth;
+  const ch = container.clientHeight;
+  const usableW = Math.max(100, cw - 2 * padding);
+  const usableH = Math.max(100, ch - topReserve - padding);
+  const zoom = Math.min(usableW / bb.w, usableH / bb.h, 1);
+  cy.zoom(zoom);
+  cy.pan({
+    x: padding - bb.x1 * zoom + (usableW - bb.w * zoom) / 2,
+    y: topReserve - bb.y1 * zoom,
+  });
+}
+
+// ---------- Swimlanes ----------
+// Bc-banded Y layout for All mode. Slots match the data layer's 4 fixed bc
+// remap (host/capture/recall/shared); unknown bcs fall into the shared band
+// so every class has a home. Each band gets its own height (proportional to
+// its node count) so a dense band like shared doesn't drag the others into
+// stretched layouts. ext:* nodes skip the banding step and get pinned to a
+// single horizontal row below the last band — they're always the sinks.
+const SWIMLANE_ORDER = ['host', 'capture', 'recall', 'shared'];
+const SWIMLANE_GAP = 60;
+const SWIMLANE_NODE_PITCH = 70;
+const SWIMLANE_MIN_SLOT_H = 140;
+const SWIMLANE_EXT_GAP = 80;
+
+function applySwimlanes() {
+  const visible = cy.nodes().filter(n => n.style('display') !== 'none');
+  if (visible.length === 0) return;
+
+  const coreNodes = visible.filter(n => !n.hasClass('ext'));
+  const extNodes = visible.filter(n => n.hasClass('ext'));
+  if (coreNodes.length === 0) return;
+
+  const bandToNodes = new Map(SWIMLANE_ORDER.map(slot => [slot, []]));
+  coreNodes.forEach(n => {
+    let bc = n.data('bc') || 'shared';
+    if (!bandToNodes.has(bc)) bc = 'shared';
+    bandToNodes.get(bc).push(n);
+  });
+
+  const activeSlots = SWIMLANE_ORDER.filter(s => bandToNodes.get(s).length > 0);
+  if (activeSlots.length === 0) return;
+
+  // Per-band heights — densest band no longer dictates everyone.
+  const bandHeights = new Map();
+  for (const slot of activeSlots) {
+    const n = bandToNodes.get(slot).length;
+    bandHeights.set(slot, Math.max(SWIMLANE_MIN_SLOT_H, n * SWIMLANE_NODE_PITCH));
+  }
+
+  let cursorY = 0;
+  const bandCenters = new Map();
+  for (const slot of activeSlots) {
+    const h = bandHeights.get(slot);
+    bandCenters.set(slot, cursorY + h / 2);
+    cursorY += h + SWIMLANE_GAP;
+  }
+
+  // For each band: sort by current Y (preserves dagre's vertical hint
+  // within the rank), then re-stack at a fixed pitch centered on the band.
+  for (const slot of activeSlots) {
+    const bandNodes = bandToNodes.get(slot).slice();
+    bandNodes.sort((a, b) => a.position('y') - b.position('y'));
+    const center = bandCenters.get(slot);
+    const n = bandNodes.length;
+    if (n === 1) {
+      bandNodes[0].position({ x: bandNodes[0].position('x'), y: center });
+      continue;
+    }
+    const innerSpan = SWIMLANE_NODE_PITCH * (n - 1);
+    const top = center - innerSpan / 2;
+    bandNodes.forEach((node, i) => {
+      node.position({ x: node.position('x'), y: top + i * SWIMLANE_NODE_PITCH });
+    });
+  }
+
+  // ext:* nodes get a single horizontal row below the last band, spread
+  // evenly across the core layout's X span. Dagre tends to pile all ext
+  // sinks at the same rightmost rank with tightly clustered X positions,
+  // which makes their labels overlap once they're forced onto one Y line.
+  if (extNodes.length > 0) {
+    const lastSlot = activeSlots[activeSlots.length - 1];
+    const lastCenter = bandCenters.get(lastSlot);
+    const lastH = bandHeights.get(lastSlot);
+    const extY = lastCenter + lastH / 2 + SWIMLANE_EXT_GAP;
+
+    const coreBb = coreNodes.boundingBox();
+    const ordered = extNodes.toArray().slice().sort((a, b) => a.position('x') - b.position('x'));
+    const n = ordered.length;
+    if (n === 1) {
+      ordered[0].position({ x: (coreBb.x1 + coreBb.x2) / 2, y: extY });
+    } else {
+      const step = (coreBb.x2 - coreBb.x1) / (n - 1);
+      ordered.forEach((node, i) => {
+        node.position({ x: coreBb.x1 + i * step, y: extY });
+      });
+    }
+  }
+
+  // Swap edges to auto taxi routing while we're banded. Dagre control
+  // points reference the pre-translation line, so unbundled-bezier with
+  // those points renders edges veering through empty space; taxi recomputes
+  // L-shapes at render time and respects the post-translation positions.
+  cy.edges().forEach(e => {
+    e.style({
+      'curve-style': 'taxi',
+      'taxi-direction': 'horizontal',
+      'taxi-turn': 30,
+      'taxi-turn-min-distance': 5,
+    });
+  });
+}
+
+function clearSwimlanes() {
+  // Drop the element-level taxi overrides so the stylesheet's bezier +
+  // dagre-control-points selectors win again for Focus-mode layouts.
+  cy.edges().forEach(e => {
+    e.removeStyle('curve-style');
+    e.removeStyle('taxi-direction');
+    e.removeStyle('taxi-turn');
+    e.removeStyle('taxi-turn-min-distance');
+  });
 }
 
 function pushHistory(classId, methodName) {
@@ -2061,7 +2198,9 @@ function updateHistoryButtons() {
 function setMode(newMode) {
   if (newMode !== 'focus' && newMode !== 'all') return;
   if (mode === newMode) return;
+  const previousMode = mode;
   mode = newMode;
+  if (previousMode === 'all') clearSwimlanes();
   if (mode === 'all') {
     applyFilters();
     layoutAll();
@@ -3076,6 +3215,7 @@ function __cmApplyNodeFold(c, collapsed) {
 }
 function __cmRerunLayout() {
   cy.layout(__cmLayoutOpts).run();
+  if (mode === 'all') applySwimlanes();
 }
 window.__codemapCollapse = {
   toggleAll() {

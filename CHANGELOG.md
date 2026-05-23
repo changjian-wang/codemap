@@ -70,6 +70,26 @@ which is consumed both standalone and by the webview panel.
   reach, so the outline depth badges line up with the visible graph
   rather than the broader class-level fan-out.
 
+### Fixed
+- **`layoutFocus()` no longer pins shared classes below the chain.**
+  `positionSharedRow()` was a holdover from the All mode layout — in
+  focus mode it forced any shared callee (e.g. `EventStore`, reached
+  from both `IngestUrl` and `List`) to a Y position 90px below the
+  rest of the subgraph. For sparse subgraphs like `CaptureEndpoints.
+  List` (one shared callee, two ext deps), the result was a near-empty
+  canvas with the only callee floating at the bottom. Removed; dagre
+  LR handles the placement.
+- **Right details panel syncs to the focused class.** `selectClass()`
+  was the only path that re-rendered `#cardBody`, so clicking an
+  outline method left the panel stuck on whatever was selected first
+  (typically the default-entry `Program` on initial load). Extracted
+  the panel update into `syncDetailsTo(id)` and called it from
+  `applyFocusInternal()` after `layoutFocus()` so the panel always
+  reflects the class owning the currently focused method. The new
+  helper deliberately skips `focusNodeOnGraph()` — `layoutFocus()` has
+  already fit the subgraph to the viewport, and animating to center on
+  a single node would override that.
+
 ## 0.0.8 — 2026-05-22
 
 Focus Mode redesign. Closes #2. The webview's READING ORDER panel was

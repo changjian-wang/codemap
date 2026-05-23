@@ -1958,10 +1958,16 @@ function layoutFocus() {
   // Re-run dagre on whatever is currently visible so the subgraph fills the
   // canvas. We reuse __cmLayoutOpts unchanged — small subgraphs render fine
   // with the existing dagre control-point routing.
+  //
+  // positionSharedRow() is intentionally NOT called here. It was designed to
+  // pin cross-entry shared classes below the main chain in All mode, but in
+  // focus mode the subgraph already isolates a single chain — pinning a
+  // shared node 90px below the rest stretches sparse subgraphs (e.g.
+  // `CaptureEndpoints.List` reaches only `EventStore`) into a near-empty
+  // canvas with the callee floating at the bottom.
   const visible = cy.elements().filter(el => el.style('display') !== 'none');
   if (visible.length === 0) return;
   visible.layout({ ...__cmLayoutOpts, fit: true, padding: 50 }).run();
-  positionSharedRow();
 }
 
 function positionSharedRow() {
@@ -2265,6 +2271,12 @@ function applyFocusInternal(classId, methodName) {
   // Slice 5: re-render outline so the depth badges + sort reflect the new
   // focus. highlightOutlineMethod() runs against the fresh DOM.
   renderOutline();
+  // Right details panel was stuck on whatever class the user last clicked
+  // directly (or the default entry on first load). Mirror the focus onto it
+  // so the panel shows metadata for the class owning the focused method.
+  // syncDetailsTo also wipes outline-class.active, so highlightOutlineMethod
+  // runs LAST to put the per-method .active row back.
+  syncDetailsTo(classId);
   highlightOutlineMethod(classId, methodName);
 }
 
@@ -2497,25 +2509,33 @@ function focusNodeOnGraph(node) {
     easing: 'ease-out-quad',
   });
 }
-function selectClass(id) {
+// Right-panel + selection sync without camera movement. Shared between
+// selectClass (which adds a camera animate after) and applyFocusInternal
+// (which must NOT animate the camera — layoutFocus has already fit the
+// subgraph to the viewport and animating to a single node would override
+// the chain view the user just asked for).
+function syncDetailsTo(id) {
   __cmSelectedExt = null;
   cy.$('node:selected').unselect();
   const node = cy.getElementById(id);
-  if (node) node.select();
+  if (node && !node.empty()) node.select();
   const c = CLASSES.find(x => x.id === id);
   if (!c) return;
 
-  // Mark the matching entry-class header active in the new tree outline.
-  // Non-entry classes don't appear in the outline (Slice 2) so no active row
-  // is set in that case.
-  document.querySelectorAll('.outline-class, .outline-item').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.outline-class.active, .outline-item.active')
+    .forEach(el => el.classList.remove('active'));
   const ol = document.querySelector(`.outline-class[data-class-id="${CSS.escape(id)}"]`);
   if (ol) ol.classList.add('active');
 
   highlightEdges(id);
   renderCard(c);
   updateRelatedCount(c);
-  focusNodeOnGraph(node);
+}
+
+function selectClass(id) {
+  syncDetailsTo(id);
+  const node = cy.getElementById(id);
+  if (node && !node.empty()) focusNodeOnGraph(node);
 }
 
 // Mirror of selectClass for external-dep nodes. The graph and outline both

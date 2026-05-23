@@ -2319,11 +2319,10 @@ function renderOutline() {
   });
 
   // Iterate classes in reading-priority order so the tree mirrors the
-  // sequential reading path.
-  // Slice 5: when a focus is active, re-rank entries by their forward
-  // call-depth from the focus class (depth 0 = focus itself, +1 each hop
-  // along `calls` edges, Infinity if unreachable). Falls back to global
-  // readingPriority in All mode or when no focus is set.
+  // sequential reading path. Depth badges (computed below) are shown but
+  // are no longer used for sorting — re-ordering the panel on every click
+  // makes the clicked entry "jump to top", which is jarring. The active
+  // entry gets a highlight via highlightOutlineMethod() instead.
   const depths = (mode === 'focus' && currentFocus) ? getDepthsFromFocus() : null;
   const depthOf = (id) => {
     if (!depths) return null;
@@ -2333,14 +2332,7 @@ function renderOutline() {
   const entryClasses = [...byClass.keys()]
     .map(id => CLASSES.find(c => c.id === id))
     .filter(Boolean)
-    .sort((a, b) => {
-      if (depths) {
-        const da = depthOf(a.id);
-        const db = depthOf(b.id);
-        if (da !== db) return da - db;
-      }
-      return (a.readingPriority || 999) - (b.readingPriority || 999);
-    });
+    .sort((a, b) => (a.readingPriority || 999) - (b.readingPriority || 999));
 
   entryClasses.forEach(c => {
     const methods = byClass.get(c.id) || [];

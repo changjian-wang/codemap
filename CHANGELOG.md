@@ -44,6 +44,13 @@ which is consumed both standalone and by the webview panel.
   mode calls `clearSwimlanes()` to remove the taxi edge style, so
   Focus mode reverts to the original `unbundled-bezier` curves that
   use dagre's control points.
+- **`renderOutline()` — stable order, no depth-based re-rank.** v0.0.8
+  re-sorted entry classes by their forward call-depth from the focus
+  class on every click, which made the clicked entry jump to the top
+  of the panel and disoriented the reader who lost the visual anchor
+  point of the tree. Depth badges (`here` / `+N` / `—`) still render
+  but they no longer drive ordering — `highlightOutlineMethod()`
+  handles active feedback via a row highlight in place.
 
 ## 0.0.8 — 2026-05-22
 

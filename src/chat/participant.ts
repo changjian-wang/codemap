@@ -194,6 +194,32 @@ async function handleGenerate(
           }
           response.progress(`Analyzing... ${info.doneCount}/${info.total}`);
         },
+        onPartial: info => {
+          // Progressive first paint: render the webview as soon as the
+          // top-N centrality files have been aggregated so the user can
+          // see the entry points + their immediate neighborhood while the
+          // tail keeps loading. The orchestrator only fires this when the
+          // pool is big enough to justify a second render (~20+ files).
+          const partialStats = {
+            verifiedCount: 0,
+            partialCount: 0,
+            unverifiedCount: 0,
+            filesAnalyzed: info.analyzedCount,
+            filesFailed: 0,
+            filesFromCache: 0,
+            durationMs: 0,
+          };
+          response.markdown(
+            `\n_⏳ Initial paint with ${info.analyzedCount}/${info.totalCount} files. Continuing in background..._\n`,
+          );
+          void showGraph(context, info.graph, chatTurns, partialStats, {
+            modelLabel,
+            repoName: workspaceFolder.name,
+            scope: scopePrefix,
+            fileCountText: `${info.analyzedCount} of ${info.totalCount} files analyzed (loading…)`,
+            scopePill: scopePrefix ? '📦 SCOPED' : '📦 WORKSPACE',
+          }, workspaceFolder.uri);
+        },
         onWarning: msg => response.markdown(`\n- ⚠ ${msg}`),
       },
       token,

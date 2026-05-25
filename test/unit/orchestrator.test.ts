@@ -176,6 +176,78 @@ describe('runOrchestrator', () => {
     expect(onFileDone.mock.calls.some(c => c[0].error?.message === 'boom')).toBe(true);
   });
 
+  it('emits onPartial after the core batch when progressive rendering is wired', async () => {
+    // 3 files total + progressiveCoreSize=1 → core=[1], rest=[2], so we
+    // expect a single onPartial call carrying a partial graph and the
+    // final result still containing the full graph.
+    const reader = fakeFileReader({
+      'src/Program.cs': 'class Prog {}',
+      'src/AlphaEndpoints.cs': 'class Alpha {}',
+      'src/BravoEndpoints.cs': 'class Bravo {}',
+    });
+    const llm = fakeLlm({
+      'src/Program.cs': metaBlock({ id: 'Prog' }) + '\n' + SUMMARY,
+      'src/AlphaEndpoints.cs': metaBlock({ id: 'Alpha' }) + '\n' + SUMMARY,
+      'src/BravoEndpoints.cs': metaBlock({ id: 'Bravo' }) + '\n' + SUMMARY,
+    });
+    const symbols = fakeSymbols({
+      'src/Program.cs': [sym('Prog', 'src/Program.cs', 1, 10)],
+      'src/AlphaEndpoints.cs': [sym('Alpha', 'src/AlphaEndpoints.cs', 1, 10)],
+      'src/BravoEndpoints.cs': [sym('Bravo', 'src/BravoEndpoints.cs', 1, 10)],
+    });
+
+    const onPartial = vi.fn();
+    const out = await runOrchestrator(
+      { reader, symbols, llm },
+      {
+        rootRequest: '',
+        scope: 'workspace',
+        progressiveCoreSize: 1,
+        scan: { maxFiles: 5 },
+      },
+      { onPartial },
+      NEVER_CANCELLED,
+    );
+
+    expect(onPartial).toHaveBeenCalledTimes(1);
+    const partial = onPartial.mock.calls[0]![0] as {
+      graph: { nodes: Record<string, unknown> };
+      analyzedCount: number;
+      totalCount: number;
+    };
+    expect(partial.analyzedCount).toBe(1);
+    expect(partial.totalCount).toBe(3);
+    expect(Object.keys(partial.graph.nodes).length).toBe(1);
+    // The final result is the FULL aggregate, not the partial.
+    expect(Object.keys(out.graph.nodes).length).toBe(3);
+    expect(out.stats.filesAnalyzed).toBe(3);
+  });
+
+  it('skips onPartial when the pool is at or under progressiveCoreSize', async () => {
+    // Pool size 2 with default progressiveCoreSize=20 → no partial.
+    const reader = fakeFileReader({
+      'src/Program.cs': 'class Prog {}',
+      'src/AlphaEndpoints.cs': 'class Alpha {}',
+    });
+    const llm = fakeLlm({
+      'src/Program.cs': metaBlock({ id: 'Prog' }) + '\n' + SUMMARY,
+      'src/AlphaEndpoints.cs': metaBlock({ id: 'Alpha' }) + '\n' + SUMMARY,
+    });
+    const symbols = fakeSymbols({
+      'src/Program.cs': [sym('Prog', 'src/Program.cs', 1, 10)],
+      'src/AlphaEndpoints.cs': [sym('Alpha', 'src/AlphaEndpoints.cs', 1, 10)],
+    });
+
+    const onPartial = vi.fn();
+    await runOrchestrator(
+      { reader, symbols, llm },
+      { rootRequest: '', scope: 'workspace' },
+      { onPartial },
+      NEVER_CANCELLED,
+    );
+    expect(onPartial).not.toHaveBeenCalled();
+  });
+
   it('skips LSP warmup when every skeleton file is a cache hit', async () => {
     // ---- Arrange ----
     // Pre-populate the cache for both skeleton files. The orchestrator's

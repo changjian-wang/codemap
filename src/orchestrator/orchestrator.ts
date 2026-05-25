@@ -54,6 +54,18 @@ export interface OrchestratorOptions {
    * cold C# Dev Kit start. Bump higher on very large solutions.
    */
   lspWarmupTimeoutMs?: number;
+  /**
+   * Progressive rendering: when {@link OrchestratorEvents.onPartial} is
+   * wired, the orchestrator analyzes the top-`progressiveCoreSize` files
+   * by centrality rank first, aggregates a partial graph, fires
+   * `onPartial` so the chat participant can paint an initial graph, then
+   * resumes with the rest of the skeleton.
+   *
+   * Default 20. When the total skeleton is small enough that splitting
+   * adds more friction than value (rest <= 5), the orchestrator skips
+   * the partial pass and runs as a single batch.
+   */
+  progressiveCoreSize?: number;
 }
 
 export interface OrchestratorEvents {
@@ -61,6 +73,13 @@ export interface OrchestratorEvents {
   onSkeleton?: (info: { entryPoints: string[]; skeleton: string[]; overflow: string[] }) => void;
   onFileDone?: (info: { file: string; result?: AnalyzeResult; error?: Error; doneCount: number; total: number; cached?: boolean }) => void;
   onWarning?: (msg: string) => void;
+  /**
+   * Fired once between the core batch and the rest batch when progressive
+   * rendering is active. The partial graph already passes through the
+   * aggregator, so consumers can hand it straight to the webview as if
+   * it were a final result.
+   */
+  onPartial?: (info: { graph: CodeMapGraph; analyzedCount: number; totalCount: number }) => void;
 }
 
 export interface OrchestratorResult {
@@ -273,9 +292,24 @@ export async function runOrchestrator(
   let filesFromCache = 0;
   const total = classified.length;
 
-  const poolResults = await runParallel(
-    classified,
-    async ({ file, bucket }) => {
+  // Progressive rendering split: run the top-N centrality files first,
+  // aggregate, fire `onPartial` so the chat participant can paint an
+  // initial graph, then resume with the remainder. The split is skipped
+  // when the tail is trivially small (rest <= 5) or the consumer didn't
+  // subscribe to `onPartial`, so we keep the existing single-batch
+  // behavior for callers that don't care.
+  const progressiveCoreSize = options.progressiveCoreSize ?? 20;
+  const wantsProgressive =
+    events.onPartial !== undefined &&
+    classified.length > progressiveCoreSize;
+  const coreItems = wantsProgressive
+    ? classified.slice(0, progressiveCoreSize)
+    : classified;
+  const restItems = wantsProgressive
+    ? classified.slice(progressiveCoreSize)
+    : [];
+
+  const analyzerWorker = async ({ file, bucket }: { file: string; bucket: string }) => {
       if (token.isCancellationRequested) throw new CancelledError();
       const pre = preCheck.get(file);
       const fileText = pre?.text ?? (await deps.reader.readText(file));
@@ -334,17 +368,50 @@ export async function runOrchestrator(
       doneCount++;
       events.onFileDone?.({ file, result, doneCount, total, cached: false });
       return result;
-    },
-    concurrency,
-    {
-      adaptiveBackoff: { failureThreshold: 3, cooldownMs: 1500 },
-      onBackoff: (n) =>
-        events.onWarning?.(
-          `${n} consecutive analyzer failures — slowing down remaining requests to avoid rate-limit cascade.`,
-        ),
-    },
-  );
+    };
+
+  const poolOpts = {
+    adaptiveBackoff: { failureThreshold: 3, cooldownMs: 1500 },
+    onBackoff: (n: number) =>
+      events.onWarning?.(
+        `${n} consecutive analyzer failures — slowing down remaining requests to avoid rate-limit cascade.`,
+      ),
+  };
+
+  const corePoolResults = await runParallel(coreItems, analyzerWorker, concurrency, poolOpts);
   if (token.isCancellationRequested) throw new CancelledError();
+
+  // Partial aggregate + emit. The aggregator is stateless, so calling it
+  // again on the full set later is cheap and correct. We only emit when
+  // the consumer is wired up; otherwise we skip the work entirely.
+  if (wantsProgressive) {
+    const coreAnalyses: AnalyzeResult[] = [];
+    for (const r of corePoolResults) if (r.value) coreAnalyses.push(r.value);
+    if (coreAnalyses.length > 0) {
+      events.onStep?.(
+        `Building initial paint from ${coreAnalyses.length} core file(s)`,
+      );
+      const partialAgg = await aggregate({
+        rootRequest: options.rootRequest,
+        scope: options.scope,
+        analyses: coreAnalyses,
+        symbols: deps.symbols,
+      });
+      events.onPartial?.({
+        graph: partialAgg.graph,
+        analyzedCount: coreAnalyses.length,
+        totalCount: total,
+      });
+    }
+  }
+  if (token.isCancellationRequested) throw new CancelledError();
+
+  const restPoolResults = restItems.length > 0
+    ? await runParallel(restItems, analyzerWorker, concurrency, poolOpts)
+    : [];
+  if (token.isCancellationRequested) throw new CancelledError();
+
+  const poolResults = [...corePoolResults, ...restPoolResults];
 
   const analyses: AnalyzeResult[] = [];
   let filesFailed = 0;

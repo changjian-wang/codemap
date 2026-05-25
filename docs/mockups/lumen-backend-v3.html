@@ -1998,6 +1998,18 @@ function highlightOutlineMethod(classId, methodName) {
   document.querySelectorAll('.outline-method.active, .outline-class.active')
     .forEach(el => el.classList.remove('active'));
   if (!classId) return;
+  if (!methodName) {
+    // Class-level focus (clicking entry-class header): activate the header
+    // itself so the user sees which endpoint is open. No method row is
+    // selected because the subgraph spans all methods of this class.
+    const header = document.querySelector(
+      `.outline-class[data-class-id="${CSS.escape(classId)}"]`);
+    if (header) {
+      header.classList.add('active');
+      header.scrollIntoView({ block: 'nearest' });
+    }
+    return;
+  }
   const sel = `.outline-method[data-class-id="${CSS.escape(classId)}"][data-method="${CSS.escape(methodName)}"]`;
   const row = document.querySelector(sel);
   if (!row) return;
@@ -2017,6 +2029,14 @@ function updateFocusBar() {
   const bc   = document.getElementById('focusBc');
   const cls  = document.getElementById('focusClassName');
   const mth  = document.getElementById('focusMethodName');
+  // Reset method-slot visibility every call so a prior class-level focus
+  // doesn't leave the dot/method hidden when we later switch back to a
+  // method focus or to All mode.
+  if (mth) mth.style.display = '';
+  const _dot = mth && mth.previousElementSibling;
+  if (_dot && _dot.classList && _dot.classList.contains('focus-dot')) {
+    _dot.style.display = '';
+  }
   if (bar) bar.classList.toggle('mode-all', mode === 'all');
   if (pill) pill.textContent = mode === 'all' ? 'ALL' : 'FOCUS';
   if (mode === 'all') {
@@ -2028,7 +2048,17 @@ function updateFocusBar() {
     const bcVal = (c && c.bc) || '';
     if (bc)  { bc.textContent = bcVal; bc.className = 'focus-bc' + (bcVal ? ' ' + bcVal : ''); }
     if (cls) cls.textContent = currentFocus.classId;
-    if (mth) mth.textContent = currentFocus.methodName;
+    // Class-level focus (no methodName) hides the method slot + leading dot
+    // so the breadcrumb doesn't read `Foo ·` with a dangling separator.
+    const hasMethod = !!currentFocus.methodName;
+    if (mth) {
+      mth.textContent = hasMethod ? currentFocus.methodName : '';
+      mth.style.display = hasMethod ? '' : 'none';
+    }
+    const dot = mth && mth.previousElementSibling;
+    if (dot && dot.classList.contains('focus-dot')) {
+      dot.style.display = hasMethod ? '' : 'none';
+    }
   } else {
     if (bc)  { bc.textContent = ''; bc.className = 'focus-bc'; }
     if (cls) cls.textContent = '—';
@@ -2431,9 +2461,21 @@ function renderOutline() {
       methodsList.appendChild(row);
     });
 
+    // Caret toggles collapse only; clicking the rest of the header focuses
+    // the entry class itself (class-level focus = union of all its methods'
+    // reachable subgraphs, i.e. the endpoint's full call map). Method-level
+    // focus narrows to one chain; this header click is the deliberate
+    // step-up to "show me the whole endpoint".
+    const caret = header.querySelector('.class-caret');
+    if (caret) {
+      caret.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        header.classList.toggle('collapsed');
+        methodsList.classList.toggle('collapsed');
+      });
+    }
     header.addEventListener('click', () => {
-      header.classList.toggle('collapsed');
-      methodsList.classList.toggle('collapsed');
+      setFocus(c.id, null);
     });
 
     bcSlot.appendChild(header);

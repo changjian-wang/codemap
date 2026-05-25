@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+Method-as-node redesign (slice 1). Webview switches from class-as-node
+UML to method-as-node compound graph: each class becomes a Cytoscape
+compound parent (swimlane) and each method becomes a child node. Edges
+are emitted at the method level (using each method's `calls` /
+`externalCalls` attribution), with class-level edges retained as a
+fallback for unverified / promoted-external links. Tap on a method
+node sets focus; tap on a class compound selects it for Details.
+Filters and fold (double-tap class) are rewired for the new node
+classes (`.cls` / `.method` / `.ext`).
+
 The mockup file is renamed to drop the `lumen-` prefix:
 `docs/mockups/lumen-backend-v3.html` → `docs/mockups/codemap-view.html`.
 Reflected in `panel.ts`, `.vscodeignore`, `esbuild.js`, the v3

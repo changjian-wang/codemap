@@ -1195,9 +1195,11 @@ const CLASSES = __INJ.classes || [
     confidence: 0.95, readState: 'read',
     intent: 'WebApplication startup: register modules (Capture/Recall/Memory/...), configure Postgres + pgvector, map endpoints',
     methods: [
-      { name: 'Main',                 sig: '(string[] args)', line: 14, risks: [], read: true },
+      { name: 'Main',                 sig: '(string[] args)', line: 14, risks: [], read: true,
+        calls: ['Program.ConfigureModules', 'Program.MapAllModuleEndpoints'] },
       { name: 'ConfigureModules',     sig: '(builder)',       line: 47, risks: [], read: true },
-      { name: 'MapAllModuleEndpoints',sig: '(app)',           line: 89, risks: [], read: true },
+      { name: 'MapAllModuleEndpoints',sig: '(app)',           line: 89, risks: [], read: true,
+        calls: ['CaptureEndpoints.MapCaptureEndpoints', 'RecallEndpoints.MapRecallEndpoints'] },
     ],
     risks: [],
   },
@@ -1211,9 +1213,12 @@ const CLASSES = __INJ.classes || [
     intent: 'Minimal API route group /api/captures: POST /url enqueues async, GET / lists, GET /jobs/{id}',
     methods: [
       { name: 'MapCaptureEndpoints', sig: '(this app)',           line: 14, risks: [], read: true },
-      { name: 'IngestUrl',           sig: '(req, handler, ct)',   line: 28, risks: ['external_io'], read: true },
-      { name: 'List',                sig: '(req, handler, ct)',   line: 43, risks: [], read: false },
-      { name: 'GetJob',              sig: '(jobId, handler, ct)', line: 52, risks: [], read: false },
+      { name: 'IngestUrl',           sig: '(req, handler, ct)',   line: 28, risks: ['external_io'], read: true,
+        calls: ['IngestUrlHandler.EnqueueAsync'] },
+      { name: 'List',                sig: '(req, handler, ct)',   line: 43, risks: [], read: false,
+        calls: ['CaptureJobStore.FindInFlightByCanonicalUrlAsync'] },
+      { name: 'GetJob',              sig: '(jobId, handler, ct)', line: 52, risks: [], read: false,
+        calls: ['CaptureJobStore.MarkSucceededAsync'] },
     ],
     risks: [{ type: 'external_io', desc: 'HTTP entry — accepts user-supplied URLs' }],
   },
@@ -1224,8 +1229,13 @@ const CLASSES = __INJ.classes || [
     confidence: 0.90, readState: 'read',
     intent: 'ADR-028/029: URL canonicalize → dedupe in-flight → insert capture_jobs (pending) → worker runs extract+embed+chunk async',
     methods: [
-      { name: 'EnqueueAsync',  sig: '(IngestUrlRequest, ct)',  line: 49, risks: ['concurrency', 'external_io'], read: true },
-      { name: 'ExecuteAsync',  sig: '(Guid jobId, ct)',        line: 112, risks: ['external_io', 'concurrency'], read: false },
+      { name: 'EnqueueAsync',  sig: '(IngestUrlRequest, ct)',  line: 49, risks: ['concurrency', 'external_io'], read: true,
+        calls: ['CaptureJobStore.InsertAsync', 'CaptureJobStore.FindInFlightByCanonicalUrlAsync'] },
+      { name: 'ExecuteAsync',  sig: '(Guid jobId, ct)',        line: 112, risks: ['external_io', 'concurrency'], read: false,
+        calls: ['HtmlContentExtractor.ExtractAsync', 'OnnxEmbeddingService.EmbedDocumentAsync',
+                'EventStore.InsertAsync', 'EventChunkStore.InsertRangeAsync',
+                'CaptureJobStore.MarkSucceededAsync', 'CaptureJobStore.MarkFailedAsync',
+                'CaptureJobStore.RescheduleAsync'] },
     ],
     risks: [
       { type: 'concurrency', desc: 'Concurrent inserts on UNIQUE index + 23505 retry' },
@@ -1239,9 +1249,12 @@ const CLASSES = __INJ.classes || [
     confidence: 0.88, readState: 'unread',
     intent: 'BackgroundService: serial drain of capture_jobs. Crash recovery (ResetStuckProcessing) + retry backoff + cancellation semantics',
     methods: [
-      { name: 'StartAsync',     sig: '(ct)',         line: 49, risks: ['concurrency'], read: false },
-      { name: 'ExecuteAsync',   sig: '(stoppingCt)', line: 87, risks: ['concurrency'], read: false },
-      { name: 'TickOnceAsync',  sig: '(ct)',         line: 132, risks: ['concurrency'], read: false },
+      { name: 'StartAsync',     sig: '(ct)',         line: 49, risks: ['concurrency'], read: false,
+        calls: ['CaptureJobStore.ResetStuckProcessingAsync'] },
+      { name: 'ExecuteAsync',   sig: '(stoppingCt)', line: 87, risks: ['concurrency'], read: false,
+        calls: ['CaptureJobWorker.TickOnceAsync'] },
+      { name: 'TickOnceAsync',  sig: '(ct)',         line: 132, risks: ['concurrency'], read: false,
+        calls: ['CaptureJobStore.ClaimNextPendingAsync', 'IngestUrlHandler.ExecuteAsync'] },
     ],
     risks: [{ type: 'concurrency', desc: 'BackgroundService + DI scope per tick' }],
   },
@@ -1252,8 +1265,10 @@ const CLASSES = __INJ.classes || [
     confidence: 0.97, readState: 'unread',
     intent: 'Dapper-based store for EventEntity (includes pgvector column). Insert and lookup by Id',
     methods: [
-      { name: 'InsertAsync',  sig: '(EventEntity, ct)', line: 24, risks: [], read: false },
-      { name: 'GetByIdAsync', sig: '(Guid id, ct)',     line: 30, risks: [], read: false },
+      { name: 'InsertAsync',  sig: '(EventEntity, ct)', line: 24, risks: [], read: false,
+        externalCalls: ['Dawning.ORM.Dapper', 'Npgsql.EntityFrameworkCore.PostgreSQL'] },
+      { name: 'GetByIdAsync', sig: '(Guid id, ct)',     line: 30, risks: [], read: false,
+        externalCalls: ['Dawning.ORM.Dapper'] },
     ],
     risks: [],
   },
@@ -1264,7 +1279,8 @@ const CLASSES = __INJ.classes || [
     confidence: 0.96, readState: 'unread',
     intent: 'ADR-022 §C: batch insert event chunks (≤ 32/event), one INSERT per row',
     methods: [
-      { name: 'InsertRangeAsync', sig: '(chunks, ct)', line: 18, risks: [], read: false },
+      { name: 'InsertRangeAsync', sig: '(chunks, ct)', line: 18, risks: [], read: false,
+        externalCalls: ['Dawning.ORM.Dapper'] },
     ],
     risks: [],
   },
@@ -1275,13 +1291,20 @@ const CLASSES = __INJ.classes || [
     confidence: 0.93, readState: 'unread',
     intent: 'Dapper repository for the capture_jobs table: claim/insert/mark/reset stuck/find in-flight',
     methods: [
-      { name: 'InsertAsync',              sig: '(...)',            line: 22, risks: ['concurrency'], read: false },
-      { name: 'FindInFlightByCanonicalUrlAsync', sig: '(url, actor, ct)', line: 51, risks: [], read: false },
-      { name: 'ClaimNextPendingAsync',    sig: '(now, ct)',        line: 78, risks: ['concurrency'], read: false },
-      { name: 'MarkSucceededAsync',       sig: '(jobId, ct)',      line: 112, risks: [], read: false },
-      { name: 'RescheduleAsync',          sig: '(jobId, until, ct)', line: 141, risks: [], read: false },
-      { name: 'MarkFailedAsync',          sig: '(jobId, reason, ct)', line: 168, risks: [], read: false },
-      { name: 'ResetStuckProcessingAsync', sig: '(now, ct)',       line: 193, risks: [], read: false },
+      { name: 'InsertAsync',              sig: '(...)',            line: 22, risks: ['concurrency'], read: false,
+        externalCalls: ['Dawning.ORM.Dapper'] },
+      { name: 'FindInFlightByCanonicalUrlAsync', sig: '(url, actor, ct)', line: 51, risks: [], read: false,
+        externalCalls: ['Dawning.ORM.Dapper'] },
+      { name: 'ClaimNextPendingAsync',    sig: '(now, ct)',        line: 78, risks: ['concurrency'], read: false,
+        externalCalls: ['Dawning.ORM.Dapper'] },
+      { name: 'MarkSucceededAsync',       sig: '(jobId, ct)',      line: 112, risks: [], read: false,
+        externalCalls: ['Dawning.ORM.Dapper'] },
+      { name: 'RescheduleAsync',          sig: '(jobId, until, ct)', line: 141, risks: [], read: false,
+        externalCalls: ['Dawning.ORM.Dapper'] },
+      { name: 'MarkFailedAsync',          sig: '(jobId, reason, ct)', line: 168, risks: [], read: false,
+        externalCalls: ['Dawning.ORM.Dapper'] },
+      { name: 'ResetStuckProcessingAsync', sig: '(now, ct)',       line: 193, risks: [], read: false,
+        externalCalls: ['Dawning.ORM.Dapper'] },
     ],
     risks: [{ type: 'concurrency', desc: 'Relies on partial UNIQUE index to guard concurrency' }],
   },
@@ -1295,8 +1318,10 @@ const CLASSES = __INJ.classes || [
     intent: 'Minimal API route group /api/recall: GET / vector recall, POST /ask grounded LLM Q&A',
     methods: [
       { name: 'MapRecallEndpoints', sig: '(this app)',            line: 14, risks: [], read: false },
-      { name: 'Search',             sig: '(req, handler, ct)',    line: 28, risks: [], read: false },
-      { name: 'Ask',                sig: '(req, handler, ct)',    line: 38, risks: ['security'], read: false },
+      { name: 'Search',             sig: '(req, handler, ct)',    line: 28, risks: [], read: false,
+        calls: ['RecallByQueryHandler.HandleAsync'] },
+      { name: 'Ask',                sig: '(req, handler, ct)',    line: 38, risks: ['security'], read: false,
+        calls: ['AskByQueryHandler.HandleAsync'] },
     ],
     risks: [{ type: 'security', desc: 'Prompt injection risk: natural-language query' }],
   },
@@ -1307,7 +1332,9 @@ const CLASSES = __INJ.classes || [
     confidence: 0.94, readState: 'unread',
     intent: 'query → embed → IRecallQuery.SearchAsync (pgvector cosine top-K) → deserialize payload',
     methods: [
-      { name: 'HandleAsync',      sig: '(req, ct)',  line: 14, risks: [], read: false },
+      { name: 'HandleAsync',      sig: '(req, ct)',  line: 14, risks: [], read: false,
+        calls: ['OnnxEmbeddingService.EmbedQueryAsync', 'RecallQuery.SearchAsync',
+                'RecallByQueryHandler.ParsePayload'] },
       { name: 'ParsePayload',     sig: '(raw)',      line: 41, risks: [], read: false },
     ],
     risks: [],
@@ -1319,7 +1346,10 @@ const CLASSES = __INJ.classes || [
     confidence: 0.81, readState: 'unread',
     intent: 'ADR-017 grounded ask: embed → top-K cosine → build GroundedAskPrompts → ILlmService → parse [n] hard references',
     methods: [
-      { name: 'HandleAsync',              sig: '(req, ct)',  line: 33, risks: ['security', 'low_confidence'], read: false },
+      { name: 'HandleAsync',              sig: '(req, ct)',  line: 33, risks: ['security', 'low_confidence'], read: false,
+        calls: ['OnnxEmbeddingService.EmbedQueryAsync', 'RecallQuery.SearchAsync',
+                'OllamaLlmService.ChatAsync', 'AskByQueryHandler.ExtractReferencedIndices',
+                'GroundedAskPromptsV2.BuildUserPrompt'] },
       { name: 'ExtractReferencedIndices', sig: '(answer)',   line: 110, risks: [], read: false },
     ],
     risks: [
@@ -1339,7 +1369,8 @@ const CLASSES = __INJ.classes || [
     confidence: 0.92, readState: 'unread',
     intent: 'Raw SQL: pgvector cosine (<=> operator) top-K search, partitioned by topic',
     methods: [
-      { name: 'SearchAsync', sig: '(Vector q, topic, k, ct)', line: 18, risks: ['external_io'], read: false },
+      { name: 'SearchAsync', sig: '(Vector q, topic, k, ct)', line: 18, risks: ['external_io'], read: false,
+        externalCalls: ['Pgvector'] },
     ],
     risks: [{ type: 'external_io', desc: 'Full-table scan when the pgvector index misses' }],
   },
@@ -1352,9 +1383,12 @@ const CLASSES = __INJ.classes || [
     confidence: 0.93, readState: 'unread',
     intent: 'In-process ONNX: tokenize → inference → masked mean pool → L2 normalize. Multi-threaded read path is safe',
     methods: [
-      { name: 'EmbedQueryAsync',    sig: '(text, ct)',         line: 44, risks: ['concurrency'], read: false },
-      { name: 'EmbedDocumentAsync', sig: '(text, ct)',         line: 55, risks: ['concurrency'], read: false },
-      { name: 'EmbedSync',          sig: '(prefixedText)',     line: 78, risks: [], read: false },
+      { name: 'EmbedQueryAsync',    sig: '(text, ct)',         line: 44, risks: ['concurrency'], read: false,
+        calls: ['OnnxEmbeddingService.ApplyPrefix', 'OnnxEmbeddingService.EmbedSync'] },
+      { name: 'EmbedDocumentAsync', sig: '(text, ct)',         line: 55, risks: ['concurrency'], read: false,
+        calls: ['OnnxEmbeddingService.ApplyPrefix', 'OnnxEmbeddingService.EmbedSync'] },
+      { name: 'EmbedSync',          sig: '(prefixedText)',     line: 78, risks: [], read: false,
+        externalCalls: ['Microsoft.ML.OnnxRuntime', 'Microsoft.ML.Tokenizers'] },
       { name: 'ApplyPrefix',        sig: '(text, isQuery)',    line: 134, risks: [], read: false },
     ],
     risks: [{ type: 'concurrency', desc: 'singleton + ORT InferenceSession concurrent inference' }],
@@ -1366,7 +1400,8 @@ const CLASSES = __INJ.classes || [
     confidence: 0.84, readState: 'unread',
     intent: 'ADR-017: HTTP POST Ollama /api/chat (non-streaming); strip <think> blocks into ReasoningTrace',
     methods: [
-      { name: 'ChatAsync',         sig: '(messages, opts, ct)', line: 48, risks: ['external_io'], read: false },
+      { name: 'ChatAsync',         sig: '(messages, opts, ct)', line: 48, risks: ['external_io'], read: false,
+        calls: ['OllamaLlmService.MapOllamaResponse', 'OllamaLlmService.StripThinkBlock'] },
       { name: 'StripThinkBlock',   sig: '(rawAnswer)',          line: 121, risks: [], read: false },
       { name: 'MapOllamaResponse', sig: '(json)',               line: 156, risks: [], read: false },
     ],
@@ -1384,7 +1419,9 @@ const CLASSES = __INJ.classes || [
     confidence: 0.91, readState: 'unread',
     intent: 'HttpClient fetch → SmartReader Readability → ReverseMarkdown. Includes SSRF guard (rejects RFC1918/loopback, etc.)',
     methods: [
-      { name: 'ExtractAsync',          sig: '(url, ct)',  line: 43, risks: ['security', 'external_io'], read: false },
+      { name: 'ExtractAsync',          sig: '(url, ct)',  line: 43, risks: ['security', 'external_io'], read: false,
+        calls: ['HtmlContentExtractor.AssertHostIsPublicAsync', 'HtmlContentExtractor.BuildExtractorId'],
+        externalCalls: ['SmartReader', 'ReverseMarkdown'] },
       { name: 'AssertHostIsPublicAsync', sig: '(host, ct)', line: 102, risks: ['security'], read: false },
       { name: 'BuildExtractorId',      sig: '(primary)',  line: 178, risks: [], read: false },
     ],
@@ -1502,7 +1539,16 @@ const EDGES = __INJ.edges || [
   { from: 'HtmlContentExtractor',   to: 'ext:ReverseMarkdown',                       kind: 'external_calls', verified: true },
 ];
 
-// ---------- Build cytoscape elements ----------
+// ---------- Build cytoscape elements (v4 — method-as-node call graph) ----------
+//
+// Design: a class becomes a compound *swimlane* (parent node, no fill, BC
+// border, header label at top). Each method becomes a child node inside
+// the swimlane, and the graph's first-class edges are method→method calls
+// — sourced directly from each MethodInfo's `calls` / `externalCalls`
+// arrays. The previous design (UML class card listing methods inside the
+// label + class-level edges only) reads as a 200ft architecture diagram;
+// this design reads as a call graph zoomed to the level the user actually
+// debugs at.
 function visGlyph(v) {
   return v === 'verified' ? '✓' : v === 'partial' ? '⚠' : '✗';
 }
@@ -1514,180 +1560,196 @@ function bcColor(bc) {
     shared:  '#569cd6',
   }[bc] || '#aaaaaa';
 }
-function buildClassLabel(c) {
-  // Non-class kinds get a UML stereotype line in front of the name so
-  // they're recognisable at a glance even if the node shape doesn't
-  // render distinctly (accessibility, b/w printing). Enum members render
-  // as `· Foo` rather than `+ Foo()` since they're not callable.
-  const stereotype = (c.kind && c.kind !== 'class') ? `«${c.kind}»\n` : '';
-  const header = `${stereotype}${c.id}  ${visGlyph(c.verification)}`;
-  const sep    = '──────────────────────';
-  const isMemberOnly = c.kind === 'enum';
-  // Drop constructors from the graph label — they duplicate the class name
-  // and rarely add information at the code-map level. They still show up in
-  // the card details below.
-  const visibleMethods = isMemberOnly ? c.methods : c.methods.filter(m => m.name !== c.id);
-  const visible = visibleMethods.slice(0, 5);
-  const hidden = visibleMethods.length - visible.length;
-  const methodLines = visible.map(m => {
-    const riskMark = m.risks.length ? ' ●' : '';
-    return isMemberOnly ? `· ${m.name}${riskMark}` : `+ ${m.name}()${riskMark}`;
-  });
-  const overflow = hidden > 0 ? `… +${hidden} more` : '';
-  return [header, sep, ...methodLines, overflow].filter(Boolean).join('\n');
+function buildClassHeader(c, folded) {
+  const stereotype = (c.kind && c.kind !== 'class') ? `«${c.kind}» ` : '';
+  // Fold indicator: ▾ when expanded, ▸ (N methods) when collapsed. The
+  // symbol doubles as a dbl-tap-affordance hint — readers learn that the
+  // class header is interactive without a dedicated chevron button.
+  if (folded) {
+    const n = __cmVisibleMethodsOf(c).length;
+    return `${stereotype}${c.id}  ${visGlyph(c.verification)}  ▸ ${n} method${n === 1 ? '' : 's'}`;
+  }
+  return `${stereotype}${c.id}  ${visGlyph(c.verification)}  ▾`;
+}
+function buildMethodLabel(m, c) {
+  const risk = (m.risks && m.risks.length) ? ' ●' : '';
+  const isMember = c.kind === 'enum';
+  return isMember ? `· ${m.name}${risk}` : `+ ${m.name}()${risk}`;
 }
 
-const nodes = CLASSES.map(c => {
-  const label = buildClassLabel(c);
-  const lines = label.split('\n');
-  // Approx char width for Consolas 11pt mono ~ 6.6px; plus 24px padding
-  // (2 × padding + border + breathing room). Clamp to [200, 480] so super
-  // long identifiers don't blow up the layout.
-  const longestLine = lines.reduce((m, l) => Math.max(m, l.length), 0);
-  const width = Math.max(200, Math.min(480, Math.ceil(longestLine * 6.6 + 24)));
-  // Visible-row count drives height: separator + stereotype + method rows.
-  // (We can't read c.methods.filter().slice() again cleanly, so reproduce
-  // the count from label-line count minus header/separator.)
-  const bodyRows = Math.max(0, lines.length - 2);  // minus header + separator
-  return {
+// Constructors (methods whose name matches the class id) are dropped from
+// the graph. They duplicate the class name and don't add call-structure
+// information; the verification card still shows them.
+function __cmVisibleMethodsOf(c) {
+  if (c.kind === 'enum') return c.methods;
+  return c.methods.filter(m => m.name !== c.id);
+}
+
+// ---- Pass 1: build nodes (compound parents + method children + ext nodes) ----
+const nodes = [];
+
+// Compound parents — one per class. Label is the header line; cytoscape
+// auto-sizes the box from its method children plus `padding`.
+CLASSES.forEach(c => {
+  nodes.push({
     data: {
       id: c.id,
-      label,
+      label: buildClassHeader(c),
       bc: c.bc,
       kind: c.kind || 'class',
       verification: c.verification,
       readState: c.readState,
-      width,
-      // 32 = top/bottom padding for header; 14 = stereotype line for non-class;
-      // 18 = per body row (matches font-size: 11 + leading).
-      height: 32 + ((c.kind && c.kind !== 'class') ? 14 : 0) + bodyRows * 18,
+      isParent: true,
     },
-    classes: `cls bc-${c.bc} v-${c.verification} r-${c.readState} kind-${c.kind || 'class'}`,
-  };
+    classes: `cls cls-parent bc-${c.bc} v-${c.verification} r-${c.readState} kind-${c.kind || 'class'}`,
+  });
 });
 
+// Method children. Node id = `${classId}.${methodName}`.
+CLASSES.forEach(c => {
+  __cmVisibleMethodsOf(c).forEach(m => {
+    const id = `${c.id}.${m.name}`;
+    const readState = m.read ? 'read' : 'unread';
+    nodes.push({
+      data: {
+        id,
+        parent: c.id,
+        ownerId: c.id,
+        methodName: m.name,
+        sig: m.sig || '',
+        label: buildMethodLabel(m, c),
+        line: m.line,
+        bc: c.bc,
+        verification: c.verification,
+        readState,
+        risk: (m.risks && m.risks.length) ? 1 : 0,
+        riskTypes: m.risks || [],
+        intent: m.intent || '',
+      },
+      classes: `method bc-${c.bc} v-${c.verification} r-${readState}`,
+    });
+  });
+});
+
+// External-dep nodes (one per dep). We always mount them so the resolver
+// can target them; applyFilters hides those that no edge points at.
 EXTERNAL_DEPS.forEach(d => {
   const id = 'ext:' + d.name;
-  if (EDGES.some(e => e.to === id)) {
-    nodes.push({
-      data: { id, label: d.name, bc: 'shared', external: true },
-      classes: 'ext'
-    });
-  }
+  nodes.push({
+    data: { id, label: d.name, bc: 'shared', external: true },
+    classes: 'ext',
+  });
 });
 
-// Defensive: synthesize any `ext:<Name>` placeholder node referenced by an
-// edge but missing from EXTERNAL_DEPS, so cytoscape doesn't throw
-// "Can not create edge with nonexistent target" and abort the whole render.
-(function () {
-  const existing = new Set(nodes.map(n => n.data.id));
-  EDGES.forEach(e => {
-    if (e.to && e.to.indexOf('ext:') === 0 && !existing.has(e.to)) {
-      const bare = e.to.slice(4);
-      nodes.push({
-        data: { id: e.to, label: bare, bc: 'shared', external: true },
-        classes: 'ext',
-      });
-      existing.add(e.to);
-    }
-  });
-})();
+const __cmNodeIds = new Set(nodes.map(n => n.data.id));
 
-const edges = EDGES.map((e, i) => ({
-  data: { id: `e${i}`, source: e.from, target: e.to, kind: e.kind, verified: e.verified },
-  classes: `${e.kind}${e.verified ? '' : ' unverified-edge'}`
-}));
-
-// ---------- Method-level explode prep ----------
-// Each class also contributes one hidden compound-child node per method,
-// plus per-method outgoing edges sourced from MethodInfo.calls /
-// externalCalls. They render only when the owning class is "exploded" by
-// explodeClass(); otherwise applyFilters keeps them display:'none' and the
-// class-level edges carry the call structure. The data is already captured
-// per-method by the calibrator + aggregator pipeline — this is purely a
-// view-layer transform so per-method call chains become visible inside the
-// focused class instead of being collapsed onto a single class→X arrow.
+// ---- Pass 2: edge resolvers ----
+//
+// Method-level `m.calls` can carry three formats:
+//   "Class.Method"  → exact method node id (preferred)
+//   "Class"         → class-level / compound parent
+//   "Method"        → bare name; resolve as sibling in same class first,
+//                     then as a class id, then drop
+// External targets resolve against `ext:Name` keys, with a "last dotted
+// segment" fallback matching the aggregator's normalization step.
 function __cmResolveCallTarget(raw, ownerClassId) {
   if (typeof raw !== 'string' || !raw) return null;
-  // LLM emits either "Class" or "Class.Method" in MethodInfo.calls. Strip
-  // method-tail; the class id is what's known to the graph.
-  const className = raw.split('.')[0];
-  if (!className) return null;
-  // Skip self-class edges: a method-to-own-class arrow inside the same
-  // compound parent reads as a broken loop in dagre layout.
-  if (className === ownerClassId) return null;
-  if (CLASSES.some(c => c.id === className)) return className;
+  if (raw.includes('.')) {
+    if (__cmNodeIds.has(raw)) return raw;
+    const head = raw.split('.')[0];
+    if (head && __cmNodeIds.has(head)) return head;
+    return null;
+  }
+  const sib = `${ownerClassId}.${raw}`;
+  if (__cmNodeIds.has(sib)) return sib;
+  if (__cmNodeIds.has(raw)) return raw;
   return null;
 }
 function __cmResolveExternalTarget(raw) {
   if (typeof raw !== 'string' || !raw) return null;
   const direct = 'ext:' + raw;
-  if (EXTERNAL_DEPS.some(d => 'ext:' + d.name === direct)) return direct;
-  // Aggregator fallback: a dotted external like Microsoft.Foo.Bar.Baz
-  // is recorded under its last segment in EXTERNAL_DEPS.
+  if (__cmNodeIds.has(direct)) return direct;
   const last = raw.split('.').pop();
-  if (last && EXTERNAL_DEPS.some(d => d.name === last)) return 'ext:' + last;
+  if (last && __cmNodeIds.has('ext:' + last)) return 'ext:' + last;
   return null;
 }
-// Per-class explosion payloads. Indexed by ownerId so explodeClass can
-// lazily cy.add() only the nodes + edges for the focused class. We do NOT
-// push these into the initial nodes/edges arrays: doing so would feed
-// dagre hundreds of hidden compound children + edges in All mode, which
-// dagre still ranks even with display:'none' and visibly distorts the
-// canonical class-only layout (collapses the graph into a near-vertical
-// strip).
-const __cmMethodNodesByClass = new Map();
-const __cmMethodEdgesByClass = new Map();
+
+// ---- Pass 3: build edges from method-level call data ----
+const edges = [];
+let __cmEdgeCounter = 0;
+function __cmPushEdge(source, target, kind, verified) {
+  if (!source || !target || source === target) return;
+  edges.push({
+    data: { id: `e${__cmEdgeCounter++}`, source, target, kind, verified: !!verified },
+    classes: `${kind}${verified ? '' : ' unverified-edge'}`,
+  });
+}
+
 CLASSES.forEach(c => {
-  // Same constructor / enum-member rule as buildClassLabel so the exploded
-  // view matches what the user saw on the class card.
-  const isMemberOnly = c.kind === 'enum';
-  const visible = isMemberOnly ? c.methods : c.methods.filter(m => m.name !== c.id);
-  const ns = [];
-  const es = [];
-  visible.forEach(m => {
-    const mid = `${c.id}::${m.name}`;
-    const riskMark = (m.risks && m.risks.length) ? ' ●' : '';
-    ns.push({
-      data: {
-        id: mid,
-        parent: c.id,
-        ownerId: c.id,
-        methodName: m.name,
-        label: isMemberOnly ? `· ${m.name}${riskMark}` : `+ ${m.name}()${riskMark}`,
-      },
-      classes: `cls-method bc-${c.bc} v-${c.verification} r-${m.read ? 'read' : 'unread'}`,
+  __cmVisibleMethodsOf(c).forEach(m => {
+    const src = `${c.id}.${m.name}`;
+    (m.calls || []).forEach(raw => {
+      const tgt = __cmResolveCallTarget(raw, c.id);
+      if (tgt) __cmPushEdge(src, tgt, 'calls', true);
     });
-    (m.calls || []).forEach((t, ti) => {
-      const target = __cmResolveCallTarget(t, c.id);
-      if (!target) return;
-      es.push({
-        data: {
-          id: `me::${c.id}::${m.name}::c${ti}`,
-          source: mid, target, kind: 'calls',
-          ownerId: c.id, methodName: m.name,
-        },
-        classes: 'calls method-edge',
-      });
-    });
-    (m.externalCalls || []).forEach((t, ti) => {
-      const target = __cmResolveExternalTarget(t);
-      if (!target) return;
-      es.push({
-        data: {
-          id: `me::${c.id}::${m.name}::x${ti}`,
-          source: mid, target, kind: 'external_calls',
-          ownerId: c.id, methodName: m.name,
-        },
-        classes: 'external_calls method-edge',
-      });
+    (m.externalCalls || []).forEach(raw => {
+      // Mirror the aggregator's external→internal promotion: if the bare
+      // target name resolves to an in-graph class, emit an internal call
+      // edge instead. Without this, an LLM that put `ApiResult.Ok` into
+      // externalCalls would render ApiResult as an orphan ext node even
+      // when it's actually a workspace class.
+      const internal = __cmResolveCallTarget(raw, c.id);
+      if (internal) {
+        __cmPushEdge(src, internal, 'calls', true);
+        return;
+      }
+      const ext = __cmResolveExternalTarget(raw);
+      if (ext) __cmPushEdge(src, ext, 'external_calls', true);
     });
   });
-  if (ns.length > 0) {
-    __cmMethodNodesByClass.set(c.id, ns);
-    __cmMethodEdgesByClass.set(c.id, es);
+});
+
+// ---- Pass 4: class-level EDGES fallback ----
+//
+// Any class-level EDGES entry not already covered by a method-level edge
+// gets rendered between the two compound parents (or compound→ext). This
+// keeps two cases working:
+//   • Real data where the aggregator promoted an external call to an
+//     internal class (the promotion runs at edge level, not method level).
+//   • Unverified / hallucinated edges (e.g. AskByQueryHandler →
+//     GroundedAskPromptsV2) that the LLM emitted at class granularity.
+const __cmCoveredPairs = new Set(edges.map(e => `${e.data.source.split('.')[0]}|${e.data.target}|${e.data.kind}`));
+function __cmIsCoveredByMethodEdge(srcClass, tgt) {
+  // Covered if any method-level edge from srcClass lands on tgt itself
+  // OR on a child of tgt (when tgt is a class id).
+  for (const e of edges) {
+    const meSrc = e.data.source;
+    if (meSrc.split('.')[0] !== srcClass) continue;
+    if (e.data.target === tgt) return true;
+    if (typeof tgt === 'string' && e.data.target.startsWith(tgt + '.')) return true;
+  }
+  return false;
+}
+EDGES.forEach(e => {
+  if (!__cmNodeIds.has(e.from) || !__cmNodeIds.has(e.to)) return;
+  if (__cmIsCoveredByMethodEdge(e.from, e.to)) return;
+  __cmPushEdge(e.from, e.to, e.kind, e.verified);
+});
+
+// ---- Pass 5: prune orphan ext nodes ----
+const __cmExtRefCount = new Map();
+edges.forEach(e => {
+  if (typeof e.data.target === 'string' && e.data.target.startsWith('ext:')) {
+    __cmExtRefCount.set(e.data.target, (__cmExtRefCount.get(e.data.target) || 0) + 1);
   }
 });
+for (let i = nodes.length - 1; i >= 0; i--) {
+  const n = nodes[i];
+  if (n.classes === 'ext' && !__cmExtRefCount.has(n.data.id)) {
+    nodes.splice(i, 1);
+    __cmNodeIds.delete(n.data.id);
+  }
+}
 
 // Layout config is kept on a module-level var so the collapse helpers
 // below can re-run the exact same layout after mutating node sizes.
@@ -1724,36 +1786,49 @@ const cy = cytoscape({
   wheelSensitivity: 0.25,
   layout: __cmLayoutOpts,
   style: [
+    // ---------- Compound parent (class swimlane) ----------
     {
       selector: 'node.cls',
       style: {
         'shape': 'round-rectangle',
-        'background-color': '#252526',
-        'background-opacity': 1,
+        // Tint the swimlane background with a very low-saturation hint of
+        // the bc color so adjacent bcs read as distinct containers even
+        // before the border catches the eye.
+        'background-color': ele => {
+          const tint = {
+            capture: '#16221f',
+            recall:  '#1f161f',
+            host:    '#222016',
+            shared:  '#161c24',
+          }[ele.data('bc')];
+          return tint || '#1e1e1e';
+        },
+        'background-opacity': 0.85,
         'border-width': 2,
         'border-color': ele => bcColor(ele.data('bc')),
         'border-style': 'solid',
         'label': 'data(label)',
-        'text-wrap': 'wrap',
-        'text-valign': 'center',
+        // Header sits at top of the compound; methods stack below it.
+        'text-valign': 'top',
         'text-halign': 'center',
-        'color': '#d4d4d4',
+        'text-margin-y': -4,
+        'color': ele => bcColor(ele.data('bc')),
         'font-family': 'Consolas, "Cascadia Code", monospace',
-        'font-size': 11,
-        'width':  'data(width)',
-        'height': 'data(height)',
-        'padding': 6,
-        // Bind text-max-width to the per-node width so long identifiers
-        // can wrap; the dynamic width sizing above means most labels fit
-        // without wrap, but this acts as a safety net for >480px names.
-        'text-max-width': ele => Math.max(80, (ele.data('width') || 240) - 16),
+        'font-size': 12,
+        'font-weight': 'bold',
+        // Lift the header off the bc-tinted background so it stays readable
+        // even when the swimlane gets crowded with overlapping method pills.
+        'text-background-color': '#0d0d0d',
+        'text-background-opacity': 0.75,
+        'text-background-padding': 4,
+        'text-background-shape': 'round-rectangle',
+        'padding': '20px',
+        'text-max-width': 320,
+        'text-wrap': 'ellipsis',
       }
     },
-    { selector: 'node.cls.v-verified', style: { 'border-style': 'solid' } },
-    {
-      selector: 'node.cls.v-partial',
-      style: { 'border-style': 'dashed', 'border-color': '#d19a66' }
-    },
+    { selector: 'node.cls.v-verified',   style: { 'border-style': 'solid' } },
+    { selector: 'node.cls.v-partial',    style: { 'border-style': 'dashed', 'border-color': '#d19a66', 'color': '#d19a66' } },
     {
       selector: 'node.cls.v-unverified',
       style: {
@@ -1764,58 +1839,58 @@ const cy = cytoscape({
         'opacity': 0.85,
       }
     },
-    { selector: 'node.cls.r-read', style: { 'opacity': 0.45 } },
+    { selector: 'node.cls.r-read', style: { 'background-opacity': 0.35 } },
+    { selector: 'node.cls.kind-interface', style: { 'shape': 'cut-rectangle', 'background-color': '#1a2828' } },
+    { selector: 'node.cls.kind-record',    style: { 'shape': 'round-rectangle', 'background-color': '#241a24' } },
+    { selector: 'node.cls.kind-enum',      style: { 'shape': 'cut-rectangle', 'background-color': '#25251a' } },
+
+    // ---------- Method nodes (primary citizens) ----------
     {
-      // Slice 3 — shared classes (reached by ≥30% of entry methods). Smaller
-      // box, muted palette, dashed border. positionSharedRow() pins these to
-      // a bottom band after each focus-mode layout. Label is overridden to
-      // the bare class id so the compact box doesn't get overflown by the
-      // full multi-line method label inherited from `node.cls` — that
-      // overflow becomes visible (and ugly) when the shared node is selected
-      // and the `:selected` border thickens.
-      selector: 'node.cls.shared-cls',
+      selector: 'node.method',
       style: {
-        'width': 100,
-        'height': 32,
-        'padding': 4,
-        'background-color': '#1c1c1c',
-        'border-style': 'dashed',
-        'border-color': '#444',
+        'shape': 'round-rectangle',
+        'background-color': ele => {
+          const tint = {
+            capture: '#1f2e29',
+            recall:  '#2b1f2a',
+            host:    '#2b2820',
+            shared:  '#1f2733',
+          }[ele.data('bc')];
+          return tint || '#252526';
+        },
+        'background-opacity': 1,
         'border-width': 1,
-        'opacity': 0.6,
-        'color': '#8a8a8a',
-        'font-size': 9,
-        'label': 'data(id)',
-        'text-wrap': 'ellipsis',
-        'text-max-width': 90,
+        'border-color': ele => bcColor(ele.data('bc')),
+        'border-style': 'solid',
+        'label': 'data(label)',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'color': '#e0e0e0',
+        'font-family': 'Consolas, "Cascadia Code", monospace',
+        'font-size': 11,
+        'width': 'label',
+        'height': 26,
+        'padding': '8px',
+        'text-max-width': 260,
       }
     },
+    { selector: 'node.method.v-partial',    style: { 'border-style': 'dashed', 'border-color': '#d19a66' } },
+    { selector: 'node.method.v-unverified', style: { 'border-style': 'dotted', 'border-color': '#5c5c5c', 'opacity': 0.85, 'color': '#8a8a8a' } },
+    { selector: 'node.method.r-read',       style: { 'opacity': 0.55 } },
     {
-      // Interface: pure contract — ellipse + faint cyan tint. bc/verification
-      // styling still applies through .bc-* and .v-* classes.
-      selector: 'node.cls.kind-interface',
+      // Focus anchor — the method the user picked. Distinct accent so users
+      // can tell at a glance "this method drives the arrows leaving here".
+      selector: 'node.method.method-focus',
       style: {
-        'shape': 'ellipse',
-        'background-color': '#1f2a2a',
+        'border-color': '#007acc',
+        'border-width': 2,
+        'background-color': '#264f78',
+        'color': '#ffffff',
       }
     },
-    {
-      // Record: immutable data carrier — barrel shape + faint purple tint.
-      selector: 'node.cls.kind-record',
-      style: {
-        'shape': 'barrel',
-        'background-color': '#2a1f2a',
-      }
-    },
-    {
-      // Enum: cut-corner rectangle + faint gold tint. Same bc/verification
-      // rules still apply via .bc-* / .v-* classes — only shape and bg shift.
-      selector: 'node.cls.kind-enum',
-      style: {
-        'shape': 'cut-rectangle',
-        'background-color': '#2d2d22',
-      }
-    },
+    { selector: 'node.method.dimmed', style: { 'opacity': 0.25 } },
+
+    // ---------- External dep nodes ----------
     {
       selector: 'node.ext',
       style: {
@@ -1831,27 +1906,26 @@ const cy = cytoscape({
         'font-size': 10,
         'width': 'label',
         'height': 24,
-        'padding': 6,
+        'padding': '6px',
         'text-valign': 'center',
         'text-halign': 'center',
       }
     },
+
+    // ---------- Edges ----------
     {
       selector: 'edge.calls',
       style: {
-        // Taxi-style routing fed by dagre's layout: see __cmLayoutOpts.
-        // `unbundled-bezier` + control points = each rank corridor's edges
-        // stay in their corridor instead of cutting diagonally.
         'curve-style': 'unbundled-bezier',
         'control-point-weights': ele => ele.scratch('controlPointWeights'),
         'control-point-distances': ele => ele.scratch('controlPointDistances'),
         'edge-distances': 'intersection',
         'edge-ends-overlap': false,
-        'width': 1.6,
+        'width': 1.5,
         'line-color': '#61afef',
         'target-arrow-color': '#61afef',
         'target-arrow-shape': 'triangle',
-        'opacity': 0.8,
+        'opacity': 0.85,
       }
     },
     {
@@ -1876,8 +1950,12 @@ const cy = cytoscape({
         'line-color': '#5c5c5c',
         'target-arrow-color': '#5c5c5c',
         'line-style': 'dotted',
+        'opacity': 0.6,
       }
     },
+    { selector: 'edge.dimmed', style: { 'opacity': 0.1 } },
+
+    // ---------- Selection / highlight ----------
     {
       selector: 'node:selected',
       style: {
@@ -1896,98 +1974,6 @@ const cy = cytoscape({
         'width': 2.4,
         'opacity': 1,
       }
-    },
-    // ---------- Method-level explode (compound children + per-method edges) ----------
-    {
-      // A class becomes a compound parent when its method children are
-      // visible. Slim the parent's own label down to a top header, give it
-      // breathing room for the row of method boxes below.
-      selector: 'node.cls.exploded',
-      style: {
-        'text-valign': 'top',
-        'text-halign': 'center',
-        'text-margin-y': 4,
-        'padding': 14,
-        'background-opacity': 0.6,
-        'font-weight': 'bold',
-      }
-    },
-    {
-      // Compact method box. Inherits bc/verification accents from its own
-      // .bc-* / .v-* classes (set at element-creation time) so the row of
-      // methods carries the same visual identity as the class header.
-      selector: 'node.cls-method',
-      style: {
-        'shape': 'round-rectangle',
-        'background-color': '#2d2d30',
-        'background-opacity': 1,
-        'border-width': 1,
-        'border-color': '#3c3c3c',
-        'border-style': 'solid',
-        'label': 'data(label)',
-        'text-valign': 'center',
-        'text-halign': 'center',
-        'color': '#d4d4d4',
-        'font-family': 'Consolas, "Cascadia Code", monospace',
-        'font-size': 10,
-        'width': 'label',
-        'height': 22,
-        'padding': 6,
-        'text-max-width': 220,
-      }
-    },
-    {
-      selector: 'node.cls-method.v-partial',
-      style: { 'border-style': 'dashed', 'border-color': '#d19a66' }
-    },
-    {
-      selector: 'node.cls-method.v-unverified',
-      style: { 'border-style': 'dotted', 'border-color': '#5c5c5c', 'opacity': 0.85 }
-    },
-    {
-      selector: 'node.cls-method.r-read',
-      style: { 'opacity': 0.55 }
-    },
-    {
-      // Highlight the specific method that focus is currently anchored on.
-      // Distinct accent so users can tell at a glance "this row drives the
-      // arrows leaving the box".
-      selector: 'node.cls-method.method-focus',
-      style: {
-        'border-color': '#007acc',
-        'border-width': 2,
-        'background-color': '#264f78',
-        'color': '#ffffff',
-      }
-    },
-    {
-      selector: 'node.cls-method.dimmed',
-      style: { 'opacity': 0.25 }
-    },
-    {
-      // Per-method outgoing edges. Curve-style/control-points inherited via
-      // selector compounding — these properties layered on top of edge.calls
-      // / edge.external_calls. Distinct hue separates them from class-level
-      // arrows when both appear during transition frames.
-      selector: 'edge.method-edge',
-      style: {
-        'line-color': '#c586c0',
-        'target-arrow-color': '#c586c0',
-        'width': 1.3,
-        'opacity': 0.85,
-      }
-    },
-    {
-      selector: 'edge.method-edge.external_calls',
-      style: {
-        'line-color': '#56b6c2',
-        'target-arrow-color': '#56b6c2',
-        'line-style': 'dashed',
-      }
-    },
-    {
-      selector: 'edge.method-edge.dimmed',
-      style: { 'opacity': 0.12 }
     },
   ]
 });
@@ -2010,23 +1996,34 @@ let historyStack = [];               // [{ classId, methodName }, ...]
 let historyIndex = -1;
 const HISTORY_CAP = 50;
 
-function __buildClassAdjacency() {
+function __buildMethodAdjacency() {
+  // Forward-only adjacency over the method-level call graph. Built from the
+  // already-resolved `edges` array (which carries `calls` and external_calls
+  // edges between method nodes, compound parents, and ext: nodes). Both
+  // `calls` and external_calls hops are followed in the BFS so the "what
+  // does this entry method reach?" question stays honest — pgvector and
+  // ApiResult are part of the reach, even though they're terminals.
   const adj = new Map();
-  EDGES.forEach(e => {
-    if (e.kind !== 'calls') return;
-    if (typeof e.from !== 'string' || typeof e.to !== 'string') return;
-    if (e.from.startsWith('ext:') || e.to.startsWith('ext:')) return;
-    if (!adj.has(e.from)) adj.set(e.from, []);
-    adj.get(e.from).push(e.to);
+  edges.forEach(e => {
+    const src = e.data.source;
+    const tgt = e.data.target;
+    if (!src || !tgt) return;
+    if (!adj.has(src)) adj.set(src, []);
+    adj.get(src).push(tgt);
   });
   return adj;
 }
 
-function bfsAtDepth(originClassId, depth) {
-  const visited = new Set([originClassId]);
+function bfsMethods(originNodeId, depth) {
+  // BFS in the method graph. `origin` is a method node id (Class.Method),
+  // a class compound id (Class), or any node id. Depth bounds the hops; pass
+  // Infinity for full reach. Returns the set of visited node ids.
+  const visited = new Set();
+  if (!originNodeId) return visited;
+  visited.add(originNodeId);
   if (depth <= 0) return visited;
-  const adj = __buildClassAdjacency();
-  const queue = [[originClassId, 0]];
+  const adj = __buildMethodAdjacency();
+  const queue = [[originNodeId, 0]];
   while (queue.length > 0) {
     const [cur, dist] = queue.shift();
     if (dist >= depth) continue;
@@ -2040,57 +2037,84 @@ function bfsAtDepth(originClassId, depth) {
   return visited;
 }
 
-// Method-rooted focus: prefer the analyzer's per-method reach when an ENTRIES
-// row matches, so clicking different methods of the same entry class yields
-// different subgraphs. Depth slider is class-scoped: when focused on a method
-// we use the method's transitive reach unconditionally; the slider keeps
-// working when focus is on a class without a method.
 function focusSetForCurrent(classId, methodName, depth) {
+  // Returns a set of node ids that should be visible in focus mode. Includes
+  // method nodes, the compound parents they live under, and any ext: targets
+  // they reach. If a method is given, BFS is rooted at that specific method
+  // node; otherwise we union BFS from every method node inside the class
+  // compound (so clicking a class header still shows the whole entry slice).
+  let rootIds;
   if (methodName) {
-    const entry = ENTRIES.find(e => e.classId === classId && e.methodName === methodName);
-    if (entry) return new Set([classId, ...entry.reachableClassIds]);
+    rootIds = [`${classId}.${methodName}`];
+  } else {
+    rootIds = [];
+    const c = CLASSES.find(x => x.id === classId);
+    if (c) {
+      __cmVisibleMethodsOf(c).forEach(m => rootIds.push(`${c.id}.${m.name}`));
+    }
+    if (rootIds.length === 0) rootIds = [classId];
   }
-  return bfsAtDepth(classId, depth);
+  const focus = new Set();
+  rootIds.forEach(id => {
+    const reach = bfsMethods(id, depth);
+    reach.forEach(x => focus.add(x));
+  });
+  // Promote: every visible method drags its parent compound into focus too.
+  const toAdd = new Set();
+  focus.forEach(id => {
+    const dot = id.indexOf('.');
+    if (dot > 0 && !id.startsWith('ext:')) {
+      const parent = id.slice(0, dot);
+      if (__cmNodeIds.has(parent)) toAdd.add(parent);
+    }
+  });
+  toAdd.forEach(id => focus.add(id));
+  return focus;
 }
 
 function getExtNodesInScope(focusSet) {
+  // Subset of the focus set that's external dep nodes — used to drive the
+  // "external deps in scope" chips / legend.
   const ext = new Set();
-  EDGES.forEach(e => {
-    if (e.kind !== 'external_calls') return;
-    if (typeof e.to !== 'string' || !e.to.startsWith('ext:')) return;
-    if (focusSet.has(e.from)) ext.add(e.to);
-  });
+  focusSet.forEach(id => { if (typeof id === 'string' && id.startsWith('ext:')) ext.add(id); });
   return ext;
 }
 
-// Slice 5: depth-from-focus over the forward class-to-class `calls` graph.
-// Used to drive the outline's depth badges so the user can tell at a glance
-// which classes are part of the currently focused call chain. When the focus
-// is a method, restrict BFS expansion to the method's transitive reach so the
-// badges line up with the graph's per-method subgraph instead of the broader
-// class-level fan-out.
+// Outline depth badges: for each class compound, the smallest hop count
+// (in the method graph) from any node in the current focus set. Methods of
+// the same class can lie at different depths, so we take the min. Returns a
+// Map<classId, depth>.
 function getDepthsFromFocus() {
   if (!currentFocus) return null;
-  const adj = __buildClassAdjacency();
-  const depths = new Map([[currentFocus.classId, 0]]);
-  let allowed = null;
-  if (currentFocus.methodName) {
-    const entry = ENTRIES.find(e =>
-      e.classId === currentFocus.classId && e.methodName === currentFocus.methodName);
-    if (entry) allowed = new Set([currentFocus.classId, ...entry.reachableClassIds]);
-  }
-  const queue = [[currentFocus.classId, 0]];
+  const adj = __buildMethodAdjacency();
+  const roots = currentFocus.methodName
+    ? [`${currentFocus.classId}.${currentFocus.methodName}`]
+    : (() => {
+        const c = CLASSES.find(x => x.id === currentFocus.classId);
+        return c ? __cmVisibleMethodsOf(c).map(m => `${c.id}.${m.name}`) : [currentFocus.classId];
+      })();
+  const dists = new Map();
+  const queue = [];
+  roots.forEach(r => { if (!dists.has(r)) { dists.set(r, 0); queue.push([r, 0]); } });
   while (queue.length > 0) {
-    const [cur, dist] = queue.shift();
+    const [cur, d] = queue.shift();
     for (const next of (adj.get(cur) || [])) {
-      if (allowed && !allowed.has(next)) continue;
-      if (!depths.has(next)) {
-        depths.set(next, dist + 1);
-        queue.push([next, dist + 1]);
+      if (!dists.has(next)) {
+        dists.set(next, d + 1);
+        queue.push([next, d + 1]);
       }
     }
   }
-  return depths;
+  // Collapse method-level distances to class-level (min over its methods).
+  const out = new Map();
+  dists.forEach((d, id) => {
+    let classId = id;
+    const dot = id.indexOf('.');
+    if (dot > 0 && !id.startsWith('ext:')) classId = id.slice(0, dot);
+    if (id.startsWith('ext:')) return;
+    if (!out.has(classId) || out.get(classId) > d) out.set(classId, d);
+  });
+  return out;
 }
 
 function isInFocus(nodeId) {
@@ -2121,16 +2145,20 @@ function ensureSharedness() {
 function applyFocusMask() {
   // Run after applyFilters has set per-element display from chip state.
   // Focus mask is the final override: anything outside the focus subgraph
-  // is force-hidden regardless of chip selection.
-  if (mode === 'all') return;          // Slice 4: All mode shows everything.
+  // is force-hidden regardless of chip selection. Compound parents follow
+  // their visible-child rule (a parent shows up iff any child is visible).
+  if (mode === 'all') return;
   if (!currentFocus) return;
   cy.nodes().forEach(n => {
-    // Method-child visibility is owned by applyFilters() + explode state;
-    // applyFocusMask must not stomp on that decision (would re-hide the
-    // methods of the currently-focused class).
-    if (n.hasClass('cls-method')) return;
     const id = n.id();
     if (!isInFocus(id)) n.style('display', 'none');
+  });
+  // Hide compound parents that have no visible children. Cytoscape doesn't
+  // auto-collapse an empty compound: it would render as an empty rectangle.
+  cy.nodes('.cls').forEach(p => {
+    if (p.style('display') === 'none') return;
+    const visibleChildren = p.children().filter(c => c.style('display') !== 'none');
+    if (visibleChildren.length === 0) p.style('display', 'none');
   });
   cy.edges().forEach(e => {
     const src = e.source();
@@ -2141,74 +2169,28 @@ function applyFocusMask() {
   });
 }
 
-// ---------- Method-level explode/collapse ----------
-// At most one class is exploded at a time. Explode = swap the parent's
-// multi-line label for a header-only label and let applyFilters reveal the
-// method child nodes + their outgoing per-method edges. Collapse = reverse.
-// Mode toggle and focus changes route through these so the user never sees
-// two exploded classes or a stale slim header.
-let __cmExplodedClassId = null;
-let __cmExplodedMethodName = null;
-function __cmHeaderOnlyLabel(c) {
-  const stereotype = (c.kind && c.kind !== 'class') ? `«${c.kind}»\n` : '';
-  return `${stereotype}${c.id}  ${visGlyph(c.verification)}`;
-}
-function explodeClass(classId, methodName) {
-  __cmExplodedClassId = classId;
-  __cmExplodedMethodName = methodName || null;
-  const c = CLASSES.find(x => x.id === classId);
-  if (!c) return;
-  const parent = cy.getElementById(classId);
-  if (!parent || parent.empty()) return;
-  // Lazy-mount the method children + per-method edges for this class.
-  // Keeping them out of the graph until explode time means dagre never
-  // sees them in All mode and the canonical class-level layout is
-  // unaffected.
-  const ns = __cmMethodNodesByClass.get(classId) || [];
-  const es = __cmMethodEdgesByClass.get(classId) || [];
-  if (ns.length > 0 && cy.getElementById(ns[0].data.id).empty()) {
-    cy.add(ns);
-    cy.add(es);
-  }
-  parent.addClass('exploded');
-  parent.data('label', __cmHeaderOnlyLabel(c));
-}
-function collapseExploded() {
-  if (!__cmExplodedClassId) return;
-  const id = __cmExplodedClassId;
-  const c = CLASSES.find(x => x.id === id);
-  const parent = cy.getElementById(id);
-  if (parent && !parent.empty()) {
-    parent.removeClass('exploded');
-    if (c) parent.data('label', buildClassLabel(c));
-  }
-  // Unmount the previously-added method children + their edges so the
-  // graph returns to a pure class-level view (dagre All-mode layout, focus
-  // subgraphs of other classes, etc. all see a clean topology).
-  cy.elements(`node.cls-method[ownerId = "${id}"]`).remove();
-  cy.elements(`edge.method-edge[ownerId = "${id}"]`).remove();
-  __cmExplodedClassId = null;
-  __cmExplodedMethodName = null;
-}
+// Tracks the user-selected method node id so we can paint a distinct accent
+// on it (and dim its siblings inside the same class compound). Replaces the
+// older `__cmExplodedClassId` + `__cmExplodedMethodName` pair from the
+// abandoned UML/explode pipeline.
+let __cmFocusedMethodNodeId = null;
+
 function applyMethodFocusHighlight() {
-  // After applyFilters runs, mark the focused method bright and dim its
-  // siblings + their edges. No-op for class-level focus (methodName=null).
-  cy.nodes('.cls-method').removeClass('dimmed method-focus');
-  cy.edges('.method-edge').removeClass('dimmed');
-  if (!__cmExplodedClassId || !__cmExplodedMethodName) return;
-  cy.nodes('.cls-method').forEach(n => {
+  // Paint the focus anchor + dim its compound siblings. Called after
+  // applyFilters() so it sees the latest visibility decisions.
+  cy.nodes('.method').removeClass('method-focus dimmed');
+  cy.edges().removeClass('dimmed');
+  if (!__cmFocusedMethodNodeId) return;
+  const anchor = cy.getElementById(__cmFocusedMethodNodeId);
+  if (anchor.empty()) return;
+  anchor.addClass('method-focus');
+  const parentId = anchor.data('ownerId');
+  if (!parentId) return;
+  cy.nodes('.method').forEach(n => {
+    if (n.id() === __cmFocusedMethodNodeId) return;
+    if (n.data('ownerId') !== parentId) return;
     if (n.style('display') === 'none') return;
-    if (n.data('ownerId') !== __cmExplodedClassId) return;
-    if (n.data('methodName') === __cmExplodedMethodName) {
-      n.addClass('method-focus');
-    } else {
-      n.addClass('dimmed');
-    }
-  });
-  cy.edges('.method-edge').forEach(e => {
-    if (e.style('display') === 'none') return;
-    if (e.data('ownerId') !== __cmExplodedClassId) return;
-    if (e.data('methodName') !== __cmExplodedMethodName) e.addClass('dimmed');
+    n.addClass('dimmed');
   });
 }
 
@@ -2216,40 +2198,18 @@ function layoutFocus() {
   // Re-run dagre on whatever is currently visible so the subgraph fills the
   // canvas. We reuse __cmLayoutOpts unchanged — small subgraphs render fine
   // with the existing dagre control-point routing.
-  //
-  // positionSharedRow() is intentionally NOT called here. It was designed to
-  // pin cross-entry shared classes below the main chain in All mode, but in
-  // focus mode the subgraph already isolates a single chain — pinning a
-  // shared node 90px below the rest stretches sparse subgraphs (e.g.
-  // `CaptureEndpoints.List` reaches only `EventStore`) into a near-empty
-  // canvas with the callee floating at the bottom.
   const visible = cy.elements().filter(el => el.style('display') !== 'none');
   if (visible.length === 0) return;
   visible.layout({ ...__cmLayoutOpts, fit: true, padding: 50 }).run();
 }
 
 function positionSharedRow() {
-  // Pin shared nodes to a row below the main subgraph. dagre will place them
-  // somewhere in the middle ranks by default; we override to keep the call
-  // chain visually linear.
-  const visible = cy.nodes().filter(n => n.style('display') !== 'none');
-  const shared = visible.filter(n => n.hasClass('shared-cls'));
-  if (shared.length === 0) return;
-  const nonShared = visible.difference(shared);
-  if (nonShared.length === 0) return;
-  const xs = nonShared.map(n => n.position('x'));
-  const ys = nonShared.map(n => n.position('y'));
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const maxY = Math.max(...ys);
-  const spanX = Math.max(maxX - minX, 240);
-  const targetY = maxY + 90;
-  const n = shared.length;
-  shared.forEach((node, i) => {
-    const x = n === 1 ? (minX + maxX) / 2 : minX + (spanX / (n - 1)) * i;
-    node.position({ x, y: targetY });
-  });
-  cy.fit(visible, 50);
+  // No-op stub: the previous design pinned "shared classes" (reached by
+  // ≥30% of entries) to a row below the main chain. With method-as-node
+  // compounds, the layout already lays methods left→right inside their
+  // swimlanes and dagre keeps shared callees on the right edge naturally.
+  // Kept as a hook in case slice-4 wants to bring it back at the compound
+  // level.
 }
 
 function highlightOutlineMethod(classId, methodName) {
@@ -2377,6 +2337,21 @@ const SWIMLANE_MIN_SLOT_H = 140;
 const SWIMLANE_EXT_GAP = 80;
 
 function applySwimlanes() {
+  // v4: with compound parents, dagre handles ranking and the post-process
+  // bc banding no longer maps cleanly (a class parent's y is computed from
+  // its children's bbox; setting it has no effect). Skip the banding step
+  // and only run the per-edge taxi-style swap so all-mode edges still get
+  // the orthogonal routing.
+  cy.edges().forEach(e => {
+    e.style({
+      'curve-style': 'taxi',
+      'taxi-direction': 'horizontal',
+      'taxi-turn': 30,
+      'taxi-turn-min-distance': 5,
+    });
+  });
+  return;
+  // -- Legacy class-level banding below (intentionally unreachable) --
   const visible = cy.nodes().filter(n => n.style('display') !== 'none');
   if (visible.length === 0) return;
 
@@ -2519,9 +2494,11 @@ function setMode(newMode) {
   mode = newMode;
   if (previousMode === 'all') clearSwimlanes();
   if (mode === 'all') {
-    // All-mode shows every class as a whole; restore the previously-
-    // exploded class to its full method-list label before painting.
-    collapseExploded();
+    // All-mode shows every class compound + every method node. Clear any
+    // focus accents that were lingering from a previous focus session.
+    __cmFocusedMethodNodeId = null;
+    cy.nodes('.method').removeClass('method-focus dimmed');
+    cy.edges().removeClass('dimmed');
     applyFilters();
     layoutAll();
     // Slice 5: outline drops depth badges and falls back to readingPriority
@@ -2553,16 +2530,14 @@ function applyFocusInternal(classId, methodName) {
   currentFocus = { classId, methodName };
   __cmFocusSet    = focusSetForCurrent(classId, methodName, currentDepth);
   __cmFocusExtSet = getExtNodesInScope(__cmFocusSet);
-  // Switch the explode anchor BEFORE applyFilters so its visibility pass
-  // sees the new owner. collapseExploded restores the previously-focused
-  // class's full label; explodeClass swaps the new one to a slim header.
-  collapseExploded();
-  explodeClass(classId, methodName);
+  // Per-method focus: record the focused method node id so
+  // applyMethodFocusHighlight() can paint the accent + dim siblings inside
+  // the same compound.
+  __cmFocusedMethodNodeId = methodName ? `${classId}.${methodName}` : null;
   // Chip filters first (they still apply within the focus subgraph), then
   // mask, then layout. Order matters: chip mutations call applyFilters which
   // would otherwise un-hide elements the focus mask had hidden.
   applyFilters();
-  // Highlight the focused method (or leave class-level focus bright).
   applyMethodFocusHighlight();
   layoutFocus();
   updateFocusBar();
@@ -3534,18 +3509,19 @@ function initMinimap() {
 }
 
 // ---------- Wire up ----------
+// Click on a class compound (the swimlane header / box) → select it for the
+// right-side Details pane. Doesn't move focus — that's reserved for method
+// clicks. The user can still focus on a class via the outline.
 cy.on('tap', 'node.cls', evt => selectClass(evt.target.id()));
-// External-dep nodes use the `ext` class and an `ext:<name>` id. Without
-// this handler clicking them did nothing — user reported that clicking
-// the External Deps node produced no effect in the right-hand Details pane.
+// External-dep nodes use the `ext` class and an `ext:<name>` id. Clicking
+// them populates the right-hand Details pane with the dep's metadata.
 cy.on('tap', 'node.ext', evt => {
   const id = evt.target.id();
   if (id.startsWith('ext:')) selectExternal(id.slice(4));
 });
-// Method-child nodes drive method-level focus the same way the outline's
-// per-method rows do. Tapping a sibling method in the exploded class
-// re-targets the highlight + history without leaving the class.
-cy.on('tap', 'node.cls-method', evt => {
+// Method nodes are the primary citizens of the v4 graph. Tap = set focus to
+// this method, push onto history, repaint the subgraph rooted here.
+cy.on('tap', 'node.method', evt => {
   const d = evt.target.data();
   if (d && d.ownerId && d.methodName) setFocus(d.ownerId, d.methodName);
 });
@@ -3559,22 +3535,33 @@ cy.on('tap', 'node.cls-method', evt => {
 const __cmCollapsedClasses = new Set();
 let __cmAllCollapsed = false;
 
-function __cmClassLabel(c, collapsed) {
-  if (collapsed) {
-    const n = c.methods.length;
-    return `${c.id}  ${visGlyph(c.verification)}\n— ${n} method${n === 1 ? '' : 's'} —`;
-  }
-  return buildClassLabel(c);
-}
-function __cmClassHeight(c, collapsed) {
-  if (collapsed) return 52;
-  return 32 + (Math.min(c.methods.length, 5) + (c.methods.length > 5 ? 1 : 0)) * 18;
+function __cmClassLabel(c) {
+  // Compound parent always shows the header line; the fold indicator
+  // (\u25be / \u25b8 N methods) inside the header tells the reader whether
+  // method children are visible.
+  const folded = __cmAllCollapsed || __cmCollapsedClasses.has(c.id);
+  return buildClassHeader(c, folded);
 }
 function __cmApplyNodeFold(c, collapsed) {
   const node = cy.getElementById(c.id);
   if (!node || node.empty()) return;
-  node.data('label', __cmClassLabel(c, collapsed));
-  node.data('height', __cmClassHeight(c, collapsed));
+  // Update the header label so the chevron flips between \u25be and \u25b8.
+  node.data('label', __cmClassLabel(c));
+  // Toggle visibility of the compound's method children. Edges with a
+  // hidden endpoint inherit the hide via applyFilters' visibility sweep
+  // (run by the caller via __cmRerunLayout \u2192 applyFilters chain).
+  node.children().forEach(child => {
+    if (!child.hasClass('method')) return;
+    child.style('display', collapsed ? 'none' : 'element');
+  });
+  // Re-evaluate edge visibility now that some method endpoints flipped.
+  cy.edges().forEach(e => {
+    const src = e.source();
+    const tgt = e.target();
+    if (src.style('display') === 'none' || tgt.style('display') === 'none') {
+      e.style('display', 'none');
+    }
+  });
 }
 function __cmRerunLayout() {
   cy.layout(__cmLayoutOpts).run();
@@ -3734,6 +3721,9 @@ function applyOutlineFilters() {
   }
 }
 function applyFilters() {
+  // Compound parents (class swimlanes) get the bc / hide-read / unverified /
+  // search filters applied directly. Their visibility is the gate for their
+  // method children — those don't get filtered independently in slice 1.
   cy.nodes('.cls').forEach(n => {
     const c = CLASSES.find(x => x.id === n.id());
     if (!c) { n.style('display', 'none'); return; }
@@ -3742,8 +3732,21 @@ function applyFilters() {
     if (filterState.hideRead && c.readState === 'read') show = false;
     if (filterState.onlyUnverified && c.verification === 'verified') show = false;
     if (filterState.search && !matchesSearch(c, filterState.search)) show = false;
+    // Honor the manual fold state from window.__codemapCollapse.toggleOne /
+    // .toggleAll — those hide method children directly, but don't touch the
+    // parent. Nothing else to do here.
     n.style('display', show ? 'element' : 'none');
   });
+  // Method children inherit their compound's visibility. A child can also be
+  // independently hidden by the fold mechanism (display:'none' set by
+  // __cmApplyNodeFold); we re-evaluate that branch instead of stomping it.
+  cy.nodes('.method').forEach(n => {
+    const parent = cy.getElementById(n.data('ownerId'));
+    const parentHidden = !parent || parent.empty() || parent.style('display') === 'none';
+    const folded = __cmCollapsedClasses.has(n.data('ownerId')) || __cmAllCollapsed;
+    n.style('display', (parentHidden || folded) ? 'none' : 'element');
+  });
+  // External-dep nodes get the hide-external chip + the search filter.
   cy.nodes('.ext').forEach(n => {
     let show = !filterState.hideExternal;
     if (show && filterState.search) {
@@ -3752,30 +3755,13 @@ function applyFilters() {
     }
     n.style('display', show ? 'element' : 'none');
   });
-  // Method-child nodes are only present in the graph between
-  // explodeClass() and collapseExploded(); when they exist their owner is
-  // by construction the currently-exploded class, so they should follow
-  // their parent's display. If the chip filter hides the parent, hide the
-  // children too — otherwise let them render.
-  cy.nodes('.cls-method').forEach(n => {
-    const parent = cy.getElementById(n.data('ownerId'));
-    const hide = !parent || parent.empty() || parent.style('display') === 'none';
-    n.style('display', hide ? 'none' : 'element');
-  });
-  // Edges: hide whenever either endpoint is hidden, so the graph never shows
-  // a dangling edge into nowhere.
+  // Edges: hide whenever either endpoint is hidden so the graph never shows
+  // a dangling arrow into nowhere.
   cy.edges().forEach(e => {
     const src = e.source().style('display') !== 'none';
     const tgt = e.target().style('display') !== 'none';
     let show = src && tgt;
     if (filterState.hideExternal && e.data('kind') === 'external_calls') show = false;
-    // Suppress the class-level outgoing edges from the exploded class —
-    // they are already represented by the per-method edges, drawing both
-    // would double-stroke each arrow leaving the focused class.
-    if (show && __cmExplodedClassId && !e.hasClass('method-edge')
-        && e.source().id() === __cmExplodedClassId) {
-      show = false;
-    }
     e.style('display', show ? 'element' : 'none');
   });
   // Slice 3: focus mask runs last so the focus subgraph wins over chip

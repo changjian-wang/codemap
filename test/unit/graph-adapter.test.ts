@@ -238,7 +238,7 @@ describe('focus-mode metadata (Slice 1)', () => {
   // Minimal CodeNode factory; tests below opt-in to isEntry by spreading.
   const mkNode = (
     id: string,
-    overrides: Partial<{ isEntry: boolean; methods: { name: string; signature: string; line: number; risks: string[]; intent?: string }[] }> = {},
+    overrides: Partial<{ isEntry: boolean; methods: { name: string; signature: string; line: number; risks: string[]; intent?: string; visibility?: 'public' | 'private' | 'protected' | 'internal' }[] }> = {},
   ) => ({
     id,
     kind: 'class' as const,
@@ -301,6 +301,44 @@ describe('focus-mode metadata (Slice 1)', () => {
     expect(out.entries[1]!.methodName).toBe('listAll');
     expect(out.entries[1]!.risks).toEqual(['security']);
     expect(out.entries[1]!.intent).toBe(''); // missing → ''
+  });
+
+  it('hides private methods from the outline / entries list (graph still keeps them)', () => {
+    // Reading-order semantics: the outline should list user-facing entry
+    // methods only. Private helpers are dispatch targets — they belong on
+    // the graph as method-child nodes (so `Exchange → HandlePassword`
+    // edges render) but never as standalone reading entries. Mirrors the
+    // AuthController OAuth dispatch where `Exchange` fans out to four
+    // private `Handle*GrantAsync` helpers; the helpers must not pollute
+    // the navigation panel.
+    const g: CodeMapGraph = {
+      rootRequest: '',
+      scope: '',
+      nodes: {
+        AuthController: mkNode('AuthController', {
+          isEntry: true,
+          methods: [
+            { name: 'Exchange', signature: '()', line: 35, risks: [], visibility: 'public' },
+            { name: 'Authorize', signature: '()', line: 76, risks: [], visibility: 'public' },
+            { name: 'HandlePasswordGrantAsync', signature: '(req)', line: 208, risks: [], visibility: 'private' },
+            { name: 'GetDestinations', signature: '(claim)', line: 400, risks: [], visibility: 'private' },
+            // Unknown visibility (LLM didn't tag) → must still show, so
+            // non-C# files / older prompt outputs don't regress.
+            { name: 'LegacyMethod', signature: '()', line: 500, risks: [] },
+          ],
+        }),
+      },
+      edges: [],
+      externalDeps: [],
+    };
+    const out = adaptGraphForMockup(g);
+    // Outline contains only non-private (3 methods, not 5):
+    expect(out.entries.map(e => e.methodName)).toEqual(['Exchange', 'Authorize', 'LegacyMethod']);
+    // Graph still has all 5 methods on the class node — private helpers
+    // are dispatch targets, not invisible.
+    expect(out.classes[0]!.methods.map(m => m.name)).toEqual([
+      'Exchange', 'Authorize', 'HandlePasswordGrantAsync', 'GetDestinations', 'LegacyMethod',
+    ]);
   });
 
   it('walks class-to-class calls edges (BFS reachability)', () => {

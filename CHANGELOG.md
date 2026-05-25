@@ -66,6 +66,24 @@ which is consumed both standalone and by the webview panel.
   L-shaped paths at render time.
 
 ### Changed
+- **`PROMPT_VERSION` → v3.10. Method `visibility` taught + outline filter.**
+  Each method block now carries a `visibility` field (`public` /
+  `private` / `protected` / `internal`) taken verbatim from the source
+  modifier (Python `_`-prefixed → `private`; Go capitalization-based;
+  TS / Kotlin default `public`; C# class-member default `private`; Java
+  default `internal`). The reading-order panel (`READING ORDER`)
+  filters out `private` entries when building per-class outline rows —
+  private helpers stay in the graph as method-child nodes (so
+  `Exchange → HandlePasswordGrantAsync` edges still render) but no
+  longer pose as user-facing entry points in the navigation list.
+  Closes the v3.9 outline regression where `AuthController` showed all
+  9 methods including 4 `Handle*GrantAsync` private dispatch helpers
+  and the static `GetDestinations` helper, instead of just the 4
+  public OAuth/OIDC actions. Unknown / missing `visibility` is
+  treated as non-private so non-C# files and older cached outputs
+  don't silently lose methods. Cache key includes `PROMPT_VERSION`,
+  so every previously analyzed file invalidates and re-runs against
+  v3.10 on next request.
 - **`PROMPT_VERSION` → v3.9. Method-level `calls` accept three forms.**
   The analyzer prompt now teaches the LLM to emit method-level call
   targets as `<Class>.<Method>` (cross-class with known callee),

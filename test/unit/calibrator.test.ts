@@ -284,6 +284,7 @@ describe('Calibrator', () => {
             name: 'Exchange',
             signature: '()',
             line: 36,
+            visibility: 'public',
             calls: [
               'HandlePasswordGrantAsync',                              // bare sibling
               'AuthController.HandleClientCredentialsGrantAsync',      // explicit Class.Method
@@ -291,18 +292,36 @@ describe('Calibrator', () => {
               'OpenIddictRequest',                                     // bare class (type dep)
             ],
           },
+          {
+            name: 'HandlePasswordGrantAsync',
+            signature: '(request)',
+            line: 208,
+            visibility: 'private',
+            calls: ['IUserAuthenticationService.AuthenticateAsync'],
+          },
+          {
+            name: 'WeirdHelper',
+            signature: '()',
+            line: 250,
+            visibility: 'bogus-modifier',  // invalid → dropped
+          },
         ],
       },
       file: 'a.cs',
       boundedContext: 'host',
     });
-    const m = out!.node.methods[0]!;
-    expect(m.calls).toEqual([
+    const ms = out!.node.methods;
+    expect(ms[0]!.calls).toEqual([
       'HandlePasswordGrantAsync',
       'AuthController.HandleClientCredentialsGrantAsync',
       'IUserAuthenticationService.AuthenticateAsync',
       'OpenIddictRequest',
     ]);
+    expect(ms[0]!.visibility).toBe('public');
+    expect(ms[1]!.visibility).toBe('private');
+    // Invalid modifiers are dropped to undefined rather than passed through
+    // verbatim — the outline filter only triggers on the literal `private`.
+    expect(ms[2]!.visibility).toBeUndefined();
   });
 
   it('strips generic parameters when matching node_id (Foo<T> → Foo)', async () => {

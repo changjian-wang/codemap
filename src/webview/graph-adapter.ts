@@ -44,6 +44,14 @@ export interface MockupClass {
     intent?: string;
     calls?: string[];
     externalCalls?: string[];
+    /**
+     * Source-level access modifier (`public` / `private` / `protected` /
+     * `internal`). Drives the outline / reading-order filter — entries
+     * marked `private` are internal helpers and never become user-facing
+     * reading entries. Undefined when the LLM could not determine the
+     * modifier; the outline filter treats unknown as non-private.
+     */
+    visibility?: string;
     /** Verbatim source-doc comment for the method. */
     docComment?: string;
   }[];
@@ -236,6 +244,7 @@ export function adaptGraphForMockup(
       intent: m.intent,
       calls: m.calls,
       externalCalls: m.externalCalls,
+      visibility: m.visibility,
       docComment: m.docComment,
     })),
     risks: n.risks ?? [],
@@ -336,6 +345,15 @@ export function computeFocusModeMetadata(
   for (const c of classes) {
     if (!c.isEntry) continue;
     for (const m of c.methods) {
+      // Outline / reading-order filter: skip private helpers. They show
+      // up as method-child nodes in the graph (so `Exchange →
+      // HandlePasswordGrantAsync` edges still render) but they are not
+      // user-facing reading entries — a reader picks `Exchange` as the
+      // entry point and follows it inward, not the four private
+      // dispatch handlers in isolation. Unknown visibility (LLM did not
+      // emit) is treated as non-private to avoid hiding methods on a
+      // language / file the LLM couldn't classify.
+      if (m.visibility === 'private') continue;
       // Per-method BFS: seed with the method's own `calls` (LLM-reported
       // class names, narrowed to valid class ids) and expand through the
       // shared class-level adjacency. Falling back to the class-level

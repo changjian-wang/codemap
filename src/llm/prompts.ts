@@ -47,8 +47,16 @@ import { ENTRY_GUIDANCE_SECTION } from './entry-detection';
  *          `HandleXxxGrantAsync` helpers) becomes visible in the graph.
  *          The webview's resolver already routed all three forms; this
  *          change is purely about teaching the LLM to emit them.
+ *   v3.10 — each method now carries a `visibility` field
+ *          (`public` / `private` / `protected` / `internal`) taken
+ *          verbatim from the source modifier. Drives the outline /
+ *          reading-order filter: `private` helpers stay in the graph as
+ *          dispatch targets but no longer pollute the reading panel as
+ *          fake entry points (closes the v3.9 outline regression where
+ *          the four `Handle*GrantAsync` helpers showed up as siblings
+ *          of `Exchange` in the AuthController reading list).
  */
-export const PROMPT_VERSION = 'v3.9';
+export const PROMPT_VERSION = 'v3.10';
 
 export const SYSTEM_PROMPT = `You are CodeMap's static-analysis assistant. Read the source file given by
 the user and emit one structured metadata block per top-level type
@@ -95,6 +103,7 @@ For every in-scope type defined in the file, output exactly one fenced block:
       "name": "<MethodName or EnumMember>",
       "signature": "(<short param list>)",
       "line": <int>,
+      "visibility": "public" | "private" | "protected" | "internal",
       "intent": "<optional: ≤ 80 chars method intent>",
       "calls": ["<TargetClass>.<TargetMethod>" | "<SameClassSiblingMethod>" | "<TargetClass>", ...],
       "external_calls": ["<cross-file or cross-package identifier>", ...],
@@ -217,6 +226,35 @@ Two placements have slightly different shapes:
    (including attributes / decorators).
 2. \`endLine\` = the line containing the closing \`}\`.
 3. Lines are 1-based.
+
+### \`visibility\` (per method)
+1. Emit the source-level access modifier **verbatim**. The four valid
+   values are \`public\`, \`private\`, \`protected\`, \`internal\`.
+2. Language defaults when no modifier is written in source:
+   - **C# class members**: default is \`private\`. Only emit \`public\` /
+     \`protected\` / \`internal\` when the keyword actually appears.
+   - **Java class members**: default is package-private — emit
+     \`internal\` as the closest match.
+   - **TypeScript / JavaScript class members**: default is \`public\`.
+     Emit \`private\` only when the source uses the \`private\` keyword
+     or the \`#\` prefix.
+   - **Python**: convention-based. Methods whose name starts with a
+     single underscore (\`_foo\`) or double underscore (\`__bar\`) are
+     \`private\`. Everything else is \`public\`.
+   - **Go**: capitalization-based. Lower-case method names
+     (\`buildClient\`) are \`private\`; capitalized
+     (\`BuildClient\`) are \`public\`.
+   - **Kotlin**: default is \`public\`.
+3. This field drives the outline / reading-order filter. Private
+   methods stay in the graph (they're real call targets) but are
+   hidden from the reading list — if you mis-label a public entry
+   point as private, it disappears from the navigation panel. When in
+   doubt for an obvious entry method (HTTP action with a route
+   attribute, CLI \`Main\`, public exported function), emit \`public\`.
+4. Required field. If you genuinely cannot tell (e.g. an anonymous
+   inner function with no surrounding class), omit the field entirely
+   rather than guessing — the calibrator treats absent \`visibility\`
+   as non-private and the method stays in the outline.
 
 ### \`node_id\`
 Use the exact class name as it appears in source. Generic parameters dropped

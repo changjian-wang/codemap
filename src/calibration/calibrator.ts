@@ -6,6 +6,7 @@ import type {
   MethodInfo,
   RiskType,
   VerificationState,
+  Visibility,
 } from '../shared/types';
 import type { SymbolProvider, SymbolHit } from './symbol-provider';
 
@@ -316,17 +317,24 @@ export class Calibrator {
     }
 
     // ---- 4. Build methods (no per-method calibration in W2; that's W3). ----
-    const methods: MethodInfo[] = asArray(data, 'methods').map(m => ({
-      name: asString(m, 'name') ?? '<unknown>',
-      signature: asString(m, 'signature') ?? '()',
-      line: asNumber(m, 'line') ?? 0,
-      intent: asString(m, 'intent'),
-      risks: parseRiskTags(asArray(m, 'risks')),
-      calls: asArray(m, 'calls').filter((x): x is string => typeof x === 'string'),
-      externalCalls: asArray(m, 'external_calls').filter(
-        (x): x is string => typeof x === 'string',
-      ),
-    }));
+    const VALID_VISIBILITY = new Set<Visibility>(['public', 'private', 'protected', 'internal']);
+    const methods: MethodInfo[] = asArray(data, 'methods').map(m => {
+      const visRaw = asString(m, 'visibility');
+      const visibility: Visibility | undefined =
+        visRaw && VALID_VISIBILITY.has(visRaw as Visibility) ? (visRaw as Visibility) : undefined;
+      return {
+        name: asString(m, 'name') ?? '<unknown>',
+        signature: asString(m, 'signature') ?? '()',
+        line: asNumber(m, 'line') ?? 0,
+        intent: asString(m, 'intent'),
+        risks: parseRiskTags(asArray(m, 'risks')),
+        calls: asArray(m, 'calls').filter((x): x is string => typeof x === 'string'),
+        externalCalls: asArray(m, 'external_calls').filter(
+          (x): x is string => typeof x === 'string',
+        ),
+        visibility,
+      };
+    });
 
     // ---- 5. Top-level fields with defaults. ----
     // Accept the four in-scope kinds; anything else (e.g. a hallucinated

@@ -54,6 +54,18 @@ export type RiskType =
   | 'high_coupling'
   | 'missing_test';
 
+/**
+ * Source-level access modifier for a method, taken verbatim from the
+ * declaration (`public` / `private` / `protected` / `internal` in C# /
+ * Java / TS; Python's leading-underscore convention maps to `private`;
+ * Go's capitalization maps to `public` / `private`). Drives the
+ * outline / reading-order filter — entries marked `private` are
+ * internal helpers and never become user-facing reading entries.
+ * Undefined when the LLM could not determine the modifier; treated as
+ * non-private (i.e. shown in the outline).
+ */
+export type Visibility = 'public' | 'private' | 'protected' | 'internal';
+
 export interface MethodInfo {
   name: string;
   signature: string;
@@ -63,6 +75,12 @@ export interface MethodInfo {
   calls?: string[];
   externalCalls?: string[];
   readState?: 'unread' | 'read';
+  /**
+   * Source-level access modifier (see {@link Visibility}). Undefined
+   * means "unknown / not provided" — the outline filter treats unknown
+   * as non-private.
+   */
+  visibility?: Visibility;
   /**
    * Verbatim leading documentation comment (Python docstring, C# `///`,
    * JSDoc / TSDoc) extracted from source. Empty/unset when the symbol has

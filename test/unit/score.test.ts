@@ -322,4 +322,76 @@ describe('scoreGraph', () => {
       expect(r.diff.extraEdges).toEqual([]);
     });
   });
+
+  describe('ext: → workspace-node canonicalisation (v0.0.8 — aggregator promotion)', () => {
+    it('collapses ext:Foo (golden) ↔ Foo (actual) when Foo is a workspace node', () => {
+      // v0.0.8 aggregator promotes `ext:Foo → calls Foo` when LSP
+      // resolves Foo to a workspace symbol. An older baseline that
+      // still has `ext:Foo` must match the new internal `Foo` edge,
+      // otherwise the scorer double-counts every promoted edge.
+      const actual = G(
+        [N('CaptureEndpoints', 'cap.ts'), N('GetCaptureJobHandler', 'gch.ts')],
+        [{ from: 'CaptureEndpoints', to: 'GetCaptureJobHandler' }],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['CaptureEndpoints', 'GetCaptureJobHandler'],
+        edges: [
+          { from: 'CaptureEndpoints', to: 'ext:GetCaptureJobHandler', kind: 'external_calls' },
+        ],
+      };
+      const r = scoreGraph(actual, golden);
+      expect(r.edges.precision).toBe(1);
+      expect(r.edges.recall).toBe(1);
+      expect(r.diff.missingEdges).toEqual([]);
+      expect(r.diff.extraEdges).toEqual([]);
+    });
+
+    it('collapses ext:Lumen.Modules.X.Foo (golden FQN) ↔ Foo (actual) by last-segment match', () => {
+      // The aggregator yields a bare short id (`AssociationScoring`)
+      // but an older baseline may carry the namespace-qualified `ext:`
+      // form. Pass 1 should match by last dot-segment when the bare
+      // form is a workspace node.
+      const actual = G(
+        [N('AssociationEvalRunner', 'r.ts'), N('AssociationScoring', 's.ts')],
+        [{ from: 'AssociationEvalRunner', to: 'AssociationScoring' }],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['AssociationEvalRunner', 'AssociationScoring'],
+        edges: [
+          {
+            from: 'AssociationEvalRunner',
+            to: 'ext:Lumen.Modules.Connect.Features.Association.AssociationScoring',
+            kind: 'external_calls',
+          },
+        ],
+      };
+      const r = scoreGraph(actual, golden);
+      expect(r.edges.precision).toBe(1);
+      expect(r.edges.recall).toBe(1);
+    });
+
+    it('does not collapse ext:Foo when Foo is NOT a workspace node', () => {
+      // True external deps (NuGet, BCL) must stay distinct from
+      // workspace edges. `Vector` is not a node here, so `ext:Vector`
+      // is preserved.
+      const actual = G(
+        [N('A', 'a.ts')],
+        [
+          { from: 'A', to: 'ext:Vector' },
+          { from: 'A', to: 'B' },
+        ],
+      );
+      const golden: GoldenSample = {
+        name: 't',
+        nodes: ['A'],
+        edges: [{ from: 'A', to: 'ext:Vector', kind: 'external_calls' }],
+      };
+      const r = scoreGraph(actual, golden);
+      // ext:Vector matches on both sides; A→B is extra.
+      expect(r.edges.recall).toBe(1);
+      expect(r.diff.extraEdges).toEqual([{ from: 'A', to: 'B' }]);
+    });
+  });
 });

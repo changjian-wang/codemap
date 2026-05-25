@@ -77,35 +77,75 @@ function inScope(file: string, scopeFiles: string[] | undefined): boolean {
  * fully-qualified spellings of the same external symbol collapse to one
  * key before set intersection.
  *
- * Motivation (v0.0.7): the LLM sometimes emits bare `ext:AssemblyMarker`
- * while the golden carries the namespace-qualified
- * `ext:Lumen.Modules.Capture.AssemblyMarker` (or vice versa). Without
- * normalisation the same logical dependency shows up as one missing edge
- * plus one extra edge, double-counting against both precision and recall.
+ * Two collapses are performed:
  *
- * The rule is deliberately narrow: two `ext:` targets alias iff they
- * share the same final dot-separated segment AND at least one side has
- * no dots. The longest form in the union (golden ∪ actual, post
- * `ignoreEdgeToPrefixes` filter) wins as the canonical spelling; ties
- * break lexicographically for determinism. Non-`ext:` targets pass
- * through untouched.
+ * 1. **`ext:` → in-graph node** (v0.0.8). If the workspace owns a node
+ *    whose id equals the bare form (or the last dot-segment of the FQN)
+ *    of an `ext:` target, collapse the `ext:` form onto that node id.
+ *    Motivation: the aggregator now promotes `ext:Foo → calls Foo` when
+ *    it can resolve the symbol via LSP, so an older baseline with
+ *    `ext:Foo` and a newer run with bare `Foo` would otherwise be
+ *    double-counted as "one missing + one extra" against the same
+ *    logical edge.
  *
- * Known limitation: if two distinct namespaces legitimately export the
- * same type name (e.g. golden has both `ext:Foo.Marker` and
- * `ext:Bar.Marker` and actual has bare `ext:Marker`), the bare form
- * collapses arbitrarily onto whichever FQN sorts first. In practice the
- * lumen golden does not exhibit this and we accept the artefact rather
- * than gate matching on a per-namespace alias table.
+ * 2. **bare ↔ FQN aliasing inside `ext:`** (v0.0.7). The LLM sometimes
+ *    emits bare `ext:AssemblyMarker` while the golden carries the
+ *    namespace-qualified `ext:Lumen.Modules.Capture.AssemblyMarker` (or
+ *    vice versa). Targets share a bucket iff they have the same final
+ *    dot-separated segment AND at least one side has no dots. The
+ *    longest form in the union (golden ∪ actual, post
+ *    `ignoreEdgeToPrefixes` filter) wins as the canonical spelling;
+ *    ties break lexicographically for determinism.
+ *
+ * Non-`ext:` targets pass through untouched.
+ *
+ * Known limitations:
+ * - If two distinct namespaces legitimately export the same type name
+ *   (e.g. golden has both `ext:Foo.Marker` and `ext:Bar.Marker` and
+ *   actual has bare `ext:Marker`), the bare form collapses arbitrarily
+ *   onto whichever FQN sorts first.
+ * - If a true external dep shares its short name with a workspace
+ *   class, pass-1 collapse will mis-merge them. This mirrors the
+ *   ambiguity the aggregator's own LSP-promotion path accepts; in
+ *   practice we treat workspace ownership as the stronger signal.
  */
-function buildExtCanonicalMap(targets: Iterable<string>): Map<string, string> {
+function buildExtCanonicalMap(
+  targets: Iterable<string>,
+  knownNodeIds: Set<string>,
+): Map<string, string> {
   const exts = new Set<string>();
   for (const t of targets) {
     if (t.startsWith('ext:')) exts.add(t);
   }
-  // Group by last dot-separated segment of the part after `ext:`.
+  const result = new Map<string, string>();
+
+  // Pass 1: `ext:X` collapses onto an in-graph node id when X (or X's
+  // last dot-segment) matches. Skip targets that are already non-`ext:`
+  // — those would only land here if the caller passed nodes prefixed
+  // with `ext:`, which workspace ids never are.
+  const collapsedToNode = new Set<string>();
+  for (const t of exts) {
+    const bare = t.slice(4);
+    if (knownNodeIds.has(bare)) {
+      result.set(t, bare);
+      collapsedToNode.add(t);
+      continue;
+    }
+    if (bare.includes('.')) {
+      const last = bare.split('.').pop() as string;
+      if (knownNodeIds.has(last)) {
+        result.set(t, last);
+        collapsedToNode.add(t);
+      }
+    }
+  }
+
+  // Pass 2: bare ↔ FQN aliasing for whatever survives as a true external
+  // dep (i.e. didn't collapse to a workspace node in pass 1).
   const byLastSegment = new Map<string, string[]>();
   for (const t of exts) {
-    const name = t.slice(4); // drop "ext:"
+    if (collapsedToNode.has(t)) continue;
+    const name = t.slice(4);
     const last = name.includes('.') ? (name.split('.').pop() as string) : name;
     let bucket = byLastSegment.get(last);
     if (!bucket) {
@@ -114,7 +154,6 @@ function buildExtCanonicalMap(targets: Iterable<string>): Map<string, string> {
     }
     bucket.push(t);
   }
-  const result = new Map<string, string>();
   for (const [, bucket] of byLastSegment) {
     // Only collapse when at least one bare form exists in the bucket.
     // Buckets that are all-FQN are left alone — different namespaces
@@ -158,13 +197,15 @@ export function scoreGraph(actual: CodeMapGraph, golden: GoldenSample): ScoreRes
   );
   const goldenEdgesInScope = golden.edges.filter(e => !isIgnoredEdge(e));
 
-  // Canonicalise `ext:` targets so bare ↔ FQN spellings of the same
-  // external symbol collapse to one key. See `buildExtCanonicalMap`.
+  // Canonicalise `ext:` targets so (a) bare ↔ FQN spellings of the same
+  // external symbol and (b) `ext:Foo` ↔ workspace node `Foo` collapse to
+  // one key. See `buildExtCanonicalMap`.
   const allTargets: string[] = [
     ...actualEdgesInScope.map(e => e.to),
     ...goldenEdgesInScope.map(e => e.to),
   ];
-  const canonical = buildExtCanonicalMap(allTargets);
+  const allNodeIds = new Set<string>([...actualNodeIds, ...expectedNodeIds]);
+  const canonical = buildExtCanonicalMap(allTargets, allNodeIds);
   const canonTo = (to: string): string => canonical.get(to) ?? to;
   const edgeKey = (e: { from: string; to: string }): string => `${e.from}|${canonTo(e.to)}`;
 

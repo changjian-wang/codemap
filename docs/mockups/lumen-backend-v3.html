@@ -1598,6 +1598,86 @@ const edges = EDGES.map((e, i) => ({
   classes: `${e.kind}${e.verified ? '' : ' unverified-edge'}`
 }));
 
+// ---------- Method-level explode prep ----------
+// Each class also contributes one hidden compound-child node per method,
+// plus per-method outgoing edges sourced from MethodInfo.calls /
+// externalCalls. They render only when the owning class is "exploded" by
+// explodeClass(); otherwise applyFilters keeps them display:'none' and the
+// class-level edges carry the call structure. The data is already captured
+// per-method by the calibrator + aggregator pipeline — this is purely a
+// view-layer transform so per-method call chains become visible inside the
+// focused class instead of being collapsed onto a single class→X arrow.
+function __cmResolveCallTarget(raw, ownerClassId) {
+  if (typeof raw !== 'string' || !raw) return null;
+  // LLM emits either "Class" or "Class.Method" in MethodInfo.calls. Strip
+  // method-tail; the class id is what's known to the graph.
+  const className = raw.split('.')[0];
+  if (!className) return null;
+  // Skip self-class edges: a method-to-own-class arrow inside the same
+  // compound parent reads as a broken loop in dagre layout.
+  if (className === ownerClassId) return null;
+  if (CLASSES.some(c => c.id === className)) return className;
+  return null;
+}
+function __cmResolveExternalTarget(raw) {
+  if (typeof raw !== 'string' || !raw) return null;
+  const direct = 'ext:' + raw;
+  if (EXTERNAL_DEPS.some(d => 'ext:' + d.name === direct)) return direct;
+  // Aggregator fallback: a dotted external like Microsoft.Foo.Bar.Baz
+  // is recorded under its last segment in EXTERNAL_DEPS.
+  const last = raw.split('.').pop();
+  if (last && EXTERNAL_DEPS.some(d => d.name === last)) return 'ext:' + last;
+  return null;
+}
+const __cmMethodNodes = [];
+const __cmMethodEdges = [];
+CLASSES.forEach(c => {
+  // Same constructor / enum-member rule as buildClassLabel so the exploded
+  // view matches what the user saw on the class card.
+  const isMemberOnly = c.kind === 'enum';
+  const visible = isMemberOnly ? c.methods : c.methods.filter(m => m.name !== c.id);
+  visible.forEach(m => {
+    const mid = `${c.id}::${m.name}`;
+    const riskMark = (m.risks && m.risks.length) ? ' ●' : '';
+    __cmMethodNodes.push({
+      data: {
+        id: mid,
+        parent: c.id,
+        ownerId: c.id,
+        methodName: m.name,
+        label: isMemberOnly ? `· ${m.name}${riskMark}` : `+ ${m.name}()${riskMark}`,
+      },
+      classes: `cls-method bc-${c.bc} v-${c.verification} r-${m.read ? 'read' : 'unread'}`,
+    });
+    (m.calls || []).forEach((t, ti) => {
+      const target = __cmResolveCallTarget(t, c.id);
+      if (!target) return;
+      __cmMethodEdges.push({
+        data: {
+          id: `me::${c.id}::${m.name}::c${ti}`,
+          source: mid, target, kind: 'calls',
+          ownerId: c.id, methodName: m.name,
+        },
+        classes: 'calls method-edge',
+      });
+    });
+    (m.externalCalls || []).forEach((t, ti) => {
+      const target = __cmResolveExternalTarget(t);
+      if (!target) return;
+      __cmMethodEdges.push({
+        data: {
+          id: `me::${c.id}::${m.name}::x${ti}`,
+          source: mid, target, kind: 'external_calls',
+          ownerId: c.id, methodName: m.name,
+        },
+        classes: 'external_calls method-edge',
+      });
+    });
+  });
+});
+nodes.push(...__cmMethodNodes);
+edges.push(...__cmMethodEdges);
+
 // Layout config is kept on a module-level var so the collapse helpers
 // below can re-run the exact same layout after mutating node sizes.
 const __cmLayoutOpts = {
@@ -1806,6 +1886,98 @@ const cy = cytoscape({
         'opacity': 1,
       }
     },
+    // ---------- Method-level explode (compound children + per-method edges) ----------
+    {
+      // A class becomes a compound parent when its method children are
+      // visible. Slim the parent's own label down to a top header, give it
+      // breathing room for the row of method boxes below.
+      selector: 'node.cls.exploded',
+      style: {
+        'text-valign': 'top',
+        'text-halign': 'center',
+        'text-margin-y': 4,
+        'padding': 14,
+        'background-opacity': 0.6,
+        'font-weight': 'bold',
+      }
+    },
+    {
+      // Compact method box. Inherits bc/verification accents from its own
+      // .bc-* / .v-* classes (set at element-creation time) so the row of
+      // methods carries the same visual identity as the class header.
+      selector: 'node.cls-method',
+      style: {
+        'shape': 'round-rectangle',
+        'background-color': '#2d2d30',
+        'background-opacity': 1,
+        'border-width': 1,
+        'border-color': '#3c3c3c',
+        'border-style': 'solid',
+        'label': 'data(label)',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'color': '#d4d4d4',
+        'font-family': 'Consolas, "Cascadia Code", monospace',
+        'font-size': 10,
+        'width': 'label',
+        'height': 22,
+        'padding': 6,
+        'text-max-width': 220,
+      }
+    },
+    {
+      selector: 'node.cls-method.v-partial',
+      style: { 'border-style': 'dashed', 'border-color': '#d19a66' }
+    },
+    {
+      selector: 'node.cls-method.v-unverified',
+      style: { 'border-style': 'dotted', 'border-color': '#5c5c5c', 'opacity': 0.85 }
+    },
+    {
+      selector: 'node.cls-method.r-read',
+      style: { 'opacity': 0.55 }
+    },
+    {
+      // Highlight the specific method that focus is currently anchored on.
+      // Distinct accent so users can tell at a glance "this row drives the
+      // arrows leaving the box".
+      selector: 'node.cls-method.method-focus',
+      style: {
+        'border-color': '#007acc',
+        'border-width': 2,
+        'background-color': '#264f78',
+        'color': '#ffffff',
+      }
+    },
+    {
+      selector: 'node.cls-method.dimmed',
+      style: { 'opacity': 0.25 }
+    },
+    {
+      // Per-method outgoing edges. Curve-style/control-points inherited via
+      // selector compounding — these properties layered on top of edge.calls
+      // / edge.external_calls. Distinct hue separates them from class-level
+      // arrows when both appear during transition frames.
+      selector: 'edge.method-edge',
+      style: {
+        'line-color': '#c586c0',
+        'target-arrow-color': '#c586c0',
+        'width': 1.3,
+        'opacity': 0.85,
+      }
+    },
+    {
+      selector: 'edge.method-edge.external_calls',
+      style: {
+        'line-color': '#56b6c2',
+        'target-arrow-color': '#56b6c2',
+        'line-style': 'dashed',
+      }
+    },
+    {
+      selector: 'edge.method-edge.dimmed',
+      style: { 'opacity': 0.12 }
+    },
   ]
 });
 
@@ -1942,6 +2114,10 @@ function applyFocusMask() {
   if (mode === 'all') return;          // Slice 4: All mode shows everything.
   if (!currentFocus) return;
   cy.nodes().forEach(n => {
+    // Method-child visibility is owned by applyFilters() + explode state;
+    // applyFocusMask must not stomp on that decision (would re-hide the
+    // methods of the currently-focused class).
+    if (n.hasClass('cls-method')) return;
     const id = n.id();
     if (!isInFocus(id)) n.style('display', 'none');
   });
@@ -1951,6 +2127,63 @@ function applyFocusMask() {
     if (src.style('display') === 'none' || tgt.style('display') === 'none') {
       e.style('display', 'none');
     }
+  });
+}
+
+// ---------- Method-level explode/collapse ----------
+// At most one class is exploded at a time. Explode = swap the parent's
+// multi-line label for a header-only label and let applyFilters reveal the
+// method child nodes + their outgoing per-method edges. Collapse = reverse.
+// Mode toggle and focus changes route through these so the user never sees
+// two exploded classes or a stale slim header.
+let __cmExplodedClassId = null;
+let __cmExplodedMethodName = null;
+function __cmHeaderOnlyLabel(c) {
+  const stereotype = (c.kind && c.kind !== 'class') ? `«${c.kind}»\n` : '';
+  return `${stereotype}${c.id}  ${visGlyph(c.verification)}`;
+}
+function explodeClass(classId, methodName) {
+  __cmExplodedClassId = classId;
+  __cmExplodedMethodName = methodName || null;
+  const c = CLASSES.find(x => x.id === classId);
+  if (!c) return;
+  const parent = cy.getElementById(classId);
+  if (!parent || parent.empty()) return;
+  parent.addClass('exploded');
+  parent.data('label', __cmHeaderOnlyLabel(c));
+}
+function collapseExploded() {
+  if (!__cmExplodedClassId) return;
+  const c = CLASSES.find(x => x.id === __cmExplodedClassId);
+  const parent = cy.getElementById(__cmExplodedClassId);
+  if (parent && !parent.empty()) {
+    parent.removeClass('exploded');
+    if (c) parent.data('label', buildClassLabel(c));
+  }
+  cy.nodes('.cls-method').removeClass('dimmed method-focus');
+  cy.edges('.method-edge').removeClass('dimmed');
+  __cmExplodedClassId = null;
+  __cmExplodedMethodName = null;
+}
+function applyMethodFocusHighlight() {
+  // After applyFilters runs, mark the focused method bright and dim its
+  // siblings + their edges. No-op for class-level focus (methodName=null).
+  cy.nodes('.cls-method').removeClass('dimmed method-focus');
+  cy.edges('.method-edge').removeClass('dimmed');
+  if (!__cmExplodedClassId || !__cmExplodedMethodName) return;
+  cy.nodes('.cls-method').forEach(n => {
+    if (n.style('display') === 'none') return;
+    if (n.data('ownerId') !== __cmExplodedClassId) return;
+    if (n.data('methodName') === __cmExplodedMethodName) {
+      n.addClass('method-focus');
+    } else {
+      n.addClass('dimmed');
+    }
+  });
+  cy.edges('.method-edge').forEach(e => {
+    if (e.style('display') === 'none') return;
+    if (e.data('ownerId') !== __cmExplodedClassId) return;
+    if (e.data('methodName') !== __cmExplodedMethodName) e.addClass('dimmed');
   });
 }
 
@@ -2261,6 +2494,9 @@ function setMode(newMode) {
   mode = newMode;
   if (previousMode === 'all') clearSwimlanes();
   if (mode === 'all') {
+    // All-mode shows every class as a whole; restore the previously-
+    // exploded class to its full method-list label before painting.
+    collapseExploded();
     applyFilters();
     layoutAll();
     // Slice 5: outline drops depth badges and falls back to readingPriority
@@ -2292,10 +2528,17 @@ function applyFocusInternal(classId, methodName) {
   currentFocus = { classId, methodName };
   __cmFocusSet    = focusSetForCurrent(classId, methodName, currentDepth);
   __cmFocusExtSet = getExtNodesInScope(__cmFocusSet);
+  // Switch the explode anchor BEFORE applyFilters so its visibility pass
+  // sees the new owner. collapseExploded restores the previously-focused
+  // class's full label; explodeClass swaps the new one to a slim header.
+  collapseExploded();
+  explodeClass(classId, methodName);
   // Chip filters first (they still apply within the focus subgraph), then
   // mask, then layout. Order matters: chip mutations call applyFilters which
   // would otherwise un-hide elements the focus mask had hidden.
   applyFilters();
+  // Highlight the focused method (or leave class-level focus bright).
+  applyMethodFocusHighlight();
   layoutFocus();
   updateFocusBar();
   // Slice 5: re-render outline so the depth badges + sort reflect the new
@@ -2308,14 +2551,16 @@ function applyFocusInternal(classId, methodName) {
   // runs LAST to put the per-method .active row back.
   syncDetailsTo(classId);
   highlightOutlineMethod(classId, methodName);
-  // When a specific method is being focused (not just a whole class), pan +
-  // zoom the camera onto the owning class node. layoutFocus's fit-to-viewport
-  // leaves the entry class small inside wide subgraphs, forcing the user to
-  // manually scroll-zoom to read the method names. Class-only focus keeps
-  // the chain-overview fit.
+  // When a specific method is being focused, target the method child node
+  // instead of the whole class — the user wants to see that method's
+  // outgoing arrows, not the entire class box. Class-level focus keeps the
+  // chain-overview fit produced by layoutFocus.
   if (methodName) {
-    const node = cy.getElementById(classId);
-    if (node && !node.empty()) focusNodeOnGraph(node);
+    const methodNode = cy.getElementById(`${classId}::${methodName}`);
+    const target = (methodNode && !methodNode.empty())
+      ? methodNode
+      : cy.getElementById(classId);
+    if (target && !target.empty()) focusNodeOnGraph(target);
   }
 }
 
@@ -3272,6 +3517,13 @@ cy.on('tap', 'node.ext', evt => {
   const id = evt.target.id();
   if (id.startsWith('ext:')) selectExternal(id.slice(4));
 });
+// Method-child nodes drive method-level focus the same way the outline's
+// per-method rows do. Tapping a sibling method in the exploded class
+// re-targets the highlight + history without leaving the class.
+cy.on('tap', 'node.cls-method', evt => {
+  const d = evt.target.data();
+  if (d && d.ownerId && d.methodName) setFocus(d.ownerId, d.methodName);
+});
 
 // ---------- Method-list collapse (per-class & global) ----------
 // Class node labels can get tall when a class has many methods; once a graph
@@ -3475,6 +3727,21 @@ function applyFilters() {
     }
     n.style('display', show ? 'element' : 'none');
   });
+  // Method-child nodes: visible only when their owning class is exploded
+  // AND the owner itself is visible (chip filters could have hidden it).
+  cy.nodes('.cls-method').forEach(n => {
+    const ownerId = n.data('ownerId');
+    if (!ownerId || ownerId !== __cmExplodedClassId) {
+      n.style('display', 'none');
+      return;
+    }
+    const parent = cy.getElementById(ownerId);
+    if (!parent || parent.empty() || parent.style('display') === 'none') {
+      n.style('display', 'none');
+      return;
+    }
+    n.style('display', 'element');
+  });
   // Edges: hide whenever either endpoint is hidden, so the graph never shows
   // a dangling edge into nowhere.
   cy.edges().forEach(e => {
@@ -3482,6 +3749,13 @@ function applyFilters() {
     const tgt = e.target().style('display') !== 'none';
     let show = src && tgt;
     if (filterState.hideExternal && e.data('kind') === 'external_calls') show = false;
+    // Suppress the class-level outgoing edges from the exploded class —
+    // they are already represented by the per-method edges, drawing both
+    // would double-stroke each arrow leaving the focused class.
+    if (show && __cmExplodedClassId && !e.hasClass('method-edge')
+        && e.source().id() === __cmExplodedClassId) {
+      show = false;
+    }
     e.style('display', show ? 'element' : 'none');
   });
   // Slice 3: focus mask runs last so the focus subgraph wins over chip

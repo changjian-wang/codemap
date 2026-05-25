@@ -2727,15 +2727,17 @@ function renderOutline() {
     bcSlot.appendChild(methodsList);
   });
 
-  // Empty-state placeholder per bc slot when no entry methods landed there
-  // (e.g. extension host injected entries with no host/capture/recall hits).
-  Object.entries(groups).forEach(([bcName, slot]) => {
-    if (slot.children.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'outline-empty';
-      empty.textContent = 'no entry methods';
-      slot.appendChild(empty);
-    }
+  // Empty-state handling: any bc slot without entry methods is hidden
+  // (group header + list both removed from layout). The previous
+  // "no entry methods" placeholder rows made sense when the four lumen
+  // slots were always populated; on a real repo with a single bc
+  // (e.g. dawning Identity.Application) three empty placeholder rows
+  // were just noise.
+  Object.entries(groups).forEach(([, slot]) => {
+    const empty = slot.children.length === 0;
+    slot.classList.toggle('hidden', empty);
+    const header = document.querySelector(`.bc-group[data-target="${slot.id}"]`);
+    if (header) header.classList.toggle('hidden', empty);
   });
 
   const ext = document.getElementById('externalList');
@@ -3669,13 +3671,9 @@ function applyOutlineFilters() {
 
   // Empty-state placeholders track header visibility — hidden whenever any
   // sibling is visible.
-  document.querySelectorAll('.outline-empty').forEach(empty => {
-    const list = empty.parentElement;
-    if (!list) return;
-    const hasVisibleClass = [...list.children].some(ch =>
-      ch.classList.contains('outline-class') && !ch.classList.contains('hidden'));
-    empty.classList.toggle('hidden', hasVisibleClass);
-  });
+  // (No-op since `outline-empty` was removed — empty bc slots now hide the
+  // group header entirely. Kept the loop comment as historical reference;
+  // delete in Slice 5 cleanup.)
 
   // External-dep rows still use the legacy flat structure.
   document.querySelectorAll('.outline-item').forEach(row => {
@@ -3984,6 +3982,48 @@ initFocusMode();
   if (!chip) return;
   chip.classList.toggle('hidden', !CLASSES.some(c => c.bc === slot));
 });
+
+// Replace the hardcoded bc-group / chip labels (Host / Modules.Capture /
+// Modules.Recall / Shared.Infrastructure — meaningful only for lumen) with
+// the real bc names the adapter picked. graph-adapter.ts maps every repo's
+// top bcs to the four fixed slots and ships the human-readable labels in
+// `meta.bcLabels`; standalone mockup browsing leaves the lumen defaults.
+(function applyBcLabels() {
+  const labels = (__INJ.meta && __INJ.meta.bcLabels) || null;
+  if (!labels) return;
+  const slotToHeaderText = {
+    host: labels.host ? `${labels.host} (entry)` : null,
+    capture: labels.capture || null,
+    recall: labels.recall || null,
+    shared: labels.shared || null,
+  };
+  Object.entries(slotToHeaderText).forEach(([slot, text]) => {
+    if (!text) return;
+    const header = document.querySelector(`.bc-group[data-slot="${slot}"]`);
+    if (!header) return;
+    // Preserve caret + dot + count badge; replace only the text node label.
+    const dot = header.querySelector('.bc-dot');
+    const count = header.querySelector('.bc-count');
+    if (!dot) return;
+    let n = dot.nextSibling;
+    while (n && n.nodeType !== Node.TEXT_NODE) n = n.nextSibling;
+    if (n) n.textContent = text;
+    else dot.after(document.createTextNode(text));
+    if (count && count.parentNode !== header) header.appendChild(count);
+  });
+  // Filter-bar chips: replace just the trailing text node (keep the marker).
+  ['host', 'capture', 'recall', 'shared'].forEach(slot => {
+    const chip = document.querySelector(`.chip.bc-chip[data-bc="${slot}"]`);
+    const text = labels[slot];
+    if (!chip || !text) return;
+    const marker = chip.querySelector('.bc-marker');
+    if (!marker) return;
+    let n = marker.nextSibling;
+    while (n && n.nodeType !== Node.TEXT_NODE) n = n.nextSibling;
+    if (n) n.textContent = text;
+    else marker.after(document.createTextNode(text));
+  });
+})();
 
 function renderStats() {
   // Bind statusbar + chat header to real data so the UI reflects the

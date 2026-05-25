@@ -126,6 +126,26 @@ which is consumed both standalone and by the webview panel.
   update for the chosen method but the canvas zoomed to the entire
   swimlane every time. Fixed the separator so the camera locks onto
   the method child.
+- **Outline no longer renders "no entry methods" placeholder rows for
+  empty bc slots.** The four lumen bc slots (host / capture / recall /
+  shared) were hard-coded in the outline DOM and the renderer appended
+  a gray italic "no entry methods" row to every slot that ended up
+  empty. On a repo with a single bc (e.g. dawning's
+  `Identity.Application` where every entry is `host`), three of those
+  three rows were noise that suggested the analyzer had missed
+  classes. Empty slots now hide the bc group header entirely; the
+  filter-bar chip hidden-state for empty slots was already wired up.
+- **Outline bc group labels and filter chips read repo-real bc names.**
+  The four headers were hard-coded as
+  `Host (entry) / Modules.Capture / Modules.Recall / Shared.Infrastructure`
+  — lumen-specific text on a tool that's meant to work on any repo.
+  `graph-adapter.ts` already maps each repo's top bcs to the four
+  fixed slots and ships the human-readable labels in `meta.bcLabels`,
+  but the webview wasn't consuming them. The webview now rewrites the
+  bc group headers (preserving caret / color dot / count badge) and
+  the corresponding filter-bar chip labels from `meta.bcLabels` on
+  load, so a dawning analysis shows the actual `Identity.Application`
+  bc name instead of `Modules.Capture`.
 
 ## 0.0.8 — 2026-05-22
 

@@ -66,6 +66,22 @@ which is consumed both standalone and by the webview panel.
   L-shaped paths at render time.
 
 ### Changed
+- **`PROMPT_VERSION` → v3.9. Method-level `calls` accept three forms.**
+  The analyzer prompt now teaches the LLM to emit method-level call
+  targets as `<Class>.<Method>` (cross-class with known callee),
+  bare `<Method>` (same-class sibling shortcut), or bare `<Class>`
+  (type dependency / unknown method). Same-class private helpers are
+  explicitly called out as in-scope, so `AuthController.Exchange()`
+  dispatching to four private `HandleXxxGrantAsync` siblings now
+  produces four method-to-method edges inside the class compound
+  instead of an opaque `Exchange()` node with no internal structure.
+  Type-level `calls` (the outer array) stays class-only — it's the
+  type's structural dependency list, not a call graph. The webview's
+  resolver already handled all three forms (`__cmResolveCallTarget`
+  routes bare names to sibling lookup first, then class lookup); this
+  change is purely about teaching the LLM to emit them. Cache key
+  includes `PROMPT_VERSION`, so every previously analyzed file is
+  invalidated and re-runs against v3.9 on next request.
 - **`FileReader.resolveImport` → `resolveImports` (plural).** A single
   import statement can resolve to many files: a C# `using Foo.Bar`
   references a namespace which is spread across as many sibling files

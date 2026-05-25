@@ -41,8 +41,14 @@ import { ENTRY_GUIDANCE_SECTION } from './entry-detection';
  *          forbidden from emitting `ext:Root.*` external_calls for any
  *          root in that list. Closes the v3.7 edge-precision gap on
  *          codebases that declare their own multi-level namespaces.
+ *   v3.9 — method-level `calls` accept `<Class>.<Method>` and bare
+ *          `<Method>` (= same-class sibling) so intra-class fan-out
+ *          (e.g. `AuthController.Exchange` dispatching to four private
+ *          `HandleXxxGrantAsync` helpers) becomes visible in the graph.
+ *          The webview's resolver already routed all three forms; this
+ *          change is purely about teaching the LLM to emit them.
  */
-export const PROMPT_VERSION = 'v3.8';
+export const PROMPT_VERSION = 'v3.9';
 
 export const SYSTEM_PROMPT = `You are CodeMap's static-analysis assistant. Read the source file given by
 the user and emit one structured metadata block per top-level type
@@ -90,7 +96,7 @@ For every in-scope type defined in the file, output exactly one fenced block:
       "signature": "(<short param list>)",
       "line": <int>,
       "intent": "<optional: ≤ 80 chars method intent>",
-      "calls": ["<in-file class name>", ...],
+      "calls": ["<TargetClass>.<TargetMethod>" | "<SameClassSiblingMethod>" | "<TargetClass>", ...],
       "external_calls": ["<cross-file or cross-package identifier>", ...],
       "risks": ["security" | "external_io" | "concurrency" | "low_confidence" | "high_coupling" | "missing_test", ...]
     }
@@ -139,11 +145,43 @@ After all type blocks, emit one summary block:
 ## Hard constraints (violations cause your output to be dropped on calibration)
 
 ### \`calls\`
-1. Must be a class that is DEFINED in the file the user gave you. Not a
+
+Two placements have slightly different shapes:
+
+#### Type-level \`calls\` (the outer array on the class block)
+1. Class-level dependencies only. List the in-file class names the type as
+   a whole depends on (field types, base types, types it composes). Single
+   identifier per entry, no \`.Method\` suffix.
+2. Must be a class that is DEFINED in the file the user gave you. Not a
    class you only see via \`using\` / \`import\`.
-2. Must be a class you can point to in the source. If you are unsure, omit
-   it and instead add a \`low_confidence\` risk.
 3. Do not list language built-ins or LINQ / Array combinators.
+
+#### Method-level \`calls\` (the array on each method inside \`methods\`)
+1. List **call targets** as \`<Class>.<Method>\` whenever you can name the
+   callee method — both same-class sibling helpers AND cross-class calls
+   where you can read the method name from the source. Examples:
+   - \`Exchange()\` calls \`this.HandlePasswordGrantAsync()\` → emit
+     \`"HandlePasswordGrantAsync"\` (bare = same-class sibling shortcut)
+     OR the fully-qualified \`"AuthController.HandlePasswordGrantAsync"\`.
+     Both forms resolve identically.
+   - \`Exchange()\` calls \`_userAuthenticationService.AuthenticateAsync()\`
+     where the field type is \`IUserAuthenticationService\` → emit
+     \`"IUserAuthenticationService.AuthenticateAsync"\`.
+2. **Same-class private helpers count.** A method that fans out to four
+   private siblings (a classic OAuth controller dispatch, a MediatR
+   request handler delegating to private steps) MUST list those siblings
+   — that's the most useful information the call graph can carry. Do not
+   collapse them into a single self-reference to the class.
+3. Bare \`<Class>\` (no \`.Method\`) is acceptable when you genuinely don't
+   know which method is invoked — e.g. the method uses a class as a type
+   parameter, holds an instance, or only references its static name.
+4. Must point to something that exists in the source. If unsure, omit and
+   add a \`low_confidence\` risk.
+5. Do not list language built-ins or LINQ / Array combinators.
+6. Constructor calls are noise — \`new Foo()\` should be emitted as
+   bare \`"Foo"\` only when \`Foo\` is in-file AND the constructor is the
+   only thing being called; otherwise skip it (the type dependency shows
+   up via the type-level \`calls\` array).
 
 ### \`external_calls\`
 1. Cross-file or cross-package identifiers go here. Format: the precise

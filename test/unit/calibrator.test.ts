@@ -266,6 +266,45 @@ describe('Calibrator', () => {
     expect(m.externalCalls).toEqual(['HttpClient.GetAsync']);
   });
 
+  it('preserves method-level calls in all three forms verbatim (bare sibling / Class.Method / bare Class)', async () => {
+    // The webview's __cmResolveCallTarget resolves bare `<Method>` as a
+    // same-class sibling, `<Class>.<Method>` as an explicit method node id,
+    // and bare `<Class>` as a compound parent. The calibrator should pass
+    // all three through unchanged — it is not the right layer to validate
+    // method-level targets (the webview's resolver does the de-facto check
+    // by silently dropping unresolvable ids when no matching node exists).
+    const c = new Calibrator(
+      makeProvider({ inFile: { 'a.cs': [sym('AuthController', 'a.cs', 1, 200)] } }),
+    );
+    const out = await c.calibrate({
+      data: {
+        node_id: 'AuthController',
+        methods: [
+          {
+            name: 'Exchange',
+            signature: '()',
+            line: 36,
+            calls: [
+              'HandlePasswordGrantAsync',                              // bare sibling
+              'AuthController.HandleClientCredentialsGrantAsync',      // explicit Class.Method
+              'IUserAuthenticationService.AuthenticateAsync',          // cross-class Class.Method
+              'OpenIddictRequest',                                     // bare class (type dep)
+            ],
+          },
+        ],
+      },
+      file: 'a.cs',
+      boundedContext: 'host',
+    });
+    const m = out!.node.methods[0]!;
+    expect(m.calls).toEqual([
+      'HandlePasswordGrantAsync',
+      'AuthController.HandleClientCredentialsGrantAsync',
+      'IUserAuthenticationService.AuthenticateAsync',
+      'OpenIddictRequest',
+    ]);
+  });
+
   it('strips generic parameters when matching node_id (Foo<T> → Foo)', async () => {
     const c = new Calibrator(
       makeProvider({ inFile: { 'a.cs': [sym('Foo', 'a.cs', 1, 10)] } }),

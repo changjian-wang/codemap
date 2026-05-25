@@ -147,6 +147,11 @@ async function handleGenerate(
     const FILE_LINE_CAP = 20;
     let fileLinesPrinted = 0;
     let fileLinesSkipped = 0;
+    // Surfaced in the webview header (`<picked> of <total>`) so users can
+    // see how much of the repo CodeMap analyzed vs how much was scanned
+    // but skipped because of `codemap.maxSkeletonFiles`. Captured here
+    // because the orchestrator's return-shape stats don't carry overflow.
+    let totalDiscoveredFiles = 0;
 
     const result = await runOrchestrator(
       {
@@ -172,6 +177,7 @@ async function handleGenerate(
           response.progress(msg);
         },
         onSkeleton: info => {
+          totalDiscoveredFiles = info.skeleton.length + info.overflow.length;
           const txt = `Picked skeleton: ${info.skeleton.length} files (entries: ${info.entryPoints.length}, overflow: ${info.overflow.length})`;
           actionTrace.push({ check: true, num: String(actionTrace.length + 1), text: txt });
           response.markdown(`\n${txt}\n`);
@@ -284,7 +290,9 @@ async function handleGenerate(
       modelLabel,
       repoName: workspaceFolder.name,
       scope: scopePrefix,
-      fileCountText: `${result.stats.filesAnalyzed} files analyzed`,
+      fileCountText: totalDiscoveredFiles > result.stats.filesAnalyzed
+        ? `${result.stats.filesAnalyzed} of ${totalDiscoveredFiles} files analyzed`
+        : `${result.stats.filesAnalyzed} files analyzed`,
       scopePill: scopePrefix ? '📦 SCOPED' : '📦 WORKSPACE',
     }, workspaceFolder.uri);
 

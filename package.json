@@ -120,8 +120,8 @@
           "type": "number",
           "default": 80,
           "minimum": 5,
-          "maximum": 80,
-          "description": "Maximum number of files the workspace scanner picks as skeleton for LLM analysis."
+          "maximum": 500,
+          "description": "Maximum number of files the workspace scanner picks as skeleton for LLM analysis. Each picked file costs ~1 LLM call (cached after first run). Default 80 covers small/medium services; raise toward 500 for larger codebases at the cost of longer first-run latency."
         },
         "codemap.maxParallelAnalyzers": {
           "type": "number",

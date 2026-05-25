@@ -1629,17 +1629,26 @@ function __cmResolveExternalTarget(raw) {
   if (last && EXTERNAL_DEPS.some(d => d.name === last)) return 'ext:' + last;
   return null;
 }
-const __cmMethodNodes = [];
-const __cmMethodEdges = [];
+// Per-class explosion payloads. Indexed by ownerId so explodeClass can
+// lazily cy.add() only the nodes + edges for the focused class. We do NOT
+// push these into the initial nodes/edges arrays: doing so would feed
+// dagre hundreds of hidden compound children + edges in All mode, which
+// dagre still ranks even with display:'none' and visibly distorts the
+// canonical class-only layout (collapses the graph into a near-vertical
+// strip).
+const __cmMethodNodesByClass = new Map();
+const __cmMethodEdgesByClass = new Map();
 CLASSES.forEach(c => {
   // Same constructor / enum-member rule as buildClassLabel so the exploded
   // view matches what the user saw on the class card.
   const isMemberOnly = c.kind === 'enum';
   const visible = isMemberOnly ? c.methods : c.methods.filter(m => m.name !== c.id);
+  const ns = [];
+  const es = [];
   visible.forEach(m => {
     const mid = `${c.id}::${m.name}`;
     const riskMark = (m.risks && m.risks.length) ? ' ●' : '';
-    __cmMethodNodes.push({
+    ns.push({
       data: {
         id: mid,
         parent: c.id,
@@ -1652,7 +1661,7 @@ CLASSES.forEach(c => {
     (m.calls || []).forEach((t, ti) => {
       const target = __cmResolveCallTarget(t, c.id);
       if (!target) return;
-      __cmMethodEdges.push({
+      es.push({
         data: {
           id: `me::${c.id}::${m.name}::c${ti}`,
           source: mid, target, kind: 'calls',
@@ -1664,7 +1673,7 @@ CLASSES.forEach(c => {
     (m.externalCalls || []).forEach((t, ti) => {
       const target = __cmResolveExternalTarget(t);
       if (!target) return;
-      __cmMethodEdges.push({
+      es.push({
         data: {
           id: `me::${c.id}::${m.name}::x${ti}`,
           source: mid, target, kind: 'external_calls',
@@ -1674,9 +1683,11 @@ CLASSES.forEach(c => {
       });
     });
   });
+  if (ns.length > 0) {
+    __cmMethodNodesByClass.set(c.id, ns);
+    __cmMethodEdgesByClass.set(c.id, es);
+  }
 });
-nodes.push(...__cmMethodNodes);
-edges.push(...__cmMethodEdges);
 
 // Layout config is kept on a module-level var so the collapse helpers
 // below can re-run the exact same layout after mutating node sizes.
@@ -2149,19 +2160,33 @@ function explodeClass(classId, methodName) {
   if (!c) return;
   const parent = cy.getElementById(classId);
   if (!parent || parent.empty()) return;
+  // Lazy-mount the method children + per-method edges for this class.
+  // Keeping them out of the graph until explode time means dagre never
+  // sees them in All mode and the canonical class-level layout is
+  // unaffected.
+  const ns = __cmMethodNodesByClass.get(classId) || [];
+  const es = __cmMethodEdgesByClass.get(classId) || [];
+  if (ns.length > 0 && cy.getElementById(ns[0].data.id).empty()) {
+    cy.add(ns);
+    cy.add(es);
+  }
   parent.addClass('exploded');
   parent.data('label', __cmHeaderOnlyLabel(c));
 }
 function collapseExploded() {
   if (!__cmExplodedClassId) return;
-  const c = CLASSES.find(x => x.id === __cmExplodedClassId);
-  const parent = cy.getElementById(__cmExplodedClassId);
+  const id = __cmExplodedClassId;
+  const c = CLASSES.find(x => x.id === id);
+  const parent = cy.getElementById(id);
   if (parent && !parent.empty()) {
     parent.removeClass('exploded');
     if (c) parent.data('label', buildClassLabel(c));
   }
-  cy.nodes('.cls-method').removeClass('dimmed method-focus');
-  cy.edges('.method-edge').removeClass('dimmed');
+  // Unmount the previously-added method children + their edges so the
+  // graph returns to a pure class-level view (dagre All-mode layout, focus
+  // subgraphs of other classes, etc. all see a clean topology).
+  cy.elements(`node.cls-method[ownerId = "${id}"]`).remove();
+  cy.elements(`edge.method-edge[ownerId = "${id}"]`).remove();
   __cmExplodedClassId = null;
   __cmExplodedMethodName = null;
 }
@@ -3727,20 +3752,15 @@ function applyFilters() {
     }
     n.style('display', show ? 'element' : 'none');
   });
-  // Method-child nodes: visible only when their owning class is exploded
-  // AND the owner itself is visible (chip filters could have hidden it).
+  // Method-child nodes are only present in the graph between
+  // explodeClass() and collapseExploded(); when they exist their owner is
+  // by construction the currently-exploded class, so they should follow
+  // their parent's display. If the chip filter hides the parent, hide the
+  // children too — otherwise let them render.
   cy.nodes('.cls-method').forEach(n => {
-    const ownerId = n.data('ownerId');
-    if (!ownerId || ownerId !== __cmExplodedClassId) {
-      n.style('display', 'none');
-      return;
-    }
-    const parent = cy.getElementById(ownerId);
-    if (!parent || parent.empty() || parent.style('display') === 'none') {
-      n.style('display', 'none');
-      return;
-    }
-    n.style('display', 'element');
+    const parent = cy.getElementById(n.data('ownerId'));
+    const hide = !parent || parent.empty() || parent.style('display') === 'none';
+    n.style('display', hide ? 'none' : 'element');
   });
   // Edges: hide whenever either endpoint is hidden, so the graph never shows
   // a dangling edge into nowhere.

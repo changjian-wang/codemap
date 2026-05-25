@@ -2278,6 +2278,15 @@ function applyFocusInternal(classId, methodName) {
   // runs LAST to put the per-method .active row back.
   syncDetailsTo(classId);
   highlightOutlineMethod(classId, methodName);
+  // When a specific method is being focused (not just a whole class), pan +
+  // zoom the camera onto the owning class node. layoutFocus's fit-to-viewport
+  // leaves the entry class small inside wide subgraphs, forcing the user to
+  // manually scroll-zoom to read the method names. Class-only focus keeps
+  // the chain-overview fit.
+  if (methodName) {
+    const node = cy.getElementById(classId);
+    if (node && !node.empty()) focusNodeOnGraph(node);
+  }
 }
 
 function setDepth(d) {
@@ -2509,11 +2518,11 @@ function focusNodeOnGraph(node) {
     easing: 'ease-out-quad',
   });
 }
-// Right-panel + selection sync without camera movement. Shared between
-// selectClass (which adds a camera animate after) and applyFocusInternal
-// (which must NOT animate the camera — layoutFocus has already fit the
-// subgraph to the viewport and animating to a single node would override
-// the chain view the user just asked for).
+// Right-panel + selection sync without camera movement. Both callers
+// (selectClass and applyFocusInternal) decide on their own whether to
+// animate the camera afterwards: selectClass always does; applyFocusInternal
+// does only when focusing on a specific method, so class-level focus keeps
+// the chain-overview fit produced by layoutFocus.
 function syncDetailsTo(id) {
   __cmSelectedExt = null;
   cy.$('node:selected').unselect();

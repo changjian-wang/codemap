@@ -1,5 +1,5 @@
 // esbuild.js — extension host bundle (CJS, node). The WebView panel loads
-// the static mockup HTML directly (panel.ts reads docs/mockups/lumen-backend-v3.html);
+// the static mockup HTML directly (panel.ts reads docs/mockups/codemap-view.html);
 // there is no React WebView build to bundle.
 const esbuild = require('esbuild');
 const fs = require('fs');

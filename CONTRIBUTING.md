@@ -76,7 +76,7 @@ The four ADRs explain the major shape choices:
 | [003](docs/adrs/003-chat-as-orchestrator.md) | Chat participant is the only entry point | Hard dep on `GitHub.copilot-chat`, but one mental model and free turn memory |
 | [004](docs/adrs/004-calibration-layer.md) | Separate calibration layer (LLM ↔ LSP) | One extra pass over the graph, but every `/why` answer is grounded in LSP data, not a confidence score |
 
-Product shape is locked by the [v3 mockup](docs/mockups/lumen-backend-v3.html) and the [v3 development plan](docs/plan/development-plan-v3-repo-level.md).
+Product shape is locked by the [view mockup](docs/mockups/codemap-view.html) and the [v3 development plan](docs/plan/development-plan-v3-repo-level.md).
 
 ## Tech stack
 
@@ -91,5 +91,5 @@ Product shape is locked by the [v3 mockup](docs/mockups/lumen-backend-v3.html) a
 
 - Run `npm test` and `npm run build` before pushing.
 - Keep `npm run lint` (`tsc --noEmit`) clean — the build step does **not** type-check.
-- For UI changes, update the mockup in `docs/mockups/lumen-backend-v3.html` so the spec stays in sync with the implementation.
+- For UI changes, update the mockup in `docs/mockups/codemap-view.html` so the spec stays in sync with the implementation.
 - New verification logic should land with a calibrator test under `test/unit/`.

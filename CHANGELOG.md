@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+The mockup file is renamed to drop the `lumen-` prefix:
+`docs/mockups/lumen-backend-v3.html` → `docs/mockups/codemap-view.html`.
+Reflected in `panel.ts`, `.vscodeignore`, `esbuild.js`, the v3
+development plan, and `CONTRIBUTING.md`.
+
 All Mode now reads as horizontal bc swimlanes. Before this change, All
 mode dumped every class into one dagre LR slab where bc was encoded only
 by node color — useful for "show me everything" but not for "where does
@@ -28,11 +33,11 @@ an entry class the same class-level BFS. Clicking
 different subgraphs.
 
 Scope: webview only. The extension host, analyzer, and LSP calibrator
-are unchanged. All edits live in `docs/mockups/lumen-backend-v3.html`,
+are unchanged. All edits live in `docs/mockups/codemap-view.html`,
 which is consumed both standalone and by the webview panel.
 
 ### Added
-- **`docs/mockups/lumen-backend-v3.html` — `applySwimlanes()`.** After
+- **`docs/mockups/codemap-view.html` — `applySwimlanes()`.** After
   dagre lays out the full graph, classes are bucketed into the four
   fixed bc slots (`host` / `capture` / `recall` / `shared`) used by
   the data layer's bc remap, and re-stacked at a fixed pitch within
@@ -117,7 +122,7 @@ entry points without losing context.
 
 Scope: webview + eval only. The extension host, the analyzer, the LSP
 calibrator and the orchestrator are unchanged. The mockup at
-`docs/mockups/lumen-backend-v3.html` and the data adapter in
+`docs/mockups/codemap-view.html` and the data adapter in
 `src/webview/graph-adapter.ts` carry the entire focus-mode change; the
 eval scorer gets a small bare-vs-FQN canonicalisation that removes a
 known double-counting noise source from precision/recall numbers
@@ -406,7 +411,7 @@ cache-miss path. Pure recommended upgrade from 0.0.3.
   `["AI", "Chat", "Visualization"]` so the extension shows up under the
   AI / Chat storefront sections, not just the catch-all Other bucket.
 - **`.vscodeignore` excludes `docs/mockups/**` and `media/*.svg`.** The
-  118 KB `lumen-backend-v3.html` design reference and the editable SVG
+  118 KB `codemap-view.html` design reference and the editable SVG
   icon source were getting bundled into the VSIX; only the runtime PNG
   ships now. Final VSIX: 12 files / 325 KB (was 352 KB before the
   exclusion).

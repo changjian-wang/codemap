@@ -188,7 +188,7 @@ async function exportCurrentGraph(
       // HTML standalone snapshot: read the same mockup template the panel
       // uses and inject the current MockupData (graph + chat turns + stats
       // + meta). The mockup's own scripts handle rendering offline.
-      const mockupPath = path.join(context.extensionPath, 'docs', 'mockups', 'lumen-backend-v3.html');
+      const mockupPath = path.join(context.extensionPath, 'docs', 'mockups', 'codemap-view.html');
       const mockupTemplate = fs.readFileSync(mockupPath, 'utf8');
       const mockupData = adaptGraphForMockup(
         currentGraph,
@@ -381,7 +381,7 @@ function renderHtml(
   stats?: MockupStats,
   meta?: MockupMeta,
 ): string {
-  const mockupPath = path.join(context.extensionPath, 'docs', 'mockups', 'lumen-backend-v3.html');
+  const mockupPath = path.join(context.extensionPath, 'docs', 'mockups', 'codemap-view.html');
   let html: string;
   try {
     html = fs.readFileSync(mockupPath, 'utf8');

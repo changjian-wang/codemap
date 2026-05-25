@@ -1,7 +1,7 @@
 # CodeMap 开发计划 v3（仓库级 / Chat-first / UML）
 
 > **状态**：active。
-> **产品形态基准**：[`../mockups/lumen-backend-v3.html`](../mockups/lumen-backend-v3.html)。
+> **产品形态基准**：[`../mockups/codemap-view.html`](../mockups/codemap-view.html)。
 > **一句话定位**：在 VS Code Copilot Chat 里输入 `@codemap`，对**整个仓库**生成可信、可读、可追问的 UML 调用图谱。
 
 ---
@@ -293,7 +293,7 @@ export interface CodeMapGraph {
 codemap/
 ├── docs/
 │   ├── mockups/                            # locked UI references
-│   │   ├── lumen-backend-v3.html
+│   │   ├── codemap-view.html
 │   │   └── generic-repo-v3.html
 │   ├── plan/
 │   │   └── development-plan-v3-repo-level.md   # this file
@@ -331,7 +331,7 @@ codemap/
 │   │   └── reading-order.ts
 │   ├── webview/
 │   │   ├── panel.ts
-│   │   └── ui/                             # mirrors lumen-backend-v3.html
+│   │   └── ui/                             # mirrors codemap-view.html
 │   │       ├── App.tsx
 │   │       ├── GraphView.tsx
 │   │       ├── NodeCard.tsx
@@ -505,7 +505,7 @@ codemap/
 - [VS Code WebView UX guidelines](https://code.visualstudio.com/api/ux-guidelines/webviews)
 
 ### 本 repo 内
-- 产品形态基准：[`../mockups/lumen-backend-v3.html`](../mockups/lumen-backend-v3.html)
+- 产品形态基准：[`../mockups/codemap-view.html`](../mockups/codemap-view.html)
 
 ---
 

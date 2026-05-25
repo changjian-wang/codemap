@@ -1,6 +1,6 @@
 # Checkpoint — Method-as-Node Webview Redesign
 
-> **状态**：in-flight，Slice 2 已交付，等待 HITL 反馈后进 Slice 3。
+> **状态**：in-flight，Slice 3 已交付，等 HITL 验收 Slice 4。
 > **创建时间**：2026-05-25
 > **目的**：跨机继续工作的恢复点。
 
@@ -24,9 +24,9 @@
 | Slice | 内容 | 模式 | 状态 |
 |-------|------|------|------|
 | 1 | mockup 数据层 + Cytoscape 节点/边生成切到方法级 | AFK + show result | ✅ 已交付 |
-| 2 | 类 swimlane (compound parent) 视觉 + 折叠机制 | HITL | ✅ 已交付（等用户验收） |
-| 3 | Focus 模式重写（方法级 BFS） | AFK | ⏳ 下一步 |
-| 4 | All 模式 + 孤立方法过滤 + 大图性能验证 | HITL | ⏳ |
+| 2 | 类 swimlane (compound parent) 视觉 + 折叠机制 | HITL | ✅ 已交付 |
+| 3 | Focus 模式重写（方法级 BFS） | AFK | ✅ 已交付 |
+| 4 | All 模式 + 孤立方法过滤 + 大图性能验证 | HITL | ⏳ 下一步 |
 | 5 | 删 explode/collapseExploded/`▶` 标记 等死代码 | AFK | ⏳ |
 | 6 | 同步到扩展 webview adapter，重打包 | AFK | ⏳ |
 

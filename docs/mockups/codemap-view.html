@@ -2556,7 +2556,7 @@ function applyFocusInternal(classId, methodName) {
   // outgoing arrows, not the entire class box. Class-level focus keeps the
   // chain-overview fit produced by layoutFocus.
   if (methodName) {
-    const methodNode = cy.getElementById(`${classId}::${methodName}`);
+    const methodNode = cy.getElementById(`${classId}.${methodName}`);
     const target = (methodNode && !methodNode.empty())
       ? methodNode
       : cy.getElementById(classId);

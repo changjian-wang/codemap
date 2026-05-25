@@ -117,6 +117,15 @@ which is consumed both standalone and by the webview panel.
   no per-method `calls` fall back to the class-level reach, so
   analyzers that skip per-method attribution still get a sensible
   default.
+- **`applyFocusInternal()` camera now lands on the focused method
+  node.** The method node id was assembled with `::` in the
+  camera-target lookup while the rest of the pipeline (node creation,
+  edge sourcing, BFS adjacency, `__cmFocusedMethodNodeId`) uses `.`,
+  so the lookup always missed and the fallback re-centered on the
+  whole class compound. The user saw the focus pill + outline row
+  update for the chosen method but the canvas zoomed to the entire
+  swimlane every time. Fixed the separator so the camera locks onto
+  the method child.
 
 ## 0.0.8 — 2026-05-22
 

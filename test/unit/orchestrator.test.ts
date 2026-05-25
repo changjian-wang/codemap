@@ -18,7 +18,7 @@ function fakeFileReader(files: Record<string, string>): FileReader {
   return {
     async listFiles() { return Object.keys(files); },
     async readText(rel) { return files[rel]; },
-    async resolveImport() { return undefined; },
+    async resolveImports() { return []; },
   };
 }
 

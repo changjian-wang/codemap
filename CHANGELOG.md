@@ -66,6 +66,28 @@ which is consumed both standalone and by the webview panel.
   L-shaped paths at render time.
 
 ### Changed
+- **`FileReader.resolveImport` → `resolveImports` (plural).** A single
+  import statement can resolve to many files: a C# `using Foo.Bar`
+  references a namespace which is spread across as many sibling files
+  as there are types in it. The old single-file signature forced the
+  scanner to pick one and lose the rest. The interface now returns an
+  array; non-C# resolvers (TS / JS / Python relative imports) wrap
+  their single hit in `[file]` or return `[]` on a miss.
+- **C# `resolveImports` builds a workspace namespace index.** Before
+  this change the implementation returned `undefined` for every C#
+  import — the comment said "C# `using` statements are namespaces,
+  not file paths, we leave them to the calibrator" but in practice
+  that meant BFS could not cross a csproj boundary at all. On a
+  multi-csproj solution like dawning (Service in `Identity.Application`
+  → `IUnitOfWork` in `Identity.Domain` → `UnitOfWork` in
+  `Identity.Infra.Data`), the scanner would only ever see the entry
+  csproj plus whatever `fillToMaxFiles` randomly topped up. The reader
+  now lazy-scans every workspace `.cs` file once, extracts the
+  `namespace X.Y.Z` declaration (file-scoped or block-scoped), and
+  caches a `namespace → files[]` index. `resolveImports` returns the
+  full set, so BFS picks up every type declared in the imported
+  namespace and walks naturally from `UserService` through
+  `IUserRepository` to `UserRepository` across three csprojs.
 - **`setMode()` — exit hook for swimlanes.** Toggling away from All
   mode calls `clearSwimlanes()` to remove the taxi edge style, so
   Focus mode reverts to the original `unbundled-bezier` curves that

@@ -90,7 +90,7 @@ function fakeReader(files: Record<string, string>) {
   return {
     listFiles: vi.fn().mockResolvedValue(Object.keys(files)),
     readText: vi.fn().mockImplementation(async (p: string) => files[p]),
-    resolveImport: vi.fn().mockResolvedValue(undefined),
+    resolveImports: vi.fn().mockResolvedValue([]),
   } as never;
 }
 function fakeLlm(emit: AnalyzeResult) {

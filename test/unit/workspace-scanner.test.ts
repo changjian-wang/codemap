@@ -15,8 +15,8 @@ function makeReader(fs: Record<string, string>): FileReader {
     async readText(rel) {
       return Object.prototype.hasOwnProperty.call(fs, rel) ? fs[rel] : undefined;
     },
-    async resolveImport(fromRel, target) {
-      if (!target.startsWith('.')) return undefined;
+    async resolveImports(fromRel, target) {
+      if (!target.startsWith('.')) return [];
       const fromDir = fromRel.split('/').slice(0, -1).join('/');
       const joined = normalize(`${fromDir}/${target}`);
       const candidates = [
@@ -26,9 +26,9 @@ function makeReader(fs: Record<string, string>): FileReader {
         `${joined}/index.ts`,
       ];
       for (const c of candidates) {
-        if (Object.prototype.hasOwnProperty.call(fs, c)) return c;
+        if (Object.prototype.hasOwnProperty.call(fs, c)) return [c];
       }
-      return undefined;
+      return [];
     },
   };
 }
@@ -155,6 +155,59 @@ describe('scanWorkspace', () => {
     expect(r.skeleton).toEqual(['src/main.ts']);
   });
 
+  it('C# namespace index lets BFS cross csproj boundaries (UoW chain)', async () => {
+    // Real-world dawning scenario: the IUnitOfWork interface lives in the
+    // Domain csproj, the UnitOfWork implementation lives in Infra.Data,
+    // and a Service in the Application csproj references both via
+    // `using` declarations. Before the namespace index, BFS could not
+    // follow those `using` statements across csproj boundaries (C# `using`
+    // is a namespace, not a relative path) — Domain and Infra.Data files
+    // never entered the skeleton unless fillToMaxFiles was on.
+    //
+    // The reader below models that index: each `resolveImports` call
+    // returns every file declaring the requested namespace, so BFS picks
+    // up the interface AND its implementation in one walk.
+    const fs: Record<string, string> = {
+      'src/App/UserEndpoints.cs':
+        'namespace App;\nusing Domain;\nusing Infra;\nclass UserEndpoints {}',
+      'src/Domain/IUnitOfWork.cs': 'namespace Domain;\ninterface IUnitOfWork {}',
+      'src/Domain/IUserRepository.cs': 'namespace Domain;\ninterface IUserRepository {}',
+      'src/Infra/UnitOfWork.cs': 'namespace Infra;\nclass UnitOfWork {}',
+      'src/Infra/UserRepository.cs': 'namespace Infra;\nclass UserRepository {}',
+    };
+    const namespaceToFiles = new Map<string, string[]>([
+      ['App', ['src/App/UserEndpoints.cs']],
+      ['Domain', ['src/Domain/IUnitOfWork.cs', 'src/Domain/IUserRepository.cs']],
+      ['Infra', ['src/Infra/UnitOfWork.cs', 'src/Infra/UserRepository.cs']],
+    ]);
+    const reader: FileReader = {
+      async listFiles() { return Object.keys(fs); },
+      async readText(rel) { return fs[rel]; },
+      async resolveImports(_from, target) {
+        return (namespaceToFiles.get(target) ?? []).filter(f => f !== _from);
+      },
+    };
+    const r = await scanWorkspace(reader, {
+      maxDepth: 3,
+      maxFiles: 10,
+      extensions: ['.cs'],
+      rankBy: 'bfs',
+    });
+    // BFS seeds from UserEndpoints.cs (matches the *Endpoints entry
+    // pattern) and walks the namespace index to pull every Domain +
+    // Infra file in.
+    expect(r.skeleton).toContain('src/App/UserEndpoints.cs');
+    expect(r.skeleton).toContain('src/Domain/IUnitOfWork.cs');
+    expect(r.skeleton).toContain('src/Domain/IUserRepository.cs');
+    expect(r.skeleton).toContain('src/Infra/UnitOfWork.cs');
+    expect(r.skeleton).toContain('src/Infra/UserRepository.cs');
+    // Inbound adjacency must record the cross-csproj edges.
+    expect(r.inbound.get('src/Domain/IUnitOfWork.cs'))
+      .toContain('src/App/UserEndpoints.cs');
+    expect(r.inbound.get('src/Infra/UnitOfWork.cs'))
+      .toContain('src/App/UserEndpoints.cs');
+  });
+
   it('fillToMaxFiles tops up skeleton when BFS cannot resolve imports (C# scenario)', async () => {
     // Mimic lumen/apps/api/src: 5 entry points + many .cs files where every
     // `using` statement is a namespace, not a path, so resolveImport always
@@ -174,7 +227,7 @@ describe('scanWorkspace', () => {
     const reader: FileReader = {
       async listFiles() { return Object.keys(fs); },
       async readText(rel) { return fs[rel]; },
-      async resolveImport() { return undefined; }, // C# `using` never resolves to a file
+      async resolveImports() { return []; }, // C# `using` never resolves to a file
     };
     const r = await scanWorkspace(reader, {
       maxDepth: 3,
@@ -222,7 +275,7 @@ describe('scanWorkspace', () => {
     const reader: FileReader = {
       async listFiles() { return Object.keys(fs); },
       async readText(rel) { return fs[rel]; },
-      async resolveImport() { return undefined; },
+      async resolveImports() { return []; },
     };
     const r = await scanWorkspace(reader, {
       maxDepth: 3,
@@ -251,7 +304,7 @@ describe('scanWorkspace', () => {
     const reader: FileReader = {
       async listFiles() { return Object.keys(fs); },
       async readText(rel) { return fs[rel]; },
-      async resolveImport() { return undefined; },
+      async resolveImports() { return []; },
     };
     const r = await scanWorkspace(reader, {
       maxDepth: 3,
@@ -327,7 +380,7 @@ describe('scanWorkspace', () => {
       const reader: FileReader = {
         async listFiles() { return Object.keys(fs); },
         async readText(rel) { return fs[rel]; },
-        async resolveImport() { return undefined; },
+        async resolveImports() { return []; },
       };
       const r = await scanWorkspace(reader, {
         maxDepth: 3,

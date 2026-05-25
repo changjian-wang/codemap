@@ -73,8 +73,21 @@ export interface FileReader {
   listFiles(): Promise<string[]>;
   /** Read a file's text. Returns `undefined` if it doesn't exist. */
   readText(relPath: string): Promise<string | undefined>;
-  /** Resolve a possibly-relative import target to a workspace-relative path. */
-  resolveImport(fromRel: string, importTarget: string): Promise<string | undefined>;
+  /**
+   * Resolve an import target to one or more workspace-relative files.
+   *
+   * Most languages bind a single import statement to a single file
+   * (TS/JS/Py relative imports), so the array typically has 0 or 1 entry.
+   * C# `using Foo.Bar` is the exception: a namespace is spread across
+   * many sibling files (one class/interface per file is the common
+   * convention), and BFS needs all of them to be able to reach the
+   * implementation classes through their containing namespace. The
+   * reader returns the full set; the scanner enqueues each one.
+   *
+   * Returns `[]` when nothing resolves (NuGet / npm package, BCL type,
+   * etc.) — the calibrator + symbol provider handle those later.
+   */
+  resolveImports(fromRel: string, importTarget: string): Promise<string[]>;
 }
 
 export interface ScanResult {
@@ -115,7 +128,7 @@ const CSHARP_USING_RE = /(?:^|;|\n)\s*using\s+([A-Za-z_][\w.]*)\s*;/g;
 const TS_IMPORT_RE = /\bimport\s+(?:[\w*{}\s,]+from\s+)?['"]([^'"]+)['"]/g;
 const TS_REQUIRE_RE = /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g;
 // Python: `from X import Y` and `import X` (optionally `as Z`). We capture
-// the dotted module path; the file reader's `resolveImport` is responsible
+// the dotted module path; the file reader's `resolveImports` is responsible
 // for mapping that back to a workspace-relative file (only relative-style
 // `from .foo import` resolves cleanly; absolute package imports resolve to
 // nothing and are treated as external by the LSP, which is correct).
@@ -203,22 +216,23 @@ export async function scanWorkspace(
     const targets = extractImports(text, ext);
 
     for (const t of targets) {
-      const resolved = await reader.resolveImport(file, t);
-      if (!resolved) continue;
-      if (!eligible.includes(resolved)) continue;
-      // Count even if we've already enqueued — captures graph centrality
-      // (a util imported by 5 callers should rank higher than one imported
-      // by 1, regardless of BFS discovery order).
-      inDegree.set(resolved, (inDegree.get(resolved) ?? 0) + 1);
-      // Adjacency: record the caller. Dedupe preserves first-seen order.
-      let inbound = inboundFiles.get(resolved);
-      if (!inbound) {
-        inbound = [];
-        inboundFiles.set(resolved, inbound);
+      const resolvedList = await reader.resolveImports(file, t);
+      for (const resolved of resolvedList) {
+        if (!eligible.includes(resolved)) continue;
+        // Count even if we've already enqueued — captures graph centrality
+        // (a util imported by 5 callers should rank higher than one imported
+        // by 1, regardless of BFS discovery order).
+        inDegree.set(resolved, (inDegree.get(resolved) ?? 0) + 1);
+        // Adjacency: record the caller. Dedupe preserves first-seen order.
+        let inbound = inboundFiles.get(resolved);
+        if (!inbound) {
+          inbound = [];
+          inboundFiles.set(resolved, inbound);
+        }
+        if (!inbound.includes(file)) inbound.push(file);
+        if (seen.has(resolved)) continue;
+        queue.push({ file: resolved, depth: depth + 1 });
       }
-      if (!inbound.includes(file)) inbound.push(file);
-      if (seen.has(resolved)) continue;
-      queue.push({ file: resolved, depth: depth + 1 });
     }
   }
 

@@ -66,6 +66,31 @@ which is consumed both standalone and by the webview panel.
   L-shaped paths at render time.
 
 ### Changed
+- **Webview render performance on 500+ node graphs.** Three changes
+  together cut perceived pan/zoom/focus-switch jank on the dawning
+  `apps/gateway/src` corpus (510 nodes, 1700 edges) from "stutter every
+  gesture" to sub-frame:
+  - **Cytoscape large-graph flags.** Enabled `hideEdgesOnViewport: true`
+    + `textureOnViewport: true` + capped `pixelRatio` at 1.5. During pan
+    / zoom Cytoscape now drops edges and translates a cached texture
+    instead of redrawing 1700 beziers per frame; edges snap back when
+    the gesture ends.
+  - **`cy.batch()` around `applyFilters()` + `applyFocusMask()`.**
+    Switching a bc chip, toggling hide-external, or entering / exiting
+    focus mode previously triggered ~2300 individual `.style('display')`
+    mutations (510 cls + N method + M ext + 1686 edges), each marking
+    the renderer dirty independently. Wrapped both passes in
+    `cy.batch()` so the whole change collapses into one render pass.
+  - **Minimap no longer listens to `render`.** The previous wiring
+    (`cy.on('render pan zoom', schedule)`) re-ran `cy.nodes()`-wide
+    bounding-box aggregation + a full canvas redraw on every internal
+    repaint frame, which on 510 nodes was the dominant gesture-frame
+    cost. Listener is now `pan zoom select unselect` for cheap viewport
+    updates and `layoutstop add remove position` for projection
+    invalidation; the projection (graph-coords → minimap-coords) is
+    cached and only recomputed when node positions actually change.
+    `drawNodes` also skips hidden nodes so focus mode minimap repaints
+    walk the visible subset instead of the full 510.
 - **`PROMPT_VERSION` → v3.10. Method `visibility` taught + outline filter.**
   Each method block now carries a `visibility` field (`public` /
   `private` / `protected` / `internal`) taken verbatim from the source

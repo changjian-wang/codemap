@@ -1784,6 +1784,31 @@ const cy = cytoscape({
   // complain about as "zoom step too large". 0.25 ≈ ×1.10 per tick, much
   // closer to VS Code editor zoom feel. The toolbar +/- buttons step at ×1.2.
   wheelSensitivity: 0.25,
+  // ---- Large-graph rendering flags ----
+  // 510 nodes + 1700 edges (dawning apps/gateway scope) made pan / zoom
+  // jank visibly: every interaction frame had to repaint the full edge
+  // set against a bezier renderer with no texture cache. These three
+  // flags are the Cytoscape-recommended trio for graphs above ~300
+  // elements — they only kick in *during* viewport motion, so static
+  // frames stay pixel-perfect.
+  //   hideEdgesOnViewport: drop edges while panning / zooming. Restored
+  //     immediately on viewport-end. The visual hint becomes "nodes
+  //     glide, edges snap back", which testers consistently prefer over
+  //     stutter.
+  //   textureOnViewport:  rasterise the current frame to a texture and
+  //     translate / scale that bitmap during the gesture instead of
+  //     redrawing every node + edge per frame.
+  //   motionBlur:         keep at default (false). Enabling adds a 1-2px
+  //     ghost trail that makes the "snap-back" feel less abrupt but adds
+  //     allocation pressure — net loss on Apple Silicon.
+  hideEdgesOnViewport: true,
+  textureOnViewport: true,
+  motionBlur: false,
+  // Cap pixelRatio at 1.5 so 4K / retina displays don't blow up the
+  // texture-cache budget when textureOnViewport rasterises the frame.
+  // Visual quality difference at static rest is imperceptible; the
+  // savings during gestures are not.
+  pixelRatio: Math.min(1.5, window.devicePixelRatio || 1),
   layout: __cmLayoutOpts,
   style: [
     // ---------- Compound parent (class swimlane) ----------
@@ -2149,23 +2174,28 @@ function applyFocusMask() {
   // their visible-child rule (a parent shows up iff any child is visible).
   if (mode === 'all') return;
   if (!currentFocus) return;
-  cy.nodes().forEach(n => {
-    const id = n.id();
-    if (!isInFocus(id)) n.style('display', 'none');
-  });
-  // Hide compound parents that have no visible children. Cytoscape doesn't
-  // auto-collapse an empty compound: it would render as an empty rectangle.
-  cy.nodes('.cls').forEach(p => {
-    if (p.style('display') === 'none') return;
-    const visibleChildren = p.children().filter(c => c.style('display') !== 'none');
-    if (visibleChildren.length === 0) p.style('display', 'none');
-  });
-  cy.edges().forEach(e => {
-    const src = e.source();
-    const tgt = e.target();
-    if (src.style('display') === 'none' || tgt.style('display') === 'none') {
-      e.style('display', 'none');
-    }
+  // Batch all .style() mutations into a single render pass — without this,
+  // a 510-node / 1700-edge graph triggers ~2300 individual dirty marks +
+  // restyles, which is the bulk of the perceived "focus-change" jank.
+  cy.batch(() => {
+    cy.nodes().forEach(n => {
+      const id = n.id();
+      if (!isInFocus(id)) n.style('display', 'none');
+    });
+    // Hide compound parents that have no visible children. Cytoscape doesn't
+    // auto-collapse an empty compound: it would render as an empty rectangle.
+    cy.nodes('.cls').forEach(p => {
+      if (p.style('display') === 'none') return;
+      const visibleChildren = p.children().filter(c => c.style('display') !== 'none');
+      if (visibleChildren.length === 0) p.style('display', 'none');
+    });
+    cy.edges().forEach(e => {
+      const src = e.source();
+      const tgt = e.target();
+      if (src.style('display') === 'none' || tgt.style('display') === 'none') {
+        e.style('display', 'none');
+      }
+    });
   });
 }
 
@@ -3399,8 +3429,13 @@ function initMinimap() {
 
   // Compute a transform from model (graph) coordinates to minimap pixel
   // coordinates. We pad 10% on each side so nodes on the edge are still
-  // visible inside the minimap frame.
+  // visible inside the minimap frame. Cached in `cachedProjection` because
+  // bounding-box aggregation is O(N) and we don't want to redo it on every
+  // pan / zoom frame — only on layout changes / window resize.
+  let cachedProjection = null;
+  function invalidateProjection() { cachedProjection = null; }
   function computeProjection() {
+    if (cachedProjection) return cachedProjection;
     const r = wrap.getBoundingClientRect();
     const W = r.width, H = r.height;
     const nodes = cy.nodes();
@@ -3419,12 +3454,17 @@ function initMinimap() {
     const scale = Math.min((W - padX * 2) / gw, (H - padY * 2) / gh);
     const offsetX = (W - gw * scale) / 2 - minX * scale;
     const offsetY = (H - gh * scale) / 2 - minY * scale;
-    return { scale, offsetX, offsetY, W, H };
+    cachedProjection = { scale, offsetX, offsetY, W, H };
+    return cachedProjection;
   }
 
   function drawNodes(p) {
     ctx.clearRect(0, 0, p.W, p.H);
+    // Skip hidden nodes — with focus mode + filters active, often a small
+    // fraction of the 510 nodes are visible. Walking all of them was a
+    // measurable chunk of minimap frame time on the gateway corpus.
     cy.nodes().forEach(n => {
+      if (n.style('display') === 'none') return;
       const bb = n.boundingBox();
       const x = bb.x1 * p.scale + p.offsetX;
       const y = bb.y1 * p.scale + p.offsetY;
@@ -3502,9 +3542,26 @@ function initMinimap() {
   });
   window.addEventListener('mouseup', () => { dragging = false; });
 
-  cy.on('render pan zoom', schedule);
-  cy.on('select unselect', schedule);
-  window.addEventListener('resize', () => { resizeCanvas(); schedule(); });
+  // Event wiring — the previous version listened on `render`, which
+  // Cytoscape fires once per *internal* repaint frame. On a 510-node /
+  // 1700-edge graph that meant the minimap walked all nodes twice per
+  // gesture frame (computeProjection + drawNodes) and was the dominant
+  // cause of pan / zoom jank.
+  //
+  // The minimap only actually needs to redraw on three classes of event:
+  //   - pan / zoom:    the viewport rectangle moved → drawViewport() must
+  //                    recompute, but node positions did NOT change, so
+  //                    drawNodes() can reuse the cached projection and
+  //                    just repaint the same rects.
+  //   - layoutstop / position / add / remove: node positions changed,
+  //                    invalidate the cached projection so the next
+  //                    schedule() rebuilds it.
+  //   - select / unselect: only the gold outline on the selected node
+  //                    needs to repaint; same projection.
+  cy.on('pan zoom select unselect', schedule);
+  cy.on('layoutstop add remove', () => { invalidateProjection(); schedule(); });
+  cy.on('position', 'node', () => { invalidateProjection(); schedule(); });
+  window.addEventListener('resize', () => { resizeCanvas(); invalidateProjection(); schedule(); });
 
   // First paint after layout has settled.
   setTimeout(schedule, 50);
@@ -3722,48 +3779,58 @@ function applyFilters() {
   // Compound parents (class swimlanes) get the bc / hide-read / unverified /
   // search filters applied directly. Their visibility is the gate for their
   // method children — those don't get filtered independently in slice 1.
-  cy.nodes('.cls').forEach(n => {
-    const c = CLASSES.find(x => x.id === n.id());
-    if (!c) { n.style('display', 'none'); return; }
-    let show = true;
-    if (filterState.bc !== 'all' && c.bc !== filterState.bc) show = false;
-    if (filterState.hideRead && c.readState === 'read') show = false;
-    if (filterState.onlyUnverified && c.verification === 'verified') show = false;
-    if (filterState.search && !matchesSearch(c, filterState.search)) show = false;
-    // Honor the manual fold state from window.__codemapCollapse.toggleOne /
-    // .toggleAll — those hide method children directly, but don't touch the
-    // parent. Nothing else to do here.
-    n.style('display', show ? 'element' : 'none');
-  });
-  // Method children inherit their compound's visibility. A child can also be
-  // independently hidden by the fold mechanism (display:'none' set by
-  // __cmApplyNodeFold); we re-evaluate that branch instead of stomping it.
-  cy.nodes('.method').forEach(n => {
-    const parent = cy.getElementById(n.data('ownerId'));
-    const parentHidden = !parent || parent.empty() || parent.style('display') === 'none';
-    const folded = __cmCollapsedClasses.has(n.data('ownerId')) || __cmAllCollapsed;
-    n.style('display', (parentHidden || folded) ? 'none' : 'element');
-  });
-  // External-dep nodes get the hide-external chip + the search filter.
-  cy.nodes('.ext').forEach(n => {
-    let show = !filterState.hideExternal;
-    if (show && filterState.search) {
-      const name = String(n.id() || '').replace(/^ext:/, '');
-      if (!name.toLowerCase().includes(filterState.search.toLowerCase())) show = false;
-    }
-    n.style('display', show ? 'element' : 'none');
-  });
-  // Edges: hide whenever either endpoint is hidden so the graph never shows
-  // a dangling arrow into nowhere.
-  cy.edges().forEach(e => {
-    const src = e.source().style('display') !== 'none';
-    const tgt = e.target().style('display') !== 'none';
-    let show = src && tgt;
-    if (filterState.hideExternal && e.data('kind') === 'external_calls') show = false;
-    e.style('display', show ? 'element' : 'none');
+  //
+  // Wrapping every per-element mutation below in cy.batch() collapses what
+  // would otherwise be ~2300 separate dirty-marks (510 cls + N method + M
+  // ext + 1686 edges on the dawning fixture) into a single render pass.
+  // Cytoscape repaints the canvas exactly once when the batch closes,
+  // which is the difference between a "chip click → noticeable hitch" and
+  // a sub-frame restyle on the 510-node / 1700-edge corpus.
+  cy.batch(() => {
+    cy.nodes('.cls').forEach(n => {
+      const c = CLASSES.find(x => x.id === n.id());
+      if (!c) { n.style('display', 'none'); return; }
+      let show = true;
+      if (filterState.bc !== 'all' && c.bc !== filterState.bc) show = false;
+      if (filterState.hideRead && c.readState === 'read') show = false;
+      if (filterState.onlyUnverified && c.verification === 'verified') show = false;
+      if (filterState.search && !matchesSearch(c, filterState.search)) show = false;
+      // Honor the manual fold state from window.__codemapCollapse.toggleOne /
+      // .toggleAll — those hide method children directly, but don't touch the
+      // parent. Nothing else to do here.
+      n.style('display', show ? 'element' : 'none');
+    });
+    // Method children inherit their compound's visibility. A child can also be
+    // independently hidden by the fold mechanism (display:'none' set by
+    // __cmApplyNodeFold); we re-evaluate that branch instead of stomping it.
+    cy.nodes('.method').forEach(n => {
+      const parent = cy.getElementById(n.data('ownerId'));
+      const parentHidden = !parent || parent.empty() || parent.style('display') === 'none';
+      const folded = __cmCollapsedClasses.has(n.data('ownerId')) || __cmAllCollapsed;
+      n.style('display', (parentHidden || folded) ? 'none' : 'element');
+    });
+    // External-dep nodes get the hide-external chip + the search filter.
+    cy.nodes('.ext').forEach(n => {
+      let show = !filterState.hideExternal;
+      if (show && filterState.search) {
+        const name = String(n.id() || '').replace(/^ext:/, '');
+        if (!name.toLowerCase().includes(filterState.search.toLowerCase())) show = false;
+      }
+      n.style('display', show ? 'element' : 'none');
+    });
+    // Edges: hide whenever either endpoint is hidden so the graph never shows
+    // a dangling arrow into nowhere.
+    cy.edges().forEach(e => {
+      const src = e.source().style('display') !== 'none';
+      const tgt = e.target().style('display') !== 'none';
+      let show = src && tgt;
+      if (filterState.hideExternal && e.data('kind') === 'external_calls') show = false;
+      e.style('display', show ? 'element' : 'none');
+    });
   });
   // Slice 3: focus mask runs last so the focus subgraph wins over chip
-  // filters. With no current focus this is a no-op.
+  // filters. With no current focus this is a no-op. (applyFocusMask runs
+  // its own cy.batch() internally.)
   applyFocusMask();
   applyOutlineFilters();
 }

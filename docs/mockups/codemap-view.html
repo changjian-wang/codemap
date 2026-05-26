@@ -1682,8 +1682,24 @@ function __cmResolveExternalTarget(raw) {
 // ---- Pass 3: build edges from method-level call data ----
 const edges = [];
 let __cmEdgeCounter = 0;
+// Edge dedup key set. Same (source, target, kind) pair must only render
+// once — the raw method-call data routinely lists the same callee twice
+// (overload resolution merges them) and Pass 4's class-level fallback can
+// re-emit a pair that Pass 3 already produced. Visually this showed up as
+// near-overlapping parallel curves between e.g. UserController.DeleteUser
+// and AuditLogHelper.LogAsync.
+const __cmEdgeKeys = new Set();
 function __cmPushEdge(source, target, kind, verified) {
   if (!source || !target || source === target) return;
+  // Dedup by endpoint pair only. The raw data routinely lists the same
+  // callee in BOTH `calls` and `externalCalls` (overload split, or
+  // external→internal promotion), which used to emit two near-overlapping
+  // bezier curves between the same pair — the user sees a single line
+  // with a doubled arrowhead. Keep the first emission (Pass 3 'calls'
+  // wins over Pass 4 fallback).
+  const key = `${source}|${target}`;
+  if (__cmEdgeKeys.has(key)) return;
+  __cmEdgeKeys.add(key);
   edges.push({
     data: { id: `e${__cmEdgeCounter++}`, source, target, kind, verified: !!verified },
     classes: `${kind}${verified ? '' : ' unverified-edge'}`,
@@ -1810,12 +1826,14 @@ edges.forEach(e => {
 });
 
 const __cmMountedClasses = new Set();
-function __cmMountClassMethods(classId) {
+function __cmMountClassNodesOnly(classId) {
   if (__cmMountedClasses.has(classId)) return;
   __cmMountedClasses.add(classId);
   const methodNodes = __cmMethodNodesByOwner.get(classId);
   if (!methodNodes || methodNodes.length === 0) return;
   cy.add(methodNodes);
+}
+function __cmAddDeferredEdgesForClass(classId) {
   const candEdges = __cmMethodEdgesByOwner.get(classId);
   if (!candEdges) return;
   const toAdd = [];
@@ -1826,6 +1844,13 @@ function __cmMountClassMethods(classId) {
     toAdd.push(e);
   });
   if (toAdd.length > 0) cy.add(toAdd);
+}
+// Back-compat single-shot helper. Used by toggleOne and other callers
+// that mount one class in isolation \u2014 cross-class edges are added best
+// effort if the other endpoint is already present.
+function __cmMountClassMethods(classId) {
+  __cmMountClassNodesOnly(classId);
+  __cmAddDeferredEdgesForClass(classId);
 }
 
 function __cmUnmountClassMethods(classId) {
@@ -1841,7 +1866,10 @@ function __cmMountAllClasses() {
   if (__cmMountedClasses.size === __cmMethodNodesByOwner.size) return;
   cy.batch(() => {
     for (const classId of __cmMethodNodesByOwner.keys()) {
-      __cmMountClassMethods(classId);
+      __cmMountClassNodesOnly(classId);
+    }
+    for (const classId of __cmMethodNodesByOwner.keys()) {
+      __cmAddDeferredEdgesForClass(classId);
     }
   });
 }
@@ -1868,14 +1896,10 @@ const __cmLayoutOpts = {
   edgeSep: 14,
   fit: true,
   padding: 40,
-  // Have dagre emit per-edge control points along its layered routing so
-  // edges follow the rank corridors (taxi-style) instead of cutting across
-  // the canvas as free bezier curves. Cuts down crossing visual noise on
-  // 100+ node graphs by an order of magnitude. `automaticDagreEdgeStyle:
-  // false` because our edge styles already set curve-style/colors — we
-  // wire the control points into those styles ourselves below.
-  useDagreEdgeControlPoints: true,
-  automaticDagreEdgeStyle: false,
+  // dagre-emitted edge control points were used by an older
+  // `unbundled-bezier` edge style; the current `bezier` style ignores them
+  // and the (small) per-edge bend computation is wasted work, so we leave
+  // both flags off.
 };
 const cy = cytoscape({
   container: document.getElementById('cy'),
@@ -1977,6 +2001,33 @@ const cy = cytoscape({
     { selector: 'node.cls.kind-record',    style: { 'shape': 'round-rectangle', 'background-color': '#241a24' } },
     { selector: 'node.cls.kind-enum',      style: { 'shape': 'cut-rectangle', 'background-color': '#25251a' } },
 
+    // Class compound with zero mounted method children. Styled as a
+    // standalone data-node so dagre gets a real bbox and the box stops
+    // overlapping neighbours — empty compounds otherwise collapse to a
+    // thin sliver and slide under adjacent swimlanes.
+    {
+      selector: 'node.cls.cls-empty',
+      style: {
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'text-margin-y': 0,
+        'text-margin-x': 0,
+        'text-wrap': 'ellipsis',
+        'text-max-width': 160,
+        // When a node has no children cytoscape stops treating it as a
+        // compound, so min-width / min-height + padding no longer guarantee
+        // a visible box. Set explicit width/height so the label always
+        // fits inside the border.
+        'width': 160,
+        'height': 38,
+        'padding': '0px',
+        'font-style': 'italic',
+        'text-background-opacity': 0,
+        'background-opacity': 0.95,
+        'border-width': 1,
+      }
+    },
+
     // ---------- Method nodes (primary citizens) ----------
     {
       selector: 'node.method',
@@ -2045,36 +2096,85 @@ const cy = cytoscape({
       }
     },
 
+    // ---------- Mindmap center node (.mm-root) ----------
+    {
+      selector: 'node.cls.mm-root',
+      style: {
+        'shape': 'round-pentagon',
+        'background-color': '#264f78',
+        'background-opacity': 1,
+        'border-width': 3,
+        'border-color': '#007acc',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'text-margin-y': 0,
+        'font-size': 16,
+        'font-weight': 'bold',
+        'color': '#ffffff',
+        'width': 160,
+        'height': 80,
+        'padding': '0px',
+        'text-wrap': 'wrap',
+        'text-max-width': 150,
+        'text-background-opacity': 0,
+      }
+    },
+    {
+      selector: 'edge.mm-edge',
+      style: {
+        'curve-style': 'round-taxi',
+        'taxi-direction': 'auto',
+        'taxi-turn': 30,
+        'taxi-turn-min-distance': 8,
+        'line-color': '#3a7ab7',
+        'line-opacity': 0.8,
+        'width': 2,
+        'target-arrow-shape': 'none',
+        'source-arrow-shape': 'none',
+      }
+    },
+
     // ---------- Edges ----------
+    //
+    // Curve-style is plain `bezier` (not `unbundled-bezier` with dagre
+    // control points). On the method-as-node graph, the dagre control
+    // points produced visibly distracting S-curves when methods of the
+    // same compound were ranked differently — a simple bezier with auto
+    // routing is both faster and visually calmer. dagre still drives the
+    // node layout, we just stop importing its per-edge bend points.
     {
       selector: 'edge.calls',
       style: {
-        'curve-style': 'unbundled-bezier',
-        'control-point-weights': ele => ele.scratch('controlPointWeights'),
-        'control-point-distances': ele => ele.scratch('controlPointDistances'),
-        'edge-distances': 'intersection',
-        'edge-ends-overlap': false,
-        'width': 1.5,
+        'curve-style': 'round-taxi',
+        'taxi-direction': 'auto',
+        'taxi-turn': 40,
+        'taxi-turn-min-distance': 10,
+        'source-distance-from-node': 2,
+        'target-distance-from-node': 4,
+        'arrow-scale': 1.1,
+        'width': 1.8,
         'line-color': '#61afef',
         'target-arrow-color': '#61afef',
         'target-arrow-shape': 'triangle',
-        'opacity': 0.85,
+        'opacity': 0.9,
       }
     },
     {
       selector: 'edge.external_calls',
       style: {
-        'curve-style': 'unbundled-bezier',
-        'control-point-weights': ele => ele.scratch('controlPointWeights'),
-        'control-point-distances': ele => ele.scratch('controlPointDistances'),
-        'edge-distances': 'intersection',
-        'edge-ends-overlap': false,
-        'width': 1.2,
+        'curve-style': 'round-taxi',
+        'taxi-direction': 'auto',
+        'taxi-turn': 40,
+        'taxi-turn-min-distance': 10,
+        'source-distance-from-node': 2,
+        'target-distance-from-node': 4,
+        'arrow-scale': 1,
+        'width': 1.4,
         'line-color': '#56b6c2',
         'line-style': 'dashed',
         'target-arrow-color': '#56b6c2',
         'target-arrow-shape': 'triangle',
-        'opacity': 0.7,
+        'opacity': 0.75,
       }
     },
     {
@@ -2104,8 +2204,12 @@ const cy = cytoscape({
       style: {
         'line-color': '#d7ba7d',
         'target-arrow-color': '#d7ba7d',
-        'width': 2.4,
+        'width': 2.6,
         'opacity': 1,
+        'shadow-blur': 12,
+        'shadow-color': '#d7ba7d',
+        'shadow-opacity': 0.45,
+        'z-index': 10,
       }
     },
     // Per-element visibility toggle. Adding / removing this class is the
@@ -2133,7 +2237,7 @@ let __cmFocusSet    = new Set();     // class ids included by depth BFS
 let __cmFocusExtSet = new Set();     // ext:* ids reachable from focus set
 
 // Slice 4: mode + browser-style history.
-let mode = 'focus';                  // 'focus' | 'all'
+let mode = 'focus';                  // 'focus' | 'all' | 'mindmap'
 let historyStack = [];               // [{ classId, methodName }, ...]
 let historyIndex = -1;
 const HISTORY_CAP = 50;
@@ -2155,6 +2259,8 @@ function __buildMethodAdjacency() {
   });
   return adj;
 }
+
+// (Class-level adjacency cache removed — only method-level BFS is used.)
 
 function bfsMethods(originNodeId, depth) {
   // BFS in the method graph. `origin` is a method node id (Class.Method),
@@ -2180,37 +2286,25 @@ function bfsMethods(originNodeId, depth) {
 }
 
 function focusSetForCurrent(classId, methodName, depth) {
-  // Returns a set of node ids that should be visible in focus mode. Includes
-  // method nodes, the compound parents they live under, and any ext: targets
-  // they reach. If a method is given, BFS is rooted at that specific method
-  // node; otherwise we union BFS from every method node inside the class
-  // compound (so clicking a class header still shows the whole entry slice).
-  let rootIds;
-  if (methodName) {
-    rootIds = [`${classId}.${methodName}`];
-  } else {
-    rootIds = [];
-    const c = __cmClassById.get(classId);
-    if (c) {
-      __cmVisibleMethodsOf(c).forEach(m => rootIds.push(`${c.id}.${m.name}`));
-    }
-    if (rootIds.length === 0) rootIds = [classId];
-  }
+  // Method-level focus only — BFS the method-call graph rooted at the
+  // picked method. (Class-level focus was removed because the union of
+  // every method's BFS reach produced an unreadable graph on dagre.)
   const focus = new Set();
-  rootIds.forEach(id => {
-    const reach = bfsMethods(id, depth);
-    reach.forEach(x => focus.add(x));
-  });
-  // Promote: every visible method drags its parent compound into focus too.
+  const root = methodName ? `${classId}.${methodName}` : classId;
+  bfsMethods(root, depth).forEach(x => focus.add(x));
+  // Promote: every visible method node drags its parent compound into
+  // focus so the compound box renders around the method children.
   const toAdd = new Set();
   focus.forEach(id => {
+    if (typeof id !== 'string' || id.startsWith('ext:')) return;
     const dot = id.indexOf('.');
-    if (dot > 0 && !id.startsWith('ext:')) {
+    if (dot > 0) {
       const parent = id.slice(0, dot);
       if (__cmNodeIds.has(parent)) toAdd.add(parent);
     }
   });
   toAdd.forEach(id => focus.add(id));
+  focus.add(classId);
   return focus;
 }
 
@@ -2289,7 +2383,7 @@ function applyFocusMask() {
   // Focus mask is the final override: anything outside the focus subgraph
   // is force-hidden regardless of chip selection. Compound parents follow
   // their visible-child rule (a parent shows up iff any child is visible).
-  if (mode === 'all') return;
+  if (mode === 'all' || mode === 'mindmap') return;
   if (!currentFocus) return;
   // Batch all .style() mutations into a single render pass — without this,
   // a 510-node / 1700-edge graph triggers ~2300 individual dirty marks +
@@ -2299,12 +2393,18 @@ function applyFocusMask() {
       const id = n.id();
       if (!isInFocus(id)) n.addClass('cm-hidden');
     });
-    // Hide compound parents that have no visible children. Cytoscape doesn't
-    // auto-collapse an empty compound: it would render as an empty rectangle.
+    // Hide compound parents that have no visible method children. Covers
+    // DTO / Model / ApiResponse-style data classes (no methods at all) and
+    // helper classes whose methods aren't on the current method-level
+    // focus chain. Canvas reads as "method-to-method call chains only".
     cy.nodes('.cls').forEach(p => {
-      if (p.hasClass('cm-hidden')) return;
       const visibleChildren = p.children().filter(c => !c.hasClass('cm-hidden'));
-      if (visibleChildren.length === 0) p.addClass('cm-hidden');
+      if (visibleChildren.length === 0) {
+        p.addClass('cm-hidden');
+        p.removeClass('cls-empty');
+      } else {
+        p.removeClass('cls-empty');
+      }
     });
     cy.edges().forEach(e => {
       if (e.source().hasClass('cm-hidden') || e.target().hasClass('cm-hidden')) {
@@ -2343,9 +2443,225 @@ function layoutFocus() {
   // Re-run dagre on whatever is currently visible so the subgraph fills the
   // canvas. We reuse __cmLayoutOpts unchanged — small subgraphs render fine
   // with the existing dagre control-point routing.
+  __cmTagEmptyCompounds();
   const visible = cy.elements().filter(el => !el.hasClass('cm-hidden'));
   if (visible.length === 0) return;
-  visible.layout({ ...__cmLayoutOpts, fit: true, padding: 50 }).run();
+  const layout = visible.layout({ ...__cmLayoutOpts, fit: false, padding: 50 });
+  layout.on('layoutstop', () => __cmFitVisible(visible));
+  layout.run();
+}
+
+// Centered fit with a zoom cap. cy.fit() zooms to whatever ratio fills the
+// container, which on a small focus set (4 cls-empty 160×38 nodes) blows
+// up the rendered size to 3-4× — boxes don't fit on screen anymore. Cap
+// at 1.0 so collapsed/empty subgraphs render at natural scale.
+function __cmFitVisible(visible, padding) {
+  cy.resize();
+  cy.fit(visible, padding == null ? 50 : padding);
+  if (cy.zoom() > 1.0) {
+    cy.zoom(1.0);
+    cy.center(visible);
+  }
+}
+
+// ---------- Mindmap mode ----------
+// Class-header click goes here. Renders the class as a center "root" pill
+// with all its methods radiating out, then each method's transitive
+// callees on subsequent rings. Implementation strategy: temporarily
+// detach method nodes from their compound parents (so dagre's nested
+// compound limitations don't apply), hide the compounds, run cytoscape's
+// breadthfirst (circle) layout rooted at the class node. On exit, every
+// detached method is re-parented and the original focus view restored.
+let __cmMindmapClassId = null;
+
+function enterMindmap(classId) {
+  const c = __cmClassById.get(classId);
+  if (!c) return;
+  if (mode === 'mindmap' && __cmMindmapClassId === classId) return;
+  if (mode === 'mindmap') {
+    // Switching from one mindmap to another — tear down the prior one
+    // first so detached nodes go back to their original compounds before
+    // we detach again.
+    exitMindmap(false);
+  }
+  mode = 'mindmap';
+  __cmMindmapClassId = classId;
+
+  const directMethods = __cmVisibleMethodsOf(c).map(m => `${classId}.${m.name}`);
+  const reach = new Set([classId]);
+  directMethods.forEach(id => bfsMethods(id, Infinity).forEach(x => reach.add(x)));
+
+  // Mount every class that contributes a method node to the mindmap so
+  // its method children actually exist in cy before we detach them.
+  const involvedClasses = new Set([classId]);
+  reach.forEach(id => {
+    if (typeof id !== 'string' || id.startsWith('ext:')) return;
+    const dot = id.indexOf('.');
+    if (dot > 0) involvedClasses.add(id.slice(0, dot));
+  });
+  cy.batch(() => {
+    [...__cmMountedClasses].forEach(cid => {
+      if (!involvedClasses.has(cid)) __cmUnmountClassMethods(cid);
+    });
+    involvedClasses.forEach(cid => __cmMountClassNodesOnly(cid));
+    involvedClasses.forEach(cid => __cmAddDeferredEdgesForClass(cid));
+
+    // Detach reached method nodes from their compound parents.
+    cy.nodes('.method').forEach(n => {
+      if (!reach.has(n.id())) {
+        n.addClass('cm-hidden');
+        return;
+      }
+      n.removeClass('cm-hidden');
+      const parentId = n.data('ownerId') ||
+        (n.parent().length ? n.parent().id() : null);
+      n.scratch('_mmOrigParent', parentId);
+      if (n.parent().length > 0) n.move({ parent: null });
+    });
+
+    // Hide all class compounds. The center class is then un-hidden and
+    // re-styled as the mindmap root pill below.
+    cy.nodes('.cls').forEach(p => p.addClass('cm-hidden'));
+    const center = cy.getElementById(classId);
+    if (!center.empty()) {
+      center.removeClass('cm-hidden');
+      center.addClass('mm-root');
+      center.data('label', c.id);
+    }
+
+    // ext nodes: keep only those reached by the BFS.
+    cy.nodes('.ext').forEach(n => {
+      if (reach.has(n.id())) n.removeClass('cm-hidden');
+      else n.addClass('cm-hidden');
+    });
+
+    // Edges follow their endpoints.
+    cy.edges().forEach(e => {
+      if (e.source().hasClass('cm-hidden') || e.target().hasClass('cm-hidden')) {
+        e.addClass('cm-hidden');
+      } else {
+        e.removeClass('cm-hidden');
+      }
+    });
+
+    // Synthetic root → method edges so the breadthfirst layout sees the
+    // class as parent of all its methods even when no real call edge
+    // exists from outside into them.
+    directMethods.forEach(mid => {
+      if (cy.getElementById(mid).empty()) return;
+      const eid = `_mm_e_${classId}_${mid}`;
+      if (cy.getElementById(eid).empty()) {
+        cy.add({
+          data: {
+            id: eid, source: classId, target: mid,
+            kind: 'mm', verified: true,
+          },
+          classes: 'mm-edge',
+        });
+      }
+    });
+  });
+
+  const visible = cy.elements().filter(el => !el.hasClass('cm-hidden'));
+  if (visible.length === 0) return;
+  visible.layout({
+    name: 'breadthfirst',
+    roots: [classId],
+    directed: true,
+    circle: true,
+    spacingFactor: 1.5,
+    padding: 40,
+    fit: false,
+    animate: false,
+  }).run();
+  __cmFitVisible(visible, 40);
+  updateFocusBar();
+}
+
+function exitMindmap(rerunFocus) {
+  if (mode !== 'mindmap') return;
+  const wasClassId = __cmMindmapClassId;
+  cy.batch(() => {
+    // Drop synthetic edges.
+    cy.edges('.mm-edge').remove();
+    // Re-parent detached method nodes.
+    cy.nodes('.method').forEach(n => {
+      const p = n.scratch('_mmOrigParent');
+      if (p && n.parent().length === 0 && !cy.getElementById(p).empty()) {
+        n.move({ parent: p });
+      }
+      n.removeScratch('_mmOrigParent');
+    });
+    if (wasClassId) {
+      const center = cy.getElementById(wasClassId);
+      if (!center.empty()) {
+        center.removeClass('mm-root');
+        const c = __cmClassById.get(wasClassId);
+        if (c) center.data('label', __cmClassLabel(c));
+      }
+    }
+    // Clear all cm-hidden; applyFocusInternal / applyFocusMask will
+    // recompute it for the current focus.
+    cy.elements().removeClass('cm-hidden');
+  });
+  __cmMindmapClassId = null;
+  mode = 'focus';
+  if (rerunFocus !== false && currentFocus) {
+    applyFocusInternal(currentFocus.classId, currentFocus.methodName);
+  }
+}
+
+// dagre's LR rank assignment puts sibling method children of the same
+// compound at the same rank → all stacked vertically in one column. For
+// a class with 21 methods that turns the canvas into a tall thin strip.
+// After dagre runs we redistribute each compound's visible method
+// children into a grid (cols × rows) so the inside reads left→right too.
+// The compound auto-resizes around its children; the outer dagre
+// arrangement of class compounds is preserved.
+function __cmGridifyCompounds(visible) {
+  const compounds = visible.filter('node.cls').filter(p => !p.hasClass('cm-hidden'));
+  if (compounds.length === 0) return;
+  cy.batch(() => {
+    compounds.forEach(p => {
+      const kids = p.children().filter(c => !c.hasClass('cm-hidden') && c.hasClass('method'));
+      const n = kids.length;
+      if (n <= 1) return;
+      // Sample child size after dagre has measured/positioned them.
+      const sampleBb = kids[0].boundingBox();
+      const cellW = sampleBb.w + 18;
+      const cellH = sampleBb.h + 12;
+      // Aim for roughly square interior — cols ≈ sqrt(n), cap at 4 so each
+      // column has enough horizontal real estate for typical method names.
+      const cols = Math.min(4, Math.max(1, Math.round(Math.sqrt(n))));
+      const rows = Math.ceil(n / cols);
+      const center = p.position();
+      const gridW = cols * cellW;
+      const gridH = rows * cellH;
+      const x0 = center.x - gridW / 2 + cellW / 2;
+      const y0 = center.y - gridH / 2 + cellH / 2;
+      kids.forEach((k, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        k.position({ x: x0 + col * cellW, y: y0 + row * cellH });
+      });
+    });
+  });
+}
+
+// Add/remove `cls-empty` so the dedicated style block (centered label,
+// min-size, italic) gives empty compounds a real bbox before any dagre
+// pass — without this they collapse to a sliver and overlap neighbours.
+// Tags by VISIBLE child count, not total: a mounted-but-fully-masked
+// class (e.g. UserModel reached only as a return type) has hidden
+// method children and would otherwise miss the empty-compound style.
+function __cmTagEmptyCompounds() {
+  cy.batch(() => {
+    cy.nodes('.cls').forEach(p => {
+      const visibleKids = p.children().filter(c => !c.hasClass('cm-hidden'));
+      if (visibleKids.length === 0) p.addClass('cls-empty');
+      else p.removeClass('cls-empty');
+    });
+  });
 }
 
 function positionSharedRow() {
@@ -2443,6 +2759,7 @@ function layoutAll() {
   // the middle, shared + ext nodes at the bottom). Edges are switched to
   // cytoscape's auto taxi routing because the dagre control points captured
   // pre-translation no longer match the post-translation source/target line.
+  __cmTagEmptyCompounds();
   cy.elements().layout({ ...__cmLayoutOpts, fit: false, padding: 50 }).run();
   applySwimlanes();
   const visible = cy.elements().filter(el => !el.hasClass('cm-hidden'));
@@ -2489,7 +2806,7 @@ function applySwimlanes() {
   // the orthogonal routing.
   cy.edges().forEach(e => {
     e.style({
-      'curve-style': 'taxi',
+      'curve-style': 'round-taxi',
       'taxi-direction': 'horizontal',
       'taxi-turn': 30,
       'taxi-turn-min-distance': 5,
@@ -2576,7 +2893,7 @@ function applySwimlanes() {
   // L-shapes at render time and respects the post-translation positions.
   cy.edges().forEach(e => {
     e.style({
-      'curve-style': 'taxi',
+      'curve-style': 'round-taxi',
       'taxi-direction': 'horizontal',
       'taxi-turn': 30,
       'taxi-turn-min-distance': 5,
@@ -2634,19 +2951,32 @@ function updateHistoryButtons() {
 
 function setMode(newMode) {
   if (newMode !== 'focus' && newMode !== 'all') return;
+  if (mode === 'mindmap') exitMindmap(false);
   if (mode === newMode) return;
   const previousMode = mode;
   mode = newMode;
   if (previousMode === 'all') clearSwimlanes();
   if (mode === 'all') {
-    // All-mode shows every class compound + every method node. Clear any
-    // focus accents that were lingering from a previous focus session.
+    // All-mode is the class-level macro view: every class compound is on
+    // canvas but method children stay un-mounted by default. On a 500+
+    // class corpus, mounting every method (~2200 nodes + ~3000 method-
+    // level edges) and running dagre on the whole thing freezes / crashes
+    // the renderer. Class-level fallback edges (Pass 4) still show inter-
+    // class relationships at this zoom level; users who want to drill in
+    // either flip back to Focus or double-tap a class to expand just that
+    // one.
     __cmFocusedMethodNodeId = null;
-    // Lazy mount: "all" mode is the case where every method node has to be
-    // present. Mounting everything up front is exactly what we were trying
-    // to avoid on boot; here it's an explicit user action so the cost is
-    // expected.
-    __cmMountAllClasses();
+    __cmUnmountAllClasses();
+    __cmAllCollapsed = true;
+    __cmCollapsedClasses.clear();
+    CLASSES.forEach(c => __cmCollapsedClasses.add(c.id));
+    // Update each compound's header label so the chevron flips to ▸ N
+    // methods. Without this the headers still read "▾ open" while the
+    // method children are gone, which reads as "broken".
+    CLASSES.forEach(c => {
+      const node = cy.getElementById(c.id);
+      if (!node.empty()) node.data('label', __cmClassLabel(c));
+    });
     cy.nodes('.method').removeClass('method-focus dimmed');
     cy.edges().removeClass('dimmed');
     applyFilters();
@@ -2656,22 +2986,42 @@ function setMode(newMode) {
     renderOutline();
     updateFocusBar();
   } else if (currentFocus) {
+    // Leaving All mode: drop the all-folded state so the focus subgraph's
+    // method nodes can actually appear (applyFilters reads __cmAllCollapsed
+    // + __cmCollapsedClasses).
+    __cmAllCollapsed = false;
+    __cmCollapsedClasses.clear();
     applyFocusInternal(currentFocus.classId, currentFocus.methodName);
   } else if (ENTRIES.length > 0) {
     // Toggled All → Focus before any focus was set: pick the default entry.
+    __cmAllCollapsed = false;
+    __cmCollapsedClasses.clear();
     const ordered = pickDefaultEntry();
     if (ordered) setFocus(ordered.classId, ordered.methodName);
     else updateFocusBar();
   } else {
+    __cmAllCollapsed = false;
+    __cmCollapsedClasses.clear();
     updateFocusBar();
   }
 }
 
 function setFocus(classId, methodName) {
   // Public entry: also pushes onto history and forces back into Focus mode
-  // when called from All. Depth changes / history navigation go through
-  // applyFocusInternal directly so they don't pollute the stack.
+  // when called from All / Mindmap. Depth changes / history navigation go
+  // through applyFocusInternal directly so they don't pollute the stack.
+  if (mode === 'mindmap') exitMindmap(false);
   if (mode !== 'focus') mode = 'focus';
+  // Class-level focus was removed — the union-of-all-methods view was
+  // unreadable on dagre + nested compounds. If a caller still passes
+  // methodName=null (legacy paths, history entries), pick the first
+  // visible method of the class so we stay in method-level land.
+  if (!methodName) {
+    const c = __cmClassById.get(classId);
+    const first = c ? __cmVisibleMethodsOf(c)[0] : null;
+    if (!first) return;
+    methodName = first.name;
+  }
   pushHistory(classId, methodName);
   applyFocusInternal(classId, methodName);
 }
@@ -2686,9 +3036,10 @@ function applyFocusInternal(classId, methodName) {
   __cmFocusedMethodNodeId = methodName ? `${classId}.${methodName}` : null;
   // Lazy mount: figure out which class compounds need their method children
   // present for this focus subgraph, then mount those and unmount everyone
-  // else. On the dawning corpus this is typically <20 classes mounted vs.
-  // 510 total — dagre in layoutFocus() only walks the mounted subgraph.
-  const involvedClasses = new Set([classId]);
+  // else. Both method-level and class-level focus enumerate methods now —
+  // class-level rolls up the union of every method's BFS reach.
+  const involvedClasses = new Set();
+  involvedClasses.add(classId);
   __cmFocusSet.forEach(nodeId => {
     if (typeof nodeId !== 'string' || nodeId.startsWith('ext:')) return;
     const dot = nodeId.indexOf('.');
@@ -2698,7 +3049,18 @@ function applyFocusInternal(classId, methodName) {
     [...__cmMountedClasses].forEach(cid => {
       if (!involvedClasses.has(cid)) __cmUnmountClassMethods(cid);
     });
-    involvedClasses.forEach(cid => __cmMountClassMethods(cid));
+    involvedClasses.forEach(cid => __cmMountClassNodesOnly(cid));
+    involvedClasses.forEach(cid => __cmAddDeferredEdgesForClass(cid));
+  });
+  // Refresh compound headers so chevron + method count reflect newly
+  // mounted state. Keep user's explicit fold choices intact.
+  __cmAllCollapsed = false;
+  involvedClasses.forEach(cid => {
+    __cmCollapsedClasses.delete(cid);
+    const c = __cmClassById.get(cid);
+    if (!c) return;
+    const node = cy.getElementById(cid);
+    if (!node.empty()) node.data('label', __cmClassLabel(c));
   });
   // Chip filters first (they still apply within the focus subgraph), then
   // mask, then layout. Order matters: chip mutations call applyFilters which
@@ -2752,6 +3114,28 @@ function pickDefaultEntry() {
 
 function initFocusMode() {
   ensureSharedness();
+  // Refit the visible subgraph whenever the cy container resizes (chat
+  // panel toggle, window resize, initial flex settle). Without this, the
+  // first paint runs `cy.fit` against a not-yet-stable container width
+  // and the subgraph ends up hugging the right edge.
+  const cyContainer = cy.container();
+  if (cyContainer && typeof ResizeObserver !== 'undefined') {
+    let __cmFitRaf = 0;
+    const ro = new ResizeObserver(() => {
+      if (__cmFitRaf) cancelAnimationFrame(__cmFitRaf);
+      __cmFitRaf = requestAnimationFrame(() => {
+        const vis = cy.elements().filter(el => !el.hasClass('cm-hidden'));
+        if (vis.length === 0) return;
+        if (mode === 'all') {
+          cy.resize();
+          fitWithTopReserve(vis, 110, 30);
+        } else {
+          __cmFitVisible(vis);
+        }
+      });
+    });
+    ro.observe(cyContainer);
+  }
   CLASSES.forEach(c => {
     if (!c.isShared) return;
     const n = cy.getElementById(c.id);
@@ -2878,10 +3262,10 @@ function renderOutline() {
     });
 
     // Caret toggles collapse only; clicking the rest of the header focuses
-    // the entry class itself (class-level focus = union of all its methods'
-    // reachable subgraphs, i.e. the endpoint's full call map). Method-level
-    // focus narrows to one chain; this header click is the deliberate
-    // step-up to "show me the whole endpoint".
+    // the FIRST listed method of this class. Class-level focus was removed
+    // because it produced a tangled view (union of every method's BFS
+    // reach) that dagre couldn't lay out cleanly. The user can drill into
+    // any specific method from the methods list below.
     const caret = header.querySelector('.class-caret');
     if (caret) {
       caret.addEventListener('click', (ev) => {
@@ -2891,7 +3275,7 @@ function renderOutline() {
       });
     }
     header.addEventListener('click', () => {
-      setFocus(c.id, null);
+      enterMindmap(c.id);
     });
 
     bcSlot.appendChild(header);
@@ -3725,11 +4109,40 @@ cy.on('tap', 'node.ext', evt => {
   const id = evt.target.id();
   if (id.startsWith('ext:')) selectExternal(id.slice(4));
 });
-// Method nodes are the primary citizens of the v4 graph. Tap = set focus to
-// this method, push onto history, repaint the subgraph rooted here.
+// Method nodes are the primary citizens of the v4 graph.
+//   single tap  → set focus to this method, push history, repaint
+//                 the subgraph rooted here.
+//   double tap  → jump to the method's line in the source file.
+// cytoscape fires `tap` first, then `dbltap`, so a double-click would
+// otherwise paint the focus + jump simultaneously — the user saw a
+// ghosting render. Delay the focus action ~280ms; if a dbltap arrives
+// in that window, cancel the focus and jump instead.
+let __cmMethodTapTimer = 0;
+const __cmMethodTapDelayMs = 280;
 cy.on('tap', 'node.method', evt => {
   const d = evt.target.data();
-  if (d && d.ownerId && d.methodName) setFocus(d.ownerId, d.methodName);
+  if (!d || !d.ownerId || !d.methodName) return;
+  if (__cmMethodTapTimer) clearTimeout(__cmMethodTapTimer);
+  const owner = d.ownerId, mname = d.methodName;
+  __cmMethodTapTimer = setTimeout(() => {
+    __cmMethodTapTimer = 0;
+    setFocus(owner, mname);
+  }, __cmMethodTapDelayMs);
+});
+cy.on('dbltap', 'node.method', evt => {
+  const d = evt.target.data();
+  if (!d || !d.ownerId || !d.methodName) return;
+  if (__cmMethodTapTimer) {
+    clearTimeout(__cmMethodTapTimer);
+    __cmMethodTapTimer = 0;
+  }
+  if (window.codemap && typeof window.codemap.postMessage === 'function') {
+    window.codemap.postMessage({
+      type: 'jump_to_source',
+      nodeId: d.ownerId,
+      method: d.methodName,
+    });
+  }
 });
 
 // ---------- Method-list collapse (per-class & global) ----------
@@ -3763,28 +4176,68 @@ function __cmApplyNodeFold(c, collapsed) {
   }
 }
 function __cmRerunLayout() {
-  cy.layout(__cmLayoutOpts).run();
-  if (mode === 'all') applySwimlanes();
+  // Route through the mode-aware layout helper so focus mode only re-lays
+  // out the visible subgraph (and re-tags cls-empty compounds). Calling
+  // cy.layout() over all elements here previously dragged the 500+ hidden
+  // class compounds into the layout pass, which scattered the focus view
+  // when the user double-tapped an empty DTO node to fold/unfold it.
+  if (mode === 'all') {
+    layoutAll();
+  } else {
+    layoutFocus();
+  }
 }
 window.__codemapCollapse = {
   toggleAll() {
-    __cmAllCollapsed = !__cmAllCollapsed;
-    __cmCollapsedClasses.clear();
-    // Mount / unmount everything in a single cy.batch so we pay one render
-    // pass instead of 510. With lazy-mount, "collapse" maps to unmount
-    // (cheap, just .remove() per class) and "expand" maps to mount (which
-    // is the heavy direction — batching matters more here).
-    if (__cmAllCollapsed) {
-      __cmUnmountAllClasses();
-      CLASSES.forEach(c => __cmCollapsedClasses.add(c.id));
+    // Scope the fold toggle to whatever's actually visible in the current
+    // mode. In focus mode that's the handful of classes in __cmFocusSet —
+    // mounting all 510 classes here used to spike the cy graph to ~2700
+    // nodes and the subsequent layoutFocus blew the zoom cap because the
+    // focus subgraph then contained that whole sea of newly-mounted
+    // unrelated method nodes.
+    let scope;
+    if (mode === 'all') {
+      scope = CLASSES.map(c => c.id);
     } else {
-      __cmMountAllClasses();
+      scope = [];
+      __cmFocusSet.forEach(nodeId => {
+        if (typeof nodeId !== 'string' || nodeId.startsWith('ext:')) return;
+        const dot = nodeId.indexOf('.');
+        scope.push(dot > 0 ? nodeId.slice(0, dot) : nodeId);
+      });
+      scope = [...new Set(scope)];
+      if (scope.length === 0) return __cmAllCollapsed;
     }
-    CLASSES.forEach(c => {
-      const node = cy.getElementById(c.id);
+    __cmAllCollapsed = !__cmAllCollapsed;
+    cy.batch(() => {
+      if (__cmAllCollapsed) {
+        scope.forEach(cid => {
+          __cmCollapsedClasses.add(cid);
+          __cmUnmountClassMethods(cid);
+        });
+      } else {
+        scope.forEach(cid => {
+          __cmCollapsedClasses.delete(cid);
+          __cmMountClassNodesOnly(cid);
+        });
+        scope.forEach(cid => __cmAddDeferredEdgesForClass(cid));
+      }
+    });
+    scope.forEach(cid => {
+      const c = __cmClassById.get(cid);
+      if (!c) return;
+      const node = cy.getElementById(cid);
       if (!node.empty()) node.data('label', __cmClassLabel(c));
     });
-    __cmRerunLayout();
+    if (mode === 'focus') {
+      // Re-run mask + layout against the new mount state so cm-hidden /
+      // cls-empty stay in sync with what's actually in the graph.
+      applyFilters();
+      applyMethodFocusHighlight();
+      layoutFocus();
+    } else {
+      __cmRerunLayout();
+    }
     return __cmAllCollapsed;
   },
   isAllCollapsed() { return __cmAllCollapsed; },

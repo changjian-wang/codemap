@@ -251,6 +251,51 @@ export function adaptGraphForMockup(
     verificationDetails: n.verificationDetails,
   }));
 
+  // Bare-method-name rewrite. The LLM analyzer often emits calls like
+  // `"Success"` instead of `"ApiResponse.Success"` when the callee is a
+  // static factory or extension method. The webview's per-method resolver
+  // can only see "is this a sibling? is this a class id?" and falls back
+  // to a class-level edge that draws to ApiResponse's compound border —
+  // visually that looks like ApiResponse appears in the graph with no
+  // arrow connecting it to anything. Now that every class is known we can
+  // resolve each bare name across the workspace; if exactly one class
+  // owns a method with that name, rewrite the call so the webview emits
+  // a proper method-to-method edge.
+  const ownersByMethodName = new Map<string, string[]>();
+  for (const c of classes) {
+    for (const m of c.methods) {
+      const list = ownersByMethodName.get(m.name);
+      if (list) list.push(c.id);
+      else ownersByMethodName.set(m.name, [c.id]);
+    }
+  }
+  const rewriteBareCall = (
+    raw: string,
+    ownerClassId: string,
+    siblings: Set<string>,
+  ): string => {
+    if (typeof raw !== 'string' || raw.includes('.')) return raw;
+    if (siblings.has(raw)) return raw; // same-class call stays bare
+    const owners = ownersByMethodName.get(raw);
+    if (!owners || owners.length !== 1) return raw; // unique match only
+    const ownerId = owners[0]!;
+    if (ownerId === ownerClassId) return raw;
+    return `${ownerId}.${raw}`;
+  };
+  for (const c of classes) {
+    const siblings = new Set(c.methods.map(m => m.name));
+    for (const m of c.methods) {
+      if (m.calls && m.calls.length > 0) {
+        m.calls = m.calls.map(raw => rewriteBareCall(raw, c.id, siblings));
+      }
+      if (m.externalCalls && m.externalCalls.length > 0) {
+        m.externalCalls = m.externalCalls.map(raw =>
+          rewriteBareCall(raw, c.id, siblings),
+        );
+      }
+    }
+  }
+
   const externalDeps: MockupExternalDep[] = graph.externalDeps.map(d => ({
     name: d.name,
     kind: d.kind,

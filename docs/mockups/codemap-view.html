@@ -5,9 +5,10 @@
   <title>CodeMap — Lumen backend mockup v3</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/cytoscape@3.33.4/dist/cytoscape.min.js"></script>
   <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
   <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+  <script src="https://unpkg.com/elkjs@0.11.1/lib/elk.bundled.js"></script>
 
   <style>
     :root {
@@ -35,8 +36,8 @@
       --ver-partial:    #d19a66;
       --ver-unverified: #5c5c5c;
 
-      --edge-calls:    #61afef;
-      --edge-external: #56b6c2;
+      --edge-calls:    #C0C8D2;
+      --edge-external: #9AA4B0;
 
       --bc-capture:  #4ec9b0;
       --bc-recall:   #c586c0;
@@ -711,17 +712,17 @@
     }
     .method-detail .md-call {
       display: inline-block;
-      background: rgba(97,175,239,0.1);
-      border: 1px solid rgba(97,175,239,0.3);
-      color: #61afef;
+      background: rgba(166,176,187,0.1);
+      border: 1px solid rgba(166,176,187,0.35);
+      color: #C6CDD6;
       padding: 1px 6px; border-radius: 3px;
       font-family: "Consolas", monospace; font-size: 10.5px;
       margin: 1px 3px 1px 0; cursor: pointer;
     }
     .method-detail .md-call.external {
-      background: rgba(86,182,194,0.1);
-      border-color: rgba(86,182,194,0.3);
-      color: #56b6c2;
+      background: rgba(139,149,163,0.08);
+      border-color: rgba(139,149,163,0.35);
+      color: #A6B0BB;
       border-style: dashed;
     }
     .method-detail .md-call:hover { filter: brightness(1.3); }
@@ -1172,6 +1173,11 @@
 
 <script>
 cytoscape.use(cytoscapeDagre);
+// elkjs exposes a global `ELK` constructor (UMD); cytoscape-elk is intentionally
+// NOT loaded because its adapter discards ELK's edge routing output and we
+// only use ELK for node placement here. __cmRunElkLayout drives elkjs
+// directly, applies the computed node positions, and lets cytoscape's
+// stylesheet (curve-style: round-taxi) render the edges.
 
 /* ============================================================
 /* ============================================================
@@ -1881,25 +1887,28 @@ function __cmUnmountAllClasses() {
   });
 }
 
-// Layout config is kept on a module-level var so the collapse helpers
-// below can re-run the exact same layout after mutating node sizes.
+// Layout config holds ELK options consumed by __cmRunElkLayout. ELK does
+// NODE PLACEMENT only — edge rendering is delegated to cytoscape's built-in
+// `curve-style: round-taxi` (single-bend L) declared in the stylesheet.
+// `elk.edgeRouting: ORTHOGONAL` is still set so ELK reserves lane spacing
+// between rows/columns during placement; the routed sections themselves
+// are ignored.
 const __cmLayoutOpts = {
-  name: 'dagre',
-  // LR (left → right) is the layout users actually prefer for our class
-  // skeletons: a class node with N methods is taller than it is wide, so
-  // LR places classes in columns and lets dependency arrows flow rightward
-  // — much easier to follow than TB, where wide rows of class boxes pile
-  // up at the same rank and the edges criss-cross.
-  rankDir: 'LR',
-  nodeSep: 38,
-  rankSep: 110,
-  edgeSep: 14,
-  fit: true,
+  elk: {
+    'elk.algorithm': 'layered',
+    'elk.direction': 'RIGHT',
+    'elk.edgeRouting': 'ORTHOGONAL',
+    'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
+    'elk.layered.spacing.nodeNodeBetweenLayers': '90',
+    'elk.spacing.nodeNode': '40',
+    'elk.spacing.edgeNode': '16',
+    'elk.spacing.edgeEdge': '10',
+    'elk.layered.spacing.edgeNodeBetweenLayers': '20',
+    'elk.layered.spacing.edgeEdgeBetweenLayers': '12',
+    'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
+  },
   padding: 40,
-  // dagre-emitted edge control points were used by an older
-  // `unbundled-bezier` edge style; the current `bezier` style ignores them
-  // and the (small) per-edge bend computation is wasted work, so we leave
-  // both flags off.
+  fit: true,
 };
 const cy = cytoscape({
   container: document.getElementById('cy'),
@@ -1944,6 +1953,9 @@ const cy = cytoscape({
   layout: { name: 'preset' },
   style: [
     // ---------- Compound parent (class swimlane) ----------
+    // Dark-D2 styling: larger corner radius (10), thinner softer 1.8px
+    // border. D2's visual signature is (1) generous rounded corners
+    // (2) calm stroke (3) orthogonal taxi edges — applied below.
     {
       selector: 'node.cls',
       style: {
@@ -1961,9 +1973,10 @@ const cy = cytoscape({
           return tint || '#1e1e1e';
         },
         'background-opacity': 0.85,
-        'border-width': 2,
+        'border-width': 1.8,
         'border-color': ele => bcColor(ele.data('bc')),
         'border-style': 'solid',
+        'corner-radius': 10,
         'label': 'data(label)',
         // Header sits at top of the compound; methods stack below it.
         'text-valign': 'top',
@@ -2043,9 +2056,10 @@ const cy = cytoscape({
           return tint || '#252526';
         },
         'background-opacity': 1,
-        'border-width': 1,
+        'border-width': 1.2,
         'border-color': ele => bcColor(ele.data('bc')),
         'border-style': 'solid',
+        'corner-radius': 8,
         'label': 'data(label)',
         'text-valign': 'center',
         'text-halign': 'center',
@@ -2053,8 +2067,8 @@ const cy = cytoscape({
         'font-family': 'Consolas, "Cascadia Code", monospace',
         'font-size': 11,
         'width': 'label',
-        'height': 26,
-        'padding': '8px',
+        'height': 28,
+        'padding': '10px',
         'text-max-width': 260,
       }
     },
@@ -2081,109 +2095,122 @@ const cy = cytoscape({
         'shape': 'round-rectangle',
         'background-color': '#1f3a3a',
         'background-opacity': 0.7,
-        'border-width': 1,
+        'border-width': 1.2,
         'border-color': '#56b6c2',
         'border-style': 'dashed',
+        'corner-radius': 6,
         'label': 'data(label)',
         'color': '#56b6c2',
         'font-family': 'Consolas, monospace',
         'font-size': 10,
         'width': 'label',
         'height': 24,
-        'padding': '6px',
+        'padding': '8px',
         'text-valign': 'center',
         'text-halign': 'center',
       }
     },
 
     // ---------- Mindmap center node (.mm-root) ----------
+    // Dark-D2 styling: rounded rectangle pill (was `round-pentagon`, which
+    // doesn't fit the D2 shape vocabulary). Mindmap layout (see
+    // enterMindmap) places this node on the LEFT and children flow to the
+    // right (LR rank, MindNode style).
     {
       selector: 'node.cls.mm-root',
       style: {
-        'shape': 'round-pentagon',
+        'shape': 'round-rectangle',
         'background-color': '#264f78',
         'background-opacity': 1,
-        'border-width': 3,
+        'border-width': 2.4,
         'border-color': '#007acc',
+        'corner-radius': 14,
         'text-valign': 'center',
         'text-halign': 'center',
         'text-margin-y': 0,
-        'font-size': 16,
+        'font-size': 15,
         'font-weight': 'bold',
         'color': '#ffffff',
-        'width': 160,
-        'height': 80,
+        'width': 170,
+        'height': 64,
         'padding': '0px',
         'text-wrap': 'wrap',
-        'text-max-width': 150,
+        'text-max-width': 156,
         'text-background-opacity': 0,
       }
     },
     {
+      // Mindmap edges (root → method) — neutral D2 stroke; uniform with
+      // calls so the only color signal stays on the nodes.
       selector: 'edge.mm-edge',
       style: {
         'curve-style': 'round-taxi',
-        'taxi-direction': 'auto',
+        'taxi-direction': 'rightward',
         'taxi-turn': 30,
-        'taxi-turn-min-distance': 8,
-        'line-color': '#3a7ab7',
-        'line-opacity': 0.8,
+        'taxi-turn-min-distance': 10,
+        'taxi-radius': 8,
+        'line-color': '#C0C8D2',
+        'line-opacity': 1,
         'width': 2,
         'target-arrow-shape': 'none',
         'source-arrow-shape': 'none',
       }
     },
 
-    // ---------- Edges ----------
+    // ---------- Edges (D2 dark theme) ----------
     //
-    // Curve-style is plain `bezier` (not `unbundled-bezier` with dagre
-    // control points). On the method-as-node graph, the dagre control
-    // points produced visibly distracting S-curves when methods of the
-    // same compound were ranked differently — a simple bezier with auto
-    // routing is both faster and visually calmer. dagre still drives the
-    // node layout, we just stop importing its per-edge bend points.
+    // D2's signature: nodes carry brand color; edges stay neutral gray-blue
+    // and uniform across logical types. Differentiation is by stroke weight,
+    // dash pattern, and opacity — not hue. Moderate taxi-radius (6) keeps
+    // the L-shape obvious on short edges (large radius eats the straight
+    // segments and makes the edge look diagonal).
     {
       selector: 'edge.calls',
       style: {
         'curve-style': 'round-taxi',
-        'taxi-direction': 'auto',
-        'taxi-turn': 40,
-        'taxi-turn-min-distance': 10,
+        'taxi-direction': 'horizontal',
+        'taxi-turn': '50%',
+        'taxi-turn-min-distance': 8,
+        'taxi-radius': 6,
         'source-distance-from-node': 2,
         'target-distance-from-node': 4,
         'arrow-scale': 1.1,
-        'width': 1.8,
-        'line-color': '#61afef',
-        'target-arrow-color': '#61afef',
+        'width': 2,
+        'line-color': '#C0C8D2',
+        'target-arrow-color': '#C0C8D2',
         'target-arrow-shape': 'triangle',
-        'opacity': 0.9,
+        'target-arrow-fill': 'filled',
+        'opacity': 1,
       }
     },
     {
       selector: 'edge.external_calls',
       style: {
         'curve-style': 'round-taxi',
-        'taxi-direction': 'auto',
-        'taxi-turn': 40,
-        'taxi-turn-min-distance': 10,
+        'taxi-direction': 'horizontal',
+        'taxi-turn': '50%',
+        'taxi-turn-min-distance': 8,
+        'taxi-radius': 6,
         'source-distance-from-node': 2,
         'target-distance-from-node': 4,
-        'arrow-scale': 1,
-        'width': 1.4,
-        'line-color': '#56b6c2',
+        'arrow-scale': 1.1,
+        'width': 1.6,
+        'line-color': '#9AA4B0',
         'line-style': 'dashed',
-        'target-arrow-color': '#56b6c2',
+        'line-dash-pattern': [6, 4],
+        'target-arrow-color': '#9AA4B0',
         'target-arrow-shape': 'triangle',
-        'opacity': 0.75,
+        'target-arrow-fill': 'filled',
+        'opacity': 0.95,
       }
     },
     {
       selector: 'edge.unverified-edge',
       style: {
-        'line-color': '#5c5c5c',
-        'target-arrow-color': '#5c5c5c',
+        'line-color': '#7A828E',
+        'target-arrow-color': '#7A828E',
         'line-style': 'dotted',
-        'opacity': 0.6,
+        'opacity': 0.75,
       }
     },
     { selector: 'edge.dimmed', style: { 'opacity': 0.1 } },
@@ -2439,16 +2466,141 @@ function applyMethodFocusHighlight() {
   });
 }
 
+// ---------- ELK layout helper ----------
+// elkjs is used directly (not via cytoscape-elk, which discards ELK's edge
+// routing output). The helper builds an ELK graph from a Cytoscape
+// collection, runs ELK with ORTHOGONAL edge routing, then applies BOTH
+// node positions AND edge bendpoints back to Cytoscape — the bendpoints
+// are converted to `curve-style: segments` with segment-weights /
+// segment-distances so the rendered edges are true Manhattan paths.
+const __cmElk = typeof ELK !== 'undefined' ? new ELK() : null;
+
+// ELK is used for NODE PLACEMENT only. Edge rendering is delegated to
+// cytoscape's built-in `curve-style: round-taxi` (declared in the
+// stylesheet on edge.calls / edge.external_calls / edge.mm-edge). Why:
+//   • Single-bend taxi gives clean, predictable L-shapes — arrows always
+//     sit on the node boundary, no surprise routing through other nodes.
+//   • We tried consuming ELK's edge.sections[] for D2-style multi-bend
+//     paths, but ELK + INCLUDE_CHILDREN occasionally routed cross-compound
+//     edges in long detours around their target container, which read as
+//     "scrambled" in the canvas. Single-bend is the safer baseline.
+//   • elk.edgeRouting:ORTHOGONAL is kept on the layout so ELK still
+//     RESERVES lanes between rows/columns (this prevents nodes from
+//     packing too close together) — we just don't read back the routed
+//     sections.
+
+async function __cmRunElkLayout(eles, extraOpts) {
+  extraOpts = extraOpts || {};
+  if (!__cmElk) {
+    console.warn('[ELK] elkjs not loaded; falling back to no-op layout');
+    return;
+  }
+
+  // Strip any element-level edge styles left behind by previous attempts
+  // at custom edge routing (curve-style: segments + explicit endpoints).
+  // Without this, stale per-edge style overrides defeat the stylesheet's
+  // round-taxi defaults and edges render frozen from the last layout.
+  cy.edges().removeStyle(
+    'curve-style segment-weights segment-distances edge-distances ' +
+    'source-endpoint target-endpoint source-distance-from-node target-distance-from-node'
+  );
+
+  // -- Build ELK input graph -------------------------------------------------
+  const visibleNodes = eles.nodes().filter(n => !n.hasClass('cm-hidden'));
+  const visibleEdges = eles.edges().filter(e => !e.hasClass('cm-hidden'));
+  if (visibleNodes.length === 0) return;
+
+  const nodeMap = new Map();
+  visibleNodes.forEach(n => {
+    const bb = n.boundingBox({ includeLabels: false, includeOverlays: false });
+    const w = Math.max(20, bb.w);
+    const h = Math.max(20, bb.h);
+    nodeMap.set(n.id(), {
+      id: n.id(),
+      width: w,
+      height: h,
+      children: [],
+      // Compound padding so ELK leaves room for the class header / border
+      layoutOptions: n.isParent() ? {
+        'elk.padding': '[top=28,left=12,bottom=12,right=12]',
+      } : undefined,
+    });
+  });
+
+  const rootChildren = [];
+  visibleNodes.forEach(n => {
+    const node = nodeMap.get(n.id());
+    if (!node) return;
+    const parent = n.parent();
+    const parentId = parent.length > 0 ? parent.id() : null;
+    if (parentId && nodeMap.has(parentId)) {
+      nodeMap.get(parentId).children.push(node);
+    } else {
+      rootChildren.push(node);
+    }
+  });
+
+  const rootEdges = [];
+  visibleEdges.forEach(e => {
+    const sid = e.source().id();
+    const tid = e.target().id();
+    if (!nodeMap.has(sid) || !nodeMap.has(tid)) return;
+    rootEdges.push({ id: e.id(), sources: [sid], targets: [tid] });
+  });
+
+  const elkLayoutOptions = Object.assign({}, __cmLayoutOpts.elk || {}, extraOpts.elk || {});
+  const elkGraph = {
+    id: 'root',
+    layoutOptions: elkLayoutOptions,
+    children: rootChildren,
+    edges: rootEdges,
+  };
+
+  // -- Run ELK --------------------------------------------------------------
+  let result;
+  try {
+    result = await __cmElk.layout(elkGraph);
+  } catch (err) {
+    console.error('[ELK] layout failed', err);
+    return;
+  }
+
+  // -- Apply positions only -------------------------------------------------
+  // We use ELK for NODE PLACEMENT and ignore result.edges. Cytoscape's
+  // stylesheet (curve-style: round-taxi) handles the edges itself with
+  // a clean single-bend L-shape per edge.
+  cy.batch(() => {
+    function applyPos(elkNode, offX, offY) {
+      const absX = (elkNode.x || 0) + offX;
+      const absY = (elkNode.y || 0) + offY;
+      const cyNode = cy.getElementById(elkNode.id);
+      if (cyNode.length > 0 && !cyNode.isParent()) {
+        cyNode.position({
+          x: absX + (elkNode.width || 0) / 2,
+          y: absY + (elkNode.height || 0) / 2,
+        });
+      }
+      if (elkNode.children && elkNode.children.length > 0) {
+        elkNode.children.forEach(c => applyPos(c, absX, absY));
+      }
+    }
+    (result.children || []).forEach(c => applyPos(c, 0, 0));
+  });
+
+  if (extraOpts.fit !== false) {
+    cy.fit(eles, extraOpts.padding == null ? (__cmLayoutOpts.padding || 40) : extraOpts.padding);
+  }
+}
+
 function layoutFocus() {
-  // Re-run dagre on whatever is currently visible so the subgraph fills the
-  // canvas. We reuse __cmLayoutOpts unchanged — small subgraphs render fine
-  // with the existing dagre control-point routing.
+  // Re-run ELK on whatever is currently visible so the subgraph fills the
+  // canvas. ELK gives orthogonal multi-bend edge routing which dagre
+  // + round-taxi could not produce.
   __cmTagEmptyCompounds();
   const visible = cy.elements().filter(el => !el.hasClass('cm-hidden'));
   if (visible.length === 0) return;
-  const layout = visible.layout({ ...__cmLayoutOpts, fit: false, padding: 50 });
-  layout.on('layoutstop', () => __cmFitVisible(visible));
-  layout.run();
+  __cmRunElkLayout(visible, { fit: false, padding: 50 })
+    .then(() => __cmFitVisible(visible));
 }
 
 // Centered fit with a zoom cap. cy.fit() zooms to whatever ratio fills the
@@ -2564,18 +2716,28 @@ function enterMindmap(classId) {
 
   const visible = cy.elements().filter(el => !el.hasClass('cm-hidden'));
   if (visible.length === 0) return;
-  visible.layout({
-    name: 'breadthfirst',
-    roots: [classId],
-    directed: true,
-    circle: true,
-    spacingFactor: 1.5,
-    padding: 40,
+  // MindNode-style layout: root pill on the LEFT, children expanding to the
+  // RIGHT. ELK layered with elk.direction='RIGHT' on the mindmap subgraph
+  // achieves this because the synthetic `mm-edge` rooted at classId makes
+  // the center the only zero-indegree node — ELK places it in layer 0
+  // (leftmost) and lays each direct method one layer to the right; deeper
+  // call chains stack into further layers. nodeNode / nodeNodeBetweenLayers
+  // spacings are tuned so siblings don't crowd vertically and trunk →
+  // branch distance reads as intentional whitespace.
+  __cmRunElkLayout(visible, {
     fit: false,
-    animate: false,
-  }).run();
-  __cmFitVisible(visible, 40);
-  updateFocusBar();
+    padding: 40,
+    elk: {
+      'elk.direction': 'RIGHT',
+      'elk.spacing.nodeNode': '32',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '100',
+      'elk.spacing.edgeNode': '20',
+      'elk.spacing.edgeEdge': '14',
+    },
+  }).then(() => {
+    __cmFitVisible(visible, 40);
+    updateFocusBar();
+  });
 }
 
 function exitMindmap(rerunFocus) {
@@ -2754,16 +2916,19 @@ function updateFocusBar() {
 }
 
 function layoutAll() {
-  // All mode: run dagre LR for rank ordering, then post-process Y so the
-  // canvas reads as horizontal bc swimlanes (host on top, capture/recall in
-  // the middle, shared + ext nodes at the bottom). Edges are switched to
-  // cytoscape's auto taxi routing because the dagre control points captured
-  // pre-translation no longer match the post-translation source/target line.
+  // All mode: run ELK layered for layer ordering, then post-process Y so
+  // the canvas reads as horizontal bc swimlanes (host on top, capture/
+  // recall in the middle, shared + ext nodes at the bottom). ELK's
+  // orthogonal edge routing produces clean Manhattan paths that survive
+  // the post-translation Y reassignment (segment-distances are signed
+  // perpendicular offsets from the source→target line, which gets
+  // rebuilt every layout pass).
   __cmTagEmptyCompounds();
-  cy.elements().layout({ ...__cmLayoutOpts, fit: false, padding: 50 }).run();
-  applySwimlanes();
-  const visible = cy.elements().filter(el => !el.hasClass('cm-hidden'));
-  if (visible.length > 0) fitWithTopReserve(visible, 110, 30);
+  __cmRunElkLayout(cy.elements(), { fit: false, padding: 50 }).then(() => {
+    applySwimlanes();
+    const visible = cy.elements().filter(el => !el.hasClass('cm-hidden'));
+    if (visible.length > 0) fitWithTopReserve(visible, 110, 30);
+  });
 }
 
 // cy.fit centers the bbox in the viewport which puts the host band's
@@ -3164,9 +3329,10 @@ function initFocusMode() {
   if (def) {
     setFocus(def.classId, def.methodName);
   } else {
-    cy.layout(__cmLayoutOpts).run();
-    updateFocusBar();
-    renderOutline();
+    __cmRunElkLayout(cy.elements(), {}).then(() => {
+      updateFocusBar();
+      renderOutline();
+    });
   }
 }
 

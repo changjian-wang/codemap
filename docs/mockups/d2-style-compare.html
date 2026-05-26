@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>CodeMap × D2 style — A/B/C compare</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+  <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
+    body {
+      background: #181818;
+      color: #cccccc;
+      display: grid;
+      grid-template-rows: 56px 1fr 168px;
+      height: 100vh;
+      overflow: hidden;
+    }
+    header {
+      padding: 10px 16px;
+      border-bottom: 1px solid #2a2a2a;
+      background: #1e1e1e;
+      display: flex; align-items: center; gap: 16px;
+    }
+    header h1 { font-size: 14px; margin: 0; font-weight: 600; color: #fff; letter-spacing: 0.3px; }
+    header .sub { font-size: 12px; color: #858585; }
+    header .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(0,122,204,0.18);
+      color: #9cdcfe;
+      padding: 3px 10px; border-radius: 10px;
+      font-size: 10.5px; font-weight: 600;
+      border: 1px solid rgba(0,122,204,0.4);
+    }
+
+    .panes {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .pane {
+      border-right: 1px solid #2a2a2a;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .pane:last-child { border-right: none; }
+    .pane-header {
+      padding: 10px 14px 8px;
+      border-bottom: 1px solid #2a2a2a;
+      background: #1e1e1e;
+    }
+    .pane-header .tag {
+      display: inline-block; font-size: 10.5px; font-weight: 700;
+      letter-spacing: 0.4px; padding: 2px 7px; border-radius: 3px;
+      background: #2d2d30; color: #cccccc; margin-right: 8px;
+    }
+    .pane-header h2 { font-size: 13px; margin: 0 0 4px 0; font-weight: 600; color: #fff; display: inline; }
+    .pane-header p { margin: 4px 0 0 0; font-size: 11.5px; color: #858585; line-height: 1.45; }
+    .canvas-wrap {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .canvas {
+      width: 100%; height: 100%;
+    }
+    .canvas.theme-vsdark   { background: #1e1e1e; }
+    .canvas.theme-paper    { background: #F4F1EA; }
+    .canvas.theme-darksoft { background: #1e1e1e; }
+
+    footer {
+      padding: 14px 16px;
+      border-top: 1px solid #2a2a2a;
+      background: #1e1e1e;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+      font-size: 11.5px;
+      line-height: 1.55;
+      overflow-y: auto;
+    }
+    footer .col h3 { font-size: 11px; margin: 0 0 6px 0; text-transform: uppercase; letter-spacing: 0.5px; color: #858585; }
+    footer .col ul { margin: 0; padding-left: 14px; color: #cccccc; }
+    footer .col ul li { margin-bottom: 2px; }
+    footer .col .verdict { color: #d7ba7d; font-weight: 600; }
+    footer .col .risk { color: #f48771; }
+    footer .col .good { color: #98c379; }
+
+    .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 4px; border: 1px solid rgba(255,255,255,0.1); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CodeMap × D2 — 风格方案对比</h1>
+    <span class="sub">三个画布共享同一份子图（4 个 class · 6 个 method · 1 个 external dep · 5 条 call 边）</span>
+    <span style="flex: 1"></span>
+    <span class="pill">prototype · 决定后删除</span>
+  </header>
+
+  <div class="panes">
+    <!-- ========== A: 完全替换：浅色 D2 主题 ========== -->
+    <div class="pane">
+      <div class="pane-header">
+        <span class="tag">A</span><h2>完全 D2 化（浅色纸张）</h2>
+        <p>暖白米色画布 + 圆角矩形 + 灰蓝描边 + 衬线字体。视觉冲击最强，画布与暗色工具栏形成"明信片"对比。</p>
+      </div>
+      <div class="canvas-wrap">
+        <div id="cy-a" class="canvas theme-paper"></div>
+      </div>
+    </div>
+
+    <!-- ========== B: 仅画布 D2 化 ========== -->
+    <div class="pane">
+      <div class="pane-header">
+        <span class="tag">B</span><h2>仅画布 D2 化（推荐起点）</h2>
+        <p>工具栏 / outline 保持暗色，只把画布换成 D2 浅色 + 圆角 + 折线。读图体验靠近 D2 文档，但扩展整体风格延续。</p>
+      </div>
+      <div class="canvas-wrap">
+        <div id="cy-b" class="canvas theme-paper"></div>
+      </div>
+    </div>
+
+    <!-- ========== C: 暗色 D2 风 ========== -->
+    <div class="pane">
+      <div class="pane-header">
+        <span class="tag">C</span><h2>暗色 D2 风（最小幅度）</h2>
+        <p>保留暗色背景，只挪用 D2 的形状语言：圆角矩形、柔和描边、更厚的描边权重、折线边、降低饱和的填充色。</p>
+      </div>
+      <div class="canvas-wrap">
+        <div id="cy-c" class="canvas theme-darksoft"></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="col">
+      <h3>A · 完全 D2 化</h3>
+      <ul>
+        <li><span class="swatch" style="background:#F4F1EA"></span>背景 <code>#F4F1EA</code></li>
+        <li><span class="swatch" style="background:#E8E5DC"></span>节点填充 <code>#E8E5DC</code></li>
+        <li><span class="swatch" style="background:#7A8B99"></span>描边 <code>#7A8B99</code></li>
+        <li>字体：Source Sans / 衬线</li>
+        <li>边：直角折线，灰蓝色</li>
+        <li class="verdict">最像 D2 文档</li>
+        <li class="risk">⚠ 与 VS Code 暗色 UI 风格反差大</li>
+        <li class="risk">⚠ 高亮 / unverified 等状态色都要重新设计（暗色配色不能直接用）</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3>B · 仅画布 D2 化</h3>
+      <ul>
+        <li>外壳暗色不变，仅 #cy 区域换 D2 主题</li>
+        <li>需要重做状态色映射（risk/verification 在浅色画布上的对比度）</li>
+        <li>minimap / overlay 元素的颜色要相应调整</li>
+        <li class="good">✓ 读图区域 D2 感强，整体扩展风格不分裂</li>
+        <li class="good">✓ 改动局部，回归面小</li>
+        <li class="risk">⚠ 浅 / 暗交界处需要边框过渡</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3>C · 暗色 D2 风</h3>
+      <ul>
+        <li>背景 / 字体保持，只换节点形状与边样式</li>
+        <li>挪用 D2 的：圆角度数、描边权重、折线边、柔化填充</li>
+        <li>状态色 (capture/recall/host/shared/risk/verification) 几乎不动</li>
+        <li class="good">✓ 改动量最小，零回归风险</li>
+        <li class="good">✓ 不需要重做颜色体系</li>
+        <li class="risk">⚠ 视觉差异最不明显——更像"现有风格 polish"，不是"D2 化"</li>
+      </ul>
+    </div>
+  </footer>
+
+<script>
+cytoscape.use(cytoscapeDagre);
+
+// Shared sample graph: 4 classes + 6 methods + 1 external dep + 5 call edges.
+// Matches the bc taxonomy in the real codemap-view.html (capture / recall / host / shared).
+const sampleNodes = [
+  // Compound parents (classes)
+  { data: { id: 'CaptureService',  label: 'CaptureService',       bc: 'capture', kind: 'class' } },
+  { data: { id: 'RecallService',   label: 'RecallService',        bc: 'recall',  kind: 'class' } },
+  { data: { id: 'AppHost',         label: 'AppHost',              bc: 'host',    kind: 'class' } },
+  { data: { id: 'ApiResult',       label: 'ApiResult<T>',         bc: 'shared',  kind: 'class' } },
+
+  // Method nodes (children of compound)
+  { data: { id: 'CaptureService.Capture',   parent: 'CaptureService', label: 'Capture()',   bc: 'capture' } },
+  { data: { id: 'CaptureService.Validate',  parent: 'CaptureService', label: 'Validate()',  bc: 'capture' } },
+  { data: { id: 'RecallService.Search',     parent: 'RecallService',  label: 'Search()',    bc: 'recall' } },
+  { data: { id: 'RecallService.Rank',       parent: 'RecallService',  label: 'Rank()',      bc: 'recall' } },
+  { data: { id: 'AppHost.Configure',        parent: 'AppHost',        label: 'Configure()', bc: 'host' } },
+  { data: { id: 'ApiResult.Success',        parent: 'ApiResult',      label: 'Success()',   bc: 'shared' } },
+
+  // External
+  { data: { id: 'ext:pgvector', label: 'pgvector', kind: 'ext' } },
+];
+
+const sampleEdges = [
+  { data: { id: 'e1', source: 'AppHost.Configure',     target: 'CaptureService.Capture' }, classes: 'calls' },
+  { data: { id: 'e2', source: 'AppHost.Configure',     target: 'RecallService.Search' },  classes: 'calls' },
+  { data: { id: 'e3', source: 'CaptureService.Capture',target: 'CaptureService.Validate' }, classes: 'calls' },
+  { data: { id: 'e4', source: 'CaptureService.Capture',target: 'ApiResult.Success' },     classes: 'calls' },
+  { data: { id: 'e5', source: 'RecallService.Search',  target: 'RecallService.Rank' },    classes: 'calls' },
+  { data: { id: 'e6', source: 'RecallService.Search',  target: 'ext:pgvector' },          classes: 'external_calls' },
+];
+
+// Cytoscape needs `classes` as a string on the *root* of the element object,
+// not inside data{}. Normalize:
+function normalizeElements(nodes, edges) {
+  return {
+    nodes: nodes.map(n => {
+      const out = { data: n.data };
+      const cls = [];
+      if (n.data.kind === 'class') cls.push('cls');
+      if (n.data.kind === 'ext')   cls.push('ext');
+      if (!n.data.kind)            cls.push('method');
+      if (n.data.bc)               cls.push('bc-' + n.data.bc);
+      out.classes = cls.join(' ');
+      return out;
+    }),
+    edges: edges.map(e => ({ data: e.data, classes: e.classes })),
+  };
+}
+
+// ============================================================
+// Style A — Full D2 paper theme
+// ============================================================
+const styleA = (function () {
+  const bcFillClass  = { capture: '#E8E5DC', recall: '#E8E5DC', host: '#F0EAD6', shared: '#DDE3E8' };
+  const bcStrokeCls  = { capture: '#5F7A6B', recall: '#7A5F7A', host: '#9C7A3A', shared: '#5F7A95' };
+  const bcFillMethod = { capture: '#F2EFE6', recall: '#F2EBEF', host: '#F5EFDC', shared: '#E6ECF1' };
+  return [
+    { selector: 'node.cls', style: {
+        'shape': 'round-rectangle',
+        'background-color': ele => bcFillClass[ele.data('bc')] || '#E8E5DC',
+        'border-width': 2,
+        'border-color': ele => bcStrokeCls[ele.data('bc')] || '#7A8B99',
+        'label': 'data(label)',
+        'text-valign': 'top', 'text-halign': 'center',
+        'text-margin-y': -6,
+        'color': '#3A3A3A',
+        'font-family': 'Source Sans Pro, "PingFang SC", serif',
+        'font-size': 13,
+        'font-weight': 'bold',
+        'padding': '22px',
+        'corner-radius': 8,
+    } },
+    { selector: 'node.method', style: {
+        'shape': 'round-rectangle',
+        'background-color': ele => bcFillMethod[ele.data('bc')] || '#F4F1EA',
+        'border-width': 1.2,
+        'border-color': ele => bcStrokeCls[ele.data('bc')] || '#7A8B99',
+        'label': 'data(label)',
+        'text-valign': 'center', 'text-halign': 'center',
+        'color': '#3A3A3A',
+        'font-family': 'Source Sans Pro, "PingFang SC", sans-serif',
+        'font-size': 11.5,
+        'width': 'label', 'height': 28, 'padding': '10px',
+        'corner-radius': 6,
+    } },
+    { selector: 'node.ext', style: {
+        'shape': 'round-rectangle',
+        'background-color': '#FFFAF0',
+        'border-width': 1.2,
+        'border-color': '#8C6B3A',
+        'border-style': 'dashed',
+        'label': 'data(label)',
+        'color': '#8C6B3A',
+        'font-family': 'Source Sans Pro, sans-serif',
+        'font-size': 10.5,
+        'font-style': 'italic',
+        'width': 'label', 'height': 24, 'padding': '8px',
+        'text-valign': 'center', 'text-halign': 'center',
+    } },
+    { selector: 'edge.calls', style: {
+        'curve-style': 'taxi',
+        'taxi-direction': 'auto', 'taxi-turn': 40, 'taxi-turn-min-distance': 12,
+        'width': 1.4,
+        'line-color': '#7A8B99',
+        'target-arrow-color': '#7A8B99',
+        'target-arrow-shape': 'triangle-backcurve',
+        'arrow-scale': 1.2,
+        'opacity': 0.9,
+    } },
+    { selector: 'edge.external_calls', style: {
+        'curve-style': 'taxi',
+        'taxi-direction': 'auto', 'taxi-turn': 40, 'taxi-turn-min-distance': 12,
+        'width': 1.2,
+        'line-color': '#8C6B3A',
+        'line-style': 'dashed',
+        'target-arrow-color': '#8C6B3A',
+        'target-arrow-shape': 'triangle-backcurve',
+        'arrow-scale': 1.1,
+        'opacity': 0.85,
+    } },
+  ];
+})();
+
+// ============================================================
+// Style B — Canvas-only D2 paper (same as A here — outer shell handles dark)
+// ============================================================
+// Visually identical to A for the *canvas*; the difference between A and B
+// is in the chrome / shell, which this prototype keeps the same so the
+// reader can focus on the canvas. We slightly soften the strokes to make
+// the dark→light boundary feel intentional.
+const styleB = (function () {
+  const bcFillClass  = { capture: '#E8E5DC', recall: '#E8E5DC', host: '#F0EAD6', shared: '#DDE3E8' };
+  const bcStrokeCls  = { capture: '#5F7A6B', recall: '#7A5F7A', host: '#9C7A3A', shared: '#5F7A95' };
+  const bcFillMethod = { capture: '#F2EFE6', recall: '#F2EBEF', host: '#F5EFDC', shared: '#E6ECF1' };
+  return [
+    { selector: 'node.cls', style: {
+        'shape': 'round-rectangle',
+        'background-color': ele => bcFillClass[ele.data('bc')] || '#E8E5DC',
+        'border-width': 1.8,
+        'border-color': ele => bcStrokeCls[ele.data('bc')] || '#7A8B99',
+        'label': 'data(label)',
+        'text-valign': 'top', 'text-halign': 'center',
+        'text-margin-y': -4,
+        'color': '#3A3A3A',
+        'font-family': '"Consolas", "Cascadia Code", monospace',
+        'font-size': 12,
+        'font-weight': 'bold',
+        'padding': '20px',
+        'corner-radius': 6,
+    } },
+    { selector: 'node.method', style: {
+        'shape': 'round-rectangle',
+        'background-color': ele => bcFillMethod[ele.data('bc')] || '#F4F1EA',
+        'border-width': 1,
+        'border-color': ele => bcStrokeCls[ele.data('bc')] || '#7A8B99',
+        'label': 'data(label)',
+        'text-valign': 'center', 'text-halign': 'center',
+        'color': '#3A3A3A',
+        'font-family': '"Consolas", "Cascadia Code", monospace',
+        'font-size': 11,
+        'width': 'label', 'height': 26, 'padding': '8px',
+        'corner-radius': 5,
+    } },
+    { selector: 'node.ext', style: {
+        'shape': 'round-rectangle',
+        'background-color': '#FFFAF0',
+        'border-width': 1,
+        'border-color': '#8C6B3A',
+        'border-style': 'dashed',
+        'label': 'data(label)',
+        'color': '#8C6B3A',
+        'font-family': '"Consolas", monospace',
+        'font-size': 10,
+        'font-style': 'italic',
+        'width': 'label', 'height': 24, 'padding': '6px',
+        'text-valign': 'center', 'text-halign': 'center',
+    } },
+    { selector: 'edge.calls', style: {
+        'curve-style': 'taxi',
+        'taxi-direction': 'auto', 'taxi-turn': 40, 'taxi-turn-min-distance': 12,
+        'width': 1.4,
+        'line-color': '#7A8B99',
+        'target-arrow-color': '#7A8B99',
+        'target-arrow-shape': 'triangle',
+        'arrow-scale': 1.1,
+        'opacity': 0.9,
+    } },
+    { selector: 'edge.external_calls', style: {
+        'curve-style': 'taxi',
+        'taxi-direction': 'auto', 'taxi-turn': 40, 'taxi-turn-min-distance': 12,
+        'width': 1.2,
+        'line-color': '#8C6B3A',
+        'line-style': 'dashed',
+        'target-arrow-color': '#8C6B3A',
+        'target-arrow-shape': 'triangle',
+        'arrow-scale': 1,
+        'opacity': 0.85,
+    } },
+  ];
+})();
+
+// ============================================================
+// Style C — Dark D2 (keep dark bg, borrow D2 shape language)
+// ============================================================
+const styleC = (function () {
+  const bcStroke = { capture: '#4ec9b0', recall: '#c586c0', host: '#dcdcaa', shared: '#569cd6' };
+  const bcFill   = { capture: '#1a2422', recall: '#231a23', host: '#252319', shared: '#1a212a' };
+  return [
+    { selector: 'node.cls', style: {
+        'shape': 'round-rectangle',
+        'background-color': ele => bcFill[ele.data('bc')] || '#1e1e1e',
+        'background-opacity': 1,
+        'border-width': 1.8,
+        'border-color': ele => bcStroke[ele.data('bc')] || '#888',
+        'label': 'data(label)',
+        'text-valign': 'top', 'text-halign': 'center',
+        'text-margin-y': -6,
+        'color': ele => bcStroke[ele.data('bc')] || '#cccccc',
+        'font-family': '"Consolas", "Cascadia Code", monospace',
+        'font-size': 12,
+        'font-weight': 'bold',
+        'padding': '22px',
+        'corner-radius': 10,
+        'text-background-color': '#0d0d0d',
+        'text-background-opacity': 0.75,
+        'text-background-padding': 4,
+        'text-background-shape': 'round-rectangle',
+    } },
+    { selector: 'node.method', style: {
+        'shape': 'round-rectangle',
+        'background-color': ele => bcFill[ele.data('bc')] || '#252526',
+        'border-width': 1.2,
+        'border-color': ele => bcStroke[ele.data('bc')] || '#888',
+        'label': 'data(label)',
+        'text-valign': 'center', 'text-halign': 'center',
+        'color': '#e0e0e0',
+        'font-family': '"Consolas", monospace',
+        'font-size': 11,
+        'width': 'label', 'height': 28, 'padding': '10px',
+        'corner-radius': 8,
+    } },
+    { selector: 'node.ext', style: {
+        'shape': 'round-rectangle',
+        'background-color': '#1f2a2a',
+        'border-width': 1.2,
+        'border-color': '#56b6c2',
+        'border-style': 'dashed',
+        'label': 'data(label)',
+        'color': '#56b6c2',
+        'font-family': '"Consolas", monospace',
+        'font-size': 10,
+        'font-style': 'italic',
+        'width': 'label', 'height': 24, 'padding': '6px',
+        'text-valign': 'center', 'text-halign': 'center',
+        'corner-radius': 6,
+    } },
+    { selector: 'edge.calls', style: {
+        'curve-style': 'taxi',
+        'taxi-direction': 'auto', 'taxi-turn': 40, 'taxi-turn-min-distance': 12,
+        'width': 1.6,
+        'line-color': '#61afef',
+        'target-arrow-color': '#61afef',
+        'target-arrow-shape': 'triangle',
+        'arrow-scale': 1.1,
+        'opacity': 0.9,
+    } },
+    { selector: 'edge.external_calls', style: {
+        'curve-style': 'taxi',
+        'taxi-direction': 'auto', 'taxi-turn': 40, 'taxi-turn-min-distance': 12,
+        'width': 1.4,
+        'line-color': '#56b6c2',
+        'line-style': 'dashed',
+        'target-arrow-color': '#56b6c2',
+        'target-arrow-shape': 'triangle',
+        'arrow-scale': 1,
+        'opacity': 0.85,
+    } },
+  ];
+})();
+
+// ============================================================
+// Boot all three side-by-side
+// ============================================================
+function boot(containerId, style) {
+  const el = document.getElementById(containerId);
+  const cy = cytoscape({
+    container: el,
+    elements: normalizeElements(sampleNodes, sampleEdges),
+    style,
+    minZoom: 0.4,
+    maxZoom: 2.5,
+    wheelSensitivity: 0.25,
+    layout: {
+      name: 'dagre',
+      rankDir: 'TB',
+      nodeSep: 36,
+      rankSep: 48,
+      padding: 18,
+      animate: false,
+    },
+  });
+  // Single fit pass after layout settles.
+  setTimeout(() => cy.fit(undefined, 24), 50);
+  return cy;
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  boot('cy-a', styleA);
+  boot('cy-b', styleB);
+  boot('cy-c', styleC);
+});
+
+// Re-fit on resize so the three panes always show the full subgraph.
+let __resizeT;
+window.addEventListener('resize', () => {
+  clearTimeout(__resizeT);
+  __resizeT = setTimeout(() => {
+    document.querySelectorAll('.canvas').forEach(el => {
+      const cy = cytoscape.instances?.find?.(c => c.container() === el);
+      // cytoscape doesn't expose instances; we just leave fit on first paint.
+    });
+  }, 100);
+});
+</script>
+</body>
+</html>

@@ -25,6 +25,7 @@ const VENDOR_FILES = [
   ['node_modules/cytoscape/dist/cytoscape.min.js',           'dist/vendor/cytoscape.min.js'],
   ['node_modules/dagre/dist/dagre.min.js',                    'dist/vendor/dagre.min.js'],
   ['node_modules/cytoscape-dagre/cytoscape-dagre.js',         'dist/vendor/cytoscape-dagre.js'],
+  ['node_modules/elkjs/lib/elk.bundled.js',                   'dist/vendor/elk.bundled.js'],
 ];
 function copyVendor() {
   fs.mkdirSync('dist/vendor', { recursive: true });

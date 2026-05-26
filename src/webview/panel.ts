@@ -400,10 +400,12 @@ function renderHtml(
   const cyUri  = webview.asWebviewUri(vscode.Uri.joinPath(vendorDir, 'cytoscape.min.js')).toString();
   const dagUri = webview.asWebviewUri(vscode.Uri.joinPath(vendorDir, 'dagre.min.js')).toString();
   const cdaUri = webview.asWebviewUri(vscode.Uri.joinPath(vendorDir, 'cytoscape-dagre.js')).toString();
+  const elkUri = webview.asWebviewUri(vscode.Uri.joinPath(vendorDir, 'elk.bundled.js')).toString();
   html = html
     .replace(/https:\/\/unpkg\.com\/cytoscape@[^"']+/g, cyUri)
     .replace(/https:\/\/unpkg\.com\/dagre@[^"']+/g, dagUri)
-    .replace(/https:\/\/unpkg\.com\/cytoscape-dagre@[^"']+/g, cdaUri);
+    .replace(/https:\/\/unpkg\.com\/cytoscape-dagre@[^"']+/g, cdaUri)
+    .replace(/https:\/\/unpkg\.com\/elkjs@[^"']+/g, elkUri);
 
   const mockupData = adaptGraphForMockup(graph, chatTurns, stats, meta);
   // Embed as a JSON string and parse on the page — avoids HTML/JS escaping

@@ -91,6 +91,70 @@ which is consumed both standalone and by the webview panel.
     cached and only recomputed when node positions actually change.
     `drawNodes` also skips hidden nodes so focus mode minimap repaints
     walk the visible subset instead of the full 510.
+- **Webview boot no longer hangs on 2700-node graphs.** The method-as-node
+  redesign blew the cytoscape population from ~510 class nodes to ~2700
+  total (510 classes + ~2200 method children + ~3500 edges). The boot
+  cascade then ran dagre over the full set twice (once in the constructor,
+  once via `layoutFocus()` immediately after), iterated `CLASSES.find`
+  inside `applyFilters` for every node, and re-projected the minimap on
+  every per-node position tick. Combined this took 4-10s and the
+  "Application Not Responding" dialog fired before first paint.
+  Six changes together cut cold open to sub-second on the same corpus:
+  - **`__cmClassById: Map<id, class>`** built once at boot, replacing
+    15 callsites that did `CLASSES.find(x => x.id === ...)` per node
+    per filter pass. `matchesSearch`'s callsite is left alone because
+    it predicate-matches, not key-looks-up.
+  - **`__cmCoveredKeys: Set<string>`** keyed by `${srcClass}|${tgt}|${kind}`
+    plus a `${srcClass}|${ownerClass}|${kind}` alias when the target is
+    a `Class.Method`. Replaces the linear `__cmIsCoveredByMethodEdge(e)`
+    scan that walked every method-level edge for every class-level
+    fallback edge — was O(E²) on 1700 class edges × 1800 method edges.
+  - **Drop the boot's first `renderOutline()` call.** `initFocusMode()`
+    already calls `setFocus()` → `applyFocusInternal()` → `renderOutline()`
+    after picking the default entry; the eager call before
+    `initFocusMode()` re-ran the outline a few hundred ms before the
+    focus-driven version overwrote it.
+  - **Cytoscape constructor uses `{ name: 'preset' }`.** The previous
+    `{ name: 'dagre' }` ran a full dagre pass on the initial element set
+    just so `layoutFocus()` could immediately re-run dagre on the focus
+    subgraph and overwrite every position. `preset` is a no-op layout
+    so the only dagre work on boot is the focus-scoped one. A full-graph
+    dagre fallback path was added in `initFocusMode()` for the rare case
+    `pickDefaultEntry()` returns null.
+  - **Minimap drops the per-node `position` listener.** Dagre fires
+    `position` once per node per layout step, which on 2700 nodes meant
+    thousands of `requestAnimationFrame`-scheduled projection
+    recomputations during a single layout pass. The listener is now
+    only `cy.on('layoutstop add remove', ...)` for projection
+    invalidation and `cy.on('pan zoom select unselect', ...)` for cheap
+    viewport repaints.
+  - **`.cm-hidden` stylesheet class replaces per-element
+    `style('display', 'none')`.** Cytoscape's `.style()` setter is a
+    per-element write that immediately marks the renderer dirty; the
+    selector-based stylesheet rule `{ selector: '.cm-hidden',
+    style: { 'display': 'none' } }` is matched once. `applyFilters`,
+    `applyFocusMask`, `layoutFocus`'s visible-filter, `layoutAll`'s
+    visible-filter, `applySwimlanes`, and the minimap's `drawNodes`
+    all switched to `addClass('cm-hidden')` / `removeClass('cm-hidden')`
+    / `!el.hasClass('cm-hidden')`.
+- **Lazy-mount method children.** The earlier method-as-node redesign
+  pushed every method node and method-level edge into the cytoscape
+  population up front, which made the initial dagre operate on
+  ~2700 nodes / ~3500 edges before the focus mask hid 95 % of them.
+  `__cmMethodNodesByOwner` and `__cmMethodEdgesByOwner` now stage the
+  method payload off-graph and only `cy.add()` it for the classes that
+  the current focus actually touches. `__cmInitialNodes` carries just
+  the class compounds + ext peers (~540 elements) so the constructor's
+  `preset` pass and the first focused `layoutFocus` both see a
+  realistically small graph. `applyFocusInternal` mounts the focus's
+  involved classes and unmounts everything else inside a single
+  `cy.batch()`; `setMode('all')` calls `__cmMountAllClasses()` before
+  layout; `__cmApplyNodeFold` collapses by unmounting children rather
+  than dimming them. The old explode/collapse semantics now route
+  through the same mount/unmount helpers, with `toggleOne`'s
+  source-of-truth switched from `__cmCollapsedClasses` to
+  `__cmMountedClasses` so a double-tap after boot is consistent
+  whether the class started mounted or deferred.
 - **`PROMPT_VERSION` → v3.10. Method `visibility` taught + outline filter.**
   Each method block now carries a `visibility` field (`public` /
   `private` / `protected` / `internal`) taken verbatim from the source

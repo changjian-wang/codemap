@@ -1585,6 +1585,11 @@ function __cmVisibleMethodsOf(c) {
   return c.methods.filter(m => m.name !== c.id);
 }
 
+// Indexed lookup for CLASSES — replaces ~16 callsites of `CLASSES.find(x =>
+// x.id === id)` which were O(N) each and combined to O(N^2) inside
+// applyFilters() (~260k compares on a 510-class corpus).
+const __cmClassById = new Map(CLASSES.map(c => [c.id, c]));
+
 // ---- Pass 1: build nodes (compound parents + method children + ext nodes) ----
 const nodes = [];
 
@@ -1718,21 +1723,28 @@ CLASSES.forEach(c => {
 //     internal class (the promotion runs at edge level, not method level).
 //   • Unverified / hallucinated edges (e.g. AskByQueryHandler →
 //     GroundedAskPromptsV2) that the LLM emitted at class granularity.
-const __cmCoveredPairs = new Set(edges.map(e => `${e.data.source.split('.')[0]}|${e.data.target}|${e.data.kind}`));
-function __cmIsCoveredByMethodEdge(srcClass, tgt) {
-  // Covered if any method-level edge from srcClass lands on tgt itself
-  // OR on a child of tgt (when tgt is a class id).
-  for (const e of edges) {
-    const meSrc = e.data.source;
-    if (meSrc.split('.')[0] !== srcClass) continue;
-    if (e.data.target === tgt) return true;
-    if (typeof tgt === 'string' && e.data.target.startsWith(tgt + '.')) return true;
+//
+// Coverage lookup is O(1) per EDGE entry: for each method-level edge we
+// derive the (srcClass, target, kind) key plus a (srcClass, targetClass,
+// kind) alias when the target is a method child (so a class-level fallback
+// pointing at a class id is considered covered by any method edge landing
+// on one of that class's methods). The previous linear scan over `edges`
+// inside EDGES.forEach was O(E^2) and was the dominant cost when EDGES
+// had ≥ 1000 entries.
+const __cmCoveredKeys = new Set();
+edges.forEach(e => {
+  const srcClass = e.data.source.split('.')[0];
+  const tgt = e.data.target;
+  const kind = e.data.kind;
+  __cmCoveredKeys.add(`${srcClass}|${tgt}|${kind}`);
+  const dot = typeof tgt === 'string' ? tgt.indexOf('.') : -1;
+  if (dot > 0 && !tgt.startsWith('ext:')) {
+    __cmCoveredKeys.add(`${srcClass}|${tgt.slice(0, dot)}|${kind}`);
   }
-  return false;
-}
+});
 EDGES.forEach(e => {
   if (!__cmNodeIds.has(e.from) || !__cmNodeIds.has(e.to)) return;
-  if (__cmIsCoveredByMethodEdge(e.from, e.to)) return;
+  if (__cmCoveredKeys.has(`${e.from}|${e.to}|${e.kind}`)) return;
   __cmPushEdge(e.from, e.to, e.kind, e.verified);
 });
 
@@ -1749,6 +1761,96 @@ for (let i = nodes.length - 1; i >= 0; i--) {
     nodes.splice(i, 1);
     __cmNodeIds.delete(n.data.id);
   }
+}
+
+// ---- Pass 6: lazy-mount split ----
+//
+// Splits the full graph into a small "initial" set (class compounds + ext
+// nodes + class-level edges) and a large "deferred" set (method children +
+// any edge with a method endpoint). The cytoscape ctor mounts only the
+// initial set; focus mode (and explicit unfold actions) mount method
+// children on demand via __cmMountClassMethods.
+//
+// On a 510-class corpus this drops the cytoscape boot cost from ~2700
+// nodes / ~3500 edges to ~540 nodes / ~1500 edges, and lets layoutFocus()
+// dagre over a few dozen nodes instead of the whole graph.
+const __cmMethodNodesByOwner = new Map();   // classId -> [methodNodeDef, ...]
+const __cmMethodEdgesByOwner = new Map();   // classId -> Set<edgeDef>
+const __cmInitialNodes = [];
+const __cmInitialEdges = [];
+const __cmDeferredMethodIds = new Set();
+
+nodes.forEach(n => {
+  if (typeof n.classes === 'string' && n.classes.indexOf('method') !== -1) {
+    const owner = n.data.parent;
+    if (!__cmMethodNodesByOwner.has(owner)) __cmMethodNodesByOwner.set(owner, []);
+    __cmMethodNodesByOwner.get(owner).push(n);
+    __cmDeferredMethodIds.add(n.data.id);
+  } else {
+    __cmInitialNodes.push(n);
+  }
+});
+
+function __cmAddDeferredEdge(classId, edge) {
+  let bucket = __cmMethodEdgesByOwner.get(classId);
+  if (!bucket) { bucket = new Set(); __cmMethodEdgesByOwner.set(classId, bucket); }
+  bucket.add(edge);
+}
+
+edges.forEach(e => {
+  const src = e.data.source, tgt = e.data.target;
+  const srcMethod = __cmDeferredMethodIds.has(src);
+  const tgtMethod = __cmDeferredMethodIds.has(tgt);
+  if (!srcMethod && !tgtMethod) { __cmInitialEdges.push(e); return; }
+  // Index by every owning class so mounting any of them brings the edge in
+  // (the edge is materialised only when BOTH endpoints have actually been
+  // added to cy, see __cmMountClassMethods below).
+  if (srcMethod) __cmAddDeferredEdge(src.split('.')[0], e);
+  if (tgtMethod) __cmAddDeferredEdge(tgt.split('.')[0], e);
+});
+
+const __cmMountedClasses = new Set();
+function __cmMountClassMethods(classId) {
+  if (__cmMountedClasses.has(classId)) return;
+  __cmMountedClasses.add(classId);
+  const methodNodes = __cmMethodNodesByOwner.get(classId);
+  if (!methodNodes || methodNodes.length === 0) return;
+  cy.add(methodNodes);
+  const candEdges = __cmMethodEdgesByOwner.get(classId);
+  if (!candEdges) return;
+  const toAdd = [];
+  candEdges.forEach(e => {
+    if (!cy.getElementById(e.data.id).empty()) return;
+    if (cy.getElementById(e.data.source).empty()) return;
+    if (cy.getElementById(e.data.target).empty()) return;
+    toAdd.push(e);
+  });
+  if (toAdd.length > 0) cy.add(toAdd);
+}
+
+function __cmUnmountClassMethods(classId) {
+  if (!__cmMountedClasses.has(classId)) return;
+  __cmMountedClasses.delete(classId);
+  const parent = cy.getElementById(classId);
+  if (parent.empty()) return;
+  // Removing the children also removes any edge with an endpoint on them.
+  parent.children().filter('.method').remove();
+}
+
+function __cmMountAllClasses() {
+  if (__cmMountedClasses.size === __cmMethodNodesByOwner.size) return;
+  cy.batch(() => {
+    for (const classId of __cmMethodNodesByOwner.keys()) {
+      __cmMountClassMethods(classId);
+    }
+  });
+}
+
+function __cmUnmountAllClasses() {
+  if (__cmMountedClasses.size === 0) return;
+  cy.batch(() => {
+    [...__cmMountedClasses].forEach(cid => __cmUnmountClassMethods(cid));
+  });
 }
 
 // Layout config is kept on a module-level var so the collapse helpers
@@ -1777,7 +1879,7 @@ const __cmLayoutOpts = {
 };
 const cy = cytoscape({
   container: document.getElementById('cy'),
-  elements: { nodes, edges },
+  elements: { nodes: __cmInitialNodes, edges: __cmInitialEdges },
   minZoom: 0.15,
   maxZoom: 4,
   // Default wheelSensitivity (1) makes each tick jump ×1.5, which users
@@ -1809,7 +1911,13 @@ const cy = cytoscape({
   // Visual quality difference at static rest is imperceptible; the
   // savings during gestures are not.
   pixelRatio: Math.min(1.5, window.devicePixelRatio || 1),
-  layout: __cmLayoutOpts,
+  // Boot layout is intentionally a no-op preset. initFocusMode() →
+  // applyFocusInternal() → layoutFocus() runs the only dagre pass shortly
+  // after construction, on the focus subgraph only (a few dozen nodes
+  // instead of ~2700). Letting the constructor run a full dagre here meant
+  // we paid the full-graph layout cost on boot and then immediately threw
+  // the result away when layoutFocus laid out the subgraph on top of it.
+  layout: { name: 'preset' },
   style: [
     // ---------- Compound parent (class swimlane) ----------
     {
@@ -2000,6 +2108,15 @@ const cy = cytoscape({
         'opacity': 1,
       }
     },
+    // Per-element visibility toggle. Adding / removing this class is the
+    // hot path for applyFilters / applyFocusMask / fold helpers — using a
+    // class instead of inline `style('display', 'none')` cuts ~2700 per-
+    // element style-table mutations per chip click down to ~2700 class-bit
+    // flips, which is roughly an order of magnitude cheaper.
+    {
+      selector: '.cm-hidden',
+      style: { 'display': 'none' },
+    },
   ]
 });
 
@@ -2073,7 +2190,7 @@ function focusSetForCurrent(classId, methodName, depth) {
     rootIds = [`${classId}.${methodName}`];
   } else {
     rootIds = [];
-    const c = CLASSES.find(x => x.id === classId);
+    const c = __cmClassById.get(classId);
     if (c) {
       __cmVisibleMethodsOf(c).forEach(m => rootIds.push(`${c.id}.${m.name}`));
     }
@@ -2115,7 +2232,7 @@ function getDepthsFromFocus() {
   const roots = currentFocus.methodName
     ? [`${currentFocus.classId}.${currentFocus.methodName}`]
     : (() => {
-        const c = CLASSES.find(x => x.id === currentFocus.classId);
+        const c = __cmClassById.get(currentFocus.classId);
         return c ? __cmVisibleMethodsOf(c).map(m => `${c.id}.${m.name}`) : [currentFocus.classId];
       })();
   const dists = new Map();
@@ -2180,20 +2297,18 @@ function applyFocusMask() {
   cy.batch(() => {
     cy.nodes().forEach(n => {
       const id = n.id();
-      if (!isInFocus(id)) n.style('display', 'none');
+      if (!isInFocus(id)) n.addClass('cm-hidden');
     });
     // Hide compound parents that have no visible children. Cytoscape doesn't
     // auto-collapse an empty compound: it would render as an empty rectangle.
     cy.nodes('.cls').forEach(p => {
-      if (p.style('display') === 'none') return;
-      const visibleChildren = p.children().filter(c => c.style('display') !== 'none');
-      if (visibleChildren.length === 0) p.style('display', 'none');
+      if (p.hasClass('cm-hidden')) return;
+      const visibleChildren = p.children().filter(c => !c.hasClass('cm-hidden'));
+      if (visibleChildren.length === 0) p.addClass('cm-hidden');
     });
     cy.edges().forEach(e => {
-      const src = e.source();
-      const tgt = e.target();
-      if (src.style('display') === 'none' || tgt.style('display') === 'none') {
-        e.style('display', 'none');
+      if (e.source().hasClass('cm-hidden') || e.target().hasClass('cm-hidden')) {
+        e.addClass('cm-hidden');
       }
     });
   });
@@ -2219,7 +2334,7 @@ function applyMethodFocusHighlight() {
   cy.nodes('.method').forEach(n => {
     if (n.id() === __cmFocusedMethodNodeId) return;
     if (n.data('ownerId') !== parentId) return;
-    if (n.style('display') === 'none') return;
+    if (n.hasClass('cm-hidden')) return;
     n.addClass('dimmed');
   });
 }
@@ -2228,7 +2343,7 @@ function layoutFocus() {
   // Re-run dagre on whatever is currently visible so the subgraph fills the
   // canvas. We reuse __cmLayoutOpts unchanged — small subgraphs render fine
   // with the existing dagre control-point routing.
-  const visible = cy.elements().filter(el => el.style('display') !== 'none');
+  const visible = cy.elements().filter(el => !el.hasClass('cm-hidden'));
   if (visible.length === 0) return;
   visible.layout({ ...__cmLayoutOpts, fit: true, padding: 50 }).run();
 }
@@ -2292,7 +2407,7 @@ function updateFocusBar() {
     if (cls) cls.textContent = `whole graph (${CLASSES.length} classes)`;
     if (mth) mth.textContent = '';
   } else if (currentFocus) {
-    const c = CLASSES.find(x => x.id === currentFocus.classId);
+    const c = __cmClassById.get(currentFocus.classId);
     const bcVal = (c && c.bc) || '';
     if (bc)  { bc.textContent = bcVal; bc.className = 'focus-bc' + (bcVal ? ' ' + bcVal : ''); }
     if (cls) cls.textContent = currentFocus.classId;
@@ -2330,7 +2445,7 @@ function layoutAll() {
   // pre-translation no longer match the post-translation source/target line.
   cy.elements().layout({ ...__cmLayoutOpts, fit: false, padding: 50 }).run();
   applySwimlanes();
-  const visible = cy.elements().filter(el => el.style('display') !== 'none');
+  const visible = cy.elements().filter(el => !el.hasClass('cm-hidden'));
   if (visible.length > 0) fitWithTopReserve(visible, 110, 30);
 }
 
@@ -2382,7 +2497,7 @@ function applySwimlanes() {
   });
   return;
   // -- Legacy class-level banding below (intentionally unreachable) --
-  const visible = cy.nodes().filter(n => n.style('display') !== 'none');
+  const visible = cy.nodes().filter(n => !n.hasClass('cm-hidden'));
   if (visible.length === 0) return;
 
   const coreNodes = visible.filter(n => !n.hasClass('ext'));
@@ -2527,6 +2642,11 @@ function setMode(newMode) {
     // All-mode shows every class compound + every method node. Clear any
     // focus accents that were lingering from a previous focus session.
     __cmFocusedMethodNodeId = null;
+    // Lazy mount: "all" mode is the case where every method node has to be
+    // present. Mounting everything up front is exactly what we were trying
+    // to avoid on boot; here it's an explicit user action so the cost is
+    // expected.
+    __cmMountAllClasses();
     cy.nodes('.method').removeClass('method-focus dimmed');
     cy.edges().removeClass('dimmed');
     applyFilters();
@@ -2564,6 +2684,22 @@ function applyFocusInternal(classId, methodName) {
   // applyMethodFocusHighlight() can paint the accent + dim siblings inside
   // the same compound.
   __cmFocusedMethodNodeId = methodName ? `${classId}.${methodName}` : null;
+  // Lazy mount: figure out which class compounds need their method children
+  // present for this focus subgraph, then mount those and unmount everyone
+  // else. On the dawning corpus this is typically <20 classes mounted vs.
+  // 510 total — dagre in layoutFocus() only walks the mounted subgraph.
+  const involvedClasses = new Set([classId]);
+  __cmFocusSet.forEach(nodeId => {
+    if (typeof nodeId !== 'string' || nodeId.startsWith('ext:')) return;
+    const dot = nodeId.indexOf('.');
+    involvedClasses.add(dot > 0 ? nodeId.slice(0, dot) : nodeId);
+  });
+  cy.batch(() => {
+    [...__cmMountedClasses].forEach(cid => {
+      if (!involvedClasses.has(cid)) __cmUnmountClassMethods(cid);
+    });
+    involvedClasses.forEach(cid => __cmMountClassMethods(cid));
+  });
   // Chip filters first (they still apply within the focus subgraph), then
   // mask, then layout. Order matters: chip mutations call applyFilters which
   // would otherwise un-hide elements the focus mask had hidden.
@@ -2607,8 +2743,8 @@ function setDepth(d) {
 function pickDefaultEntry() {
   if (ENTRIES.length === 0) return null;
   const ordered = [...ENTRIES].sort((a, b) => {
-    const ca = CLASSES.find(c => c.id === a.classId);
-    const cb = CLASSES.find(c => c.id === b.classId);
+    const ca = __cmClassById.get(a.classId);
+    const cb = __cmClassById.get(b.classId);
     return ((ca && ca.readingPriority) || 999) - ((cb && cb.readingPriority) || 999);
   });
   return ordered[0];
@@ -2636,12 +2772,17 @@ function initFocusMode() {
   if (backBtn) backBtn.addEventListener('click', () => navigateHistory(-1));
   if (fwdBtn)  fwdBtn.addEventListener('click',  () => navigateHistory(1));
   // Auto-focus the first entry method by readingPriority of its owning class
-  // so the canvas is never empty on load. No-op if there are no entries.
+  // so the canvas is never empty on load. With no entries we fall back to
+  // running the full-graph dagre once (the cytoscape constructor uses a
+  // preset no-op layout now, so the only layout pass for this branch lives
+  // here).
   const def = pickDefaultEntry();
   if (def) {
     setFocus(def.classId, def.methodName);
   } else {
+    cy.layout(__cmLayoutOpts).run();
     updateFocusBar();
+    renderOutline();
   }
 }
 
@@ -2679,7 +2820,7 @@ function renderOutline() {
   };
 
   const entryClasses = [...byClass.keys()]
-    .map(id => CLASSES.find(c => c.id === id))
+    .map(id => __cmClassById.get(id))
     .filter(Boolean)
     .sort((a, b) => (a.readingPriority || 999) - (b.readingPriority || 999));
 
@@ -2847,7 +2988,7 @@ function syncDetailsTo(id) {
   cy.$('node:selected').unselect();
   const node = cy.getElementById(id);
   if (node && !node.empty()) node.select();
-  const c = CLASSES.find(x => x.id === id);
+  const c = __cmClassById.get(id);
   if (!c) return;
 
   document.querySelectorAll('.outline-class.active, .outline-item.active')
@@ -2928,7 +3069,7 @@ function renderExtDetails(name) {
   // `Pgvector.Vector`.
   const evidence = [];
   callerIds.forEach(id => {
-    const c = CLASSES.find(x => x.id === id);
+    const c = __cmClassById.get(id);
     if (!c) return;
     c.methods.forEach(m => {
       (m.externalCalls || []).forEach(ec => {
@@ -3464,7 +3605,7 @@ function initMinimap() {
     // fraction of the 510 nodes are visible. Walking all of them was a
     // measurable chunk of minimap frame time on the gateway corpus.
     cy.nodes().forEach(n => {
-      if (n.style('display') === 'none') return;
+      if (n.hasClass('cm-hidden')) return;
       const bb = n.boundingBox();
       const x = bb.x1 * p.scale + p.offsetX;
       const y = bb.y1 * p.scale + p.offsetY;
@@ -3560,7 +3701,13 @@ function initMinimap() {
   //                    needs to repaint; same projection.
   cy.on('pan zoom select unselect', schedule);
   cy.on('layoutstop add remove', () => { invalidateProjection(); schedule(); });
-  cy.on('position', 'node', () => { invalidateProjection(); schedule(); });
+  // NOTE: a `cy.on('position', 'node', ...)` listener used to live here for
+  // "projection follows manual drags" parity, but it fired ~2700 times per
+  // layout step on the dawning corpus (every node position update is one
+  // event) and was the single biggest contributor to the boot freeze. The
+  // layoutstop event above already covers programmatic layouts; we accept
+  // that user-dragged nodes don't update the minimap projection until the
+  // next layout / pan / zoom — an unusual interaction in this UI.
   window.addEventListener('resize', () => { resizeCanvas(); invalidateProjection(); schedule(); });
 
   // First paint after layout has settled.
@@ -3606,21 +3753,14 @@ function __cmApplyNodeFold(c, collapsed) {
   if (!node || node.empty()) return;
   // Update the header label so the chevron flips between \u25be and \u25b8.
   node.data('label', __cmClassLabel(c));
-  // Toggle visibility of the compound's method children. Edges with a
-  // hidden endpoint inherit the hide via applyFilters' visibility sweep
-  // (run by the caller via __cmRerunLayout \u2192 applyFilters chain).
-  node.children().forEach(child => {
-    if (!child.hasClass('method')) return;
-    child.style('display', collapsed ? 'none' : 'element');
-  });
-  // Re-evaluate edge visibility now that some method endpoints flipped.
-  cy.edges().forEach(e => {
-    const src = e.source();
-    const tgt = e.target();
-    if (src.style('display') === 'none' || tgt.style('display') === 'none') {
-      e.style('display', 'none');
-    }
-  });
+  // Lazy mount: folded == not mounted; unfolded == mounted. cy.add /
+  // .remove handle edge bookkeeping (removing a method node also drops the
+  // edges touching it), so we don't need a separate edge sweep here.
+  if (collapsed) {
+    __cmUnmountClassMethods(c.id);
+  } else {
+    __cmMountClassMethods(c.id);
+  }
 }
 function __cmRerunLayout() {
   cy.layout(__cmLayoutOpts).run();
@@ -3630,18 +3770,34 @@ window.__codemapCollapse = {
   toggleAll() {
     __cmAllCollapsed = !__cmAllCollapsed;
     __cmCollapsedClasses.clear();
+    // Mount / unmount everything in a single cy.batch so we pay one render
+    // pass instead of 510. With lazy-mount, "collapse" maps to unmount
+    // (cheap, just .remove() per class) and "expand" maps to mount (which
+    // is the heavy direction — batching matters more here).
+    if (__cmAllCollapsed) {
+      __cmUnmountAllClasses();
+      CLASSES.forEach(c => __cmCollapsedClasses.add(c.id));
+    } else {
+      __cmMountAllClasses();
+    }
     CLASSES.forEach(c => {
-      __cmApplyNodeFold(c, __cmAllCollapsed);
-      if (__cmAllCollapsed) __cmCollapsedClasses.add(c.id);
+      const node = cy.getElementById(c.id);
+      if (!node.empty()) node.data('label', __cmClassLabel(c));
     });
     __cmRerunLayout();
     return __cmAllCollapsed;
   },
   isAllCollapsed() { return __cmAllCollapsed; },
   toggleOne(id) {
-    const c = CLASSES.find(x => x.id === id);
+    const c = __cmClassById.get(id);
     if (!c) return;
-    const willCollapse = !__cmCollapsedClasses.has(id);
+    // Source-of-truth for whether the class is currently expanded is
+    // __cmMountedClasses (the lazy-mount set), not __cmCollapsedClasses.
+    // On boot most classes are unmounted because focus mode hasn't touched
+    // them \u2014 the legacy `!__cmCollapsedClasses.has(id)` check would have
+    // wrongly reported "currently expanded, please collapse" and the user
+    // would see no change on the first double-tap.
+    const willCollapse = __cmMountedClasses.has(id);
     if (willCollapse) __cmCollapsedClasses.add(id); else __cmCollapsedClasses.delete(id);
     __cmApplyNodeFold(c, willCollapse);
     __cmRerunLayout();
@@ -3666,7 +3822,7 @@ document.querySelectorAll('.card-tab').forEach(tab => {
     }
     const sel = cy.$('node:selected')[0];
     if (sel) {
-      const c = CLASSES.find(x => x.id === sel.id());
+      const c = __cmClassById.get(sel.id());
       if (c) renderCard(c);
     }
   });
@@ -3708,7 +3864,7 @@ function applyOutlineFilters() {
   // Entry-class headers (paired with their .outline-methods sibling).
   document.querySelectorAll('.outline-class').forEach(header => {
     const id = header.dataset.classId;
-    const c = CLASSES.find(x => x.id === id);
+    const c = __cmClassById.get(id);
     let visible = !!c;
     if (c) {
       if (filterState.bc !== 'all' && c.bc !== filterState.bc) visible = false;
@@ -3788,8 +3944,8 @@ function applyFilters() {
   // a sub-frame restyle on the 510-node / 1700-edge corpus.
   cy.batch(() => {
     cy.nodes('.cls').forEach(n => {
-      const c = CLASSES.find(x => x.id === n.id());
-      if (!c) { n.style('display', 'none'); return; }
+      const c = __cmClassById.get(n.id());
+      if (!c) { n.addClass('cm-hidden'); return; }
       let show = true;
       if (filterState.bc !== 'all' && c.bc !== filterState.bc) show = false;
       if (filterState.hideRead && c.readState === 'read') show = false;
@@ -3798,16 +3954,16 @@ function applyFilters() {
       // Honor the manual fold state from window.__codemapCollapse.toggleOne /
       // .toggleAll — those hide method children directly, but don't touch the
       // parent. Nothing else to do here.
-      n.style('display', show ? 'element' : 'none');
+      if (show) n.removeClass('cm-hidden'); else n.addClass('cm-hidden');
     });
     // Method children inherit their compound's visibility. A child can also be
-    // independently hidden by the fold mechanism (display:'none' set by
+    // independently hidden by the fold mechanism (cm-hidden set by
     // __cmApplyNodeFold); we re-evaluate that branch instead of stomping it.
     cy.nodes('.method').forEach(n => {
       const parent = cy.getElementById(n.data('ownerId'));
-      const parentHidden = !parent || parent.empty() || parent.style('display') === 'none';
+      const parentHidden = !parent || parent.empty() || parent.hasClass('cm-hidden');
       const folded = __cmCollapsedClasses.has(n.data('ownerId')) || __cmAllCollapsed;
-      n.style('display', (parentHidden || folded) ? 'none' : 'element');
+      if (parentHidden || folded) n.addClass('cm-hidden'); else n.removeClass('cm-hidden');
     });
     // External-dep nodes get the hide-external chip + the search filter.
     cy.nodes('.ext').forEach(n => {
@@ -3816,16 +3972,16 @@ function applyFilters() {
         const name = String(n.id() || '').replace(/^ext:/, '');
         if (!name.toLowerCase().includes(filterState.search.toLowerCase())) show = false;
       }
-      n.style('display', show ? 'element' : 'none');
+      if (show) n.removeClass('cm-hidden'); else n.addClass('cm-hidden');
     });
     // Edges: hide whenever either endpoint is hidden so the graph never shows
     // a dangling arrow into nowhere.
     cy.edges().forEach(e => {
-      const src = e.source().style('display') !== 'none';
-      const tgt = e.target().style('display') !== 'none';
-      let show = src && tgt;
+      const srcVisible = !e.source().hasClass('cm-hidden');
+      const tgtVisible = !e.target().hasClass('cm-hidden');
+      let show = srcVisible && tgtVisible;
       if (filterState.hideExternal && e.data('kind') === 'external_calls') show = false;
-      e.style('display', show ? 'element' : 'none');
+      if (show) e.removeClass('cm-hidden'); else e.addClass('cm-hidden');
     });
   });
   // Slice 3: focus mask runs last so the focus subgraph wins over chip
@@ -3892,7 +4048,7 @@ function postResetProgress() {
   renderStats();
 
   if (prevId) {
-    const c = CLASSES.find(x => x.id === prevId);
+    const c = __cmClassById.get(prevId);
     if (c) {
       const row = document.querySelector(`.outline-class[data-class-id="${CSS.escape(prevId)}"]`);
       if (row) row.classList.add('active');
@@ -4034,13 +4190,16 @@ document.addEventListener('keydown', e => {
   }
 });
 
-renderOutline();
 renderChat();
 renderStats();
 initMinimap();
 // Slice 3: focus mode auto-selects the first entry method so the canvas
 // loads in focus view by design — there is no "all-graph" landing until
 // Slice 4 brings back the Focus/All toggle.
+// renderOutline() is intentionally NOT called here: initFocusMode() →
+// setFocus() → applyFocusInternal() will call it once with the correct
+// depth badges. Calling it both here and from setFocus doubled outline
+// build time on boot.
 initFocusMode();
 // Hide bc chips that map to empty slots — clicking them would just produce
 // an empty graph + empty outline, which is more confusing than helpful.
@@ -4159,7 +4318,7 @@ function postMarkRead(nodeId, read) {
   if (window.codemap && window.codemap.postMessage) {
     window.codemap.postMessage({ type: 'mark_read', nodeId, read });
   }
-  const cls = CLASSES.find(c => c.id === nodeId);
+  const cls = __cmClassById.get(nodeId);
   if (cls) {
     cls.readState = read ? 'read' : 'unread';
     renderCard(cls);
@@ -4176,7 +4335,7 @@ setTimeout(() => {
   // opens automatically. Fall back to reading-order #1 for the generic
   // workspace generate case.
   const hint = (__INJ.meta && __INJ.meta.selectedNodeId) || null;
-  const picked = (hint && CLASSES.find(c => c.id === hint))
+  const picked = (hint && __cmClassById.get(hint))
     || [...CLASSES].sort((a,b) => (a.readingPriority ?? 99) - (b.readingPriority ?? 99))[0];
   selectClass(picked.id);
 }, 100);

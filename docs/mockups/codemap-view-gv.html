@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CodeMap GV prototype — Graphviz (WASM) direct render</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<style>
+  :root {
+    --vs-bg:        #1e1e1e;
+    --vs-panel:     #252526;
+    --vs-border:    #333;
+    --bc-capture:   #4ec9b0;
+    --bc-recall:    #c586c0;
+    --bc-host:      #dcdcaa;
+    --bc-shared:    #569cd6;
+    --text:         #d4d4d4;
+    --dim:          #858585;
+    --edge:         #c0c8d2;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--vs-bg); color: var(--text);
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 13px; overflow: hidden;
+  }
+  header {
+    padding: 8px 14px; background: var(--vs-panel);
+    border-bottom: 1px solid var(--vs-border);
+    display: flex; align-items: center; gap: 14px;
+  }
+  header h1 { font-size: 13px; font-weight: 600; margin: 0; }
+  header .note { color: var(--dim); font-size: 11px; }
+  header .legend { display: flex; gap: 10px; margin-left: auto; }
+  header select {
+    background: var(--vs-bg); color: var(--text);
+    border: 1px solid var(--vs-border); border-radius: 3px;
+    font-family: inherit; font-size: 11px; padding: 3px 6px;
+  }
+  .legend-item { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dim); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .legend-dot.host    { background: var(--bc-host); }
+  .legend-dot.capture { background: var(--bc-capture); }
+  .legend-dot.recall  { background: var(--bc-recall); }
+  .legend-dot.shared  { background: var(--bc-shared); }
+
+  #canvas { width: 100vw; height: calc(100vh - 38px); overflow: hidden; cursor: grab; user-select: none; }
+  #canvas.dragging { cursor: grabbing; }
+  #canvas svg { display: block; width: 100%; height: 100%; }
+  #status { padding: 10px 14px; color: var(--dim); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>CodeMap GV prototype</h1>
+  <span class="note">Graphviz (WASM) · splines: <select id="splineMode">
+    <option value="ortho">ortho (Manhattan)</option>
+    <option value="spline" selected>spline (curved)</option>
+    <option value="polyline">polyline</option>
+    <option value="curved">curved</option>
+  </select> · engine: <select id="engineMode">
+    <option value="dot" selected>dot</option>
+    <option value="neato">neato</option>
+    <option value="fdp">fdp</option>
+  </select></span>
+  <div class="legend">
+    <span class="legend-item"><span class="legend-dot host"></span>host</span>
+    <span class="legend-item"><span class="legend-dot capture"></span>capture</span>
+    <span class="legend-item"><span class="legend-dot recall"></span>recall</span>
+    <span class="legend-item"><span class="legend-dot shared"></span>shared</span>
+  </div>
+</header>
+
+<div id="canvas"><div id="status">Loading Graphviz WASM…</div></div>
+
+<script type="module">
+import { Graphviz } from "https://cdn.jsdelivr.net/npm/@hpcc-js/wasm-graphviz@1.10.0/dist/index.js";
+
+// ============================================================
+//  Data — synced from codemap-view-svg.html on 2026-05-26
+// ============================================================
+const CLASSES = [
+  { id: 'Program', bc: 'host', methods: [
+    { name: 'Main', calls: ['Program.ConfigureModules', 'Program.MapAllModuleEndpoints'] },
+    { name: 'ConfigureModules' },
+    { name: 'MapAllModuleEndpoints', calls: ['CaptureEndpoints.MapCaptureEndpoints', 'RecallEndpoints.MapRecallEndpoints'] },
+  ]},
+  { id: 'CaptureEndpoints', bc: 'capture', methods: [
+    { name: 'MapCaptureEndpoints' },
+    { name: 'IngestUrl', calls: ['IngestUrlHandler.EnqueueAsync'] },
+    { name: 'List', calls: ['CaptureJobStore.FindInFlightByCanonicalUrlAsync'] },
+    { name: 'GetJob', calls: ['CaptureJobStore.MarkSucceededAsync'] },
+  ]},
+  { id: 'IngestUrlHandler', bc: 'capture', methods: [
+    { name: 'EnqueueAsync', calls: ['CaptureJobStore.InsertAsync', 'CaptureJobStore.FindInFlightByCanonicalUrlAsync'] },
+    { name: 'ExecuteAsync', calls: [
+      'HtmlContentExtractor.ExtractAsync', 'OnnxEmbeddingService.EmbedDocumentAsync',
+      'EventStore.InsertAsync', 'EventChunkStore.InsertRangeAsync',
+      'CaptureJobStore.MarkSucceededAsync', 'CaptureJobStore.MarkFailedAsync',
+      'CaptureJobStore.RescheduleAsync'] },
+  ]},
+  { id: 'CaptureJobWorker', bc: 'capture', methods: [
+    { name: 'StartAsync', calls: ['CaptureJobStore.ResetStuckProcessingAsync'] },
+    { name: 'ExecuteAsync', calls: ['CaptureJobWorker.TickOnceAsync'] },
+    { name: 'TickOnceAsync', calls: ['CaptureJobStore.ClaimNextPendingAsync', 'IngestUrlHandler.ExecuteAsync'] },
+  ]},
+  { id: 'EventStore', bc: 'capture', methods: [ { name: 'InsertAsync' }, { name: 'GetByIdAsync' } ] },
+  { id: 'EventChunkStore', bc: 'capture', methods: [ { name: 'InsertRangeAsync' } ] },
+  { id: 'CaptureJobStore', bc: 'capture', methods: [
+    { name: 'InsertAsync' }, { name: 'FindInFlightByCanonicalUrlAsync' },
+    { name: 'ClaimNextPendingAsync' }, { name: 'MarkSucceededAsync' },
+    { name: 'RescheduleAsync' }, { name: 'MarkFailedAsync' },
+    { name: 'ResetStuckProcessingAsync' },
+  ]},
+  { id: 'RecallEndpoints', bc: 'recall', methods: [
+    { name: 'MapRecallEndpoints' },
+    { name: 'Search', calls: ['RecallByQueryHandler.HandleAsync'] },
+    { name: 'Ask', calls: ['AskByQueryHandler.HandleAsync'] },
+  ]},
+  { id: 'RecallByQueryHandler', bc: 'recall', methods: [
+    { name: 'HandleAsync', calls: ['OnnxEmbeddingService.EmbedQueryAsync', 'RecallQuery.SearchAsync', 'RecallByQueryHandler.ParsePayload'] },
+    { name: 'ParsePayload' },
+  ]},
+  { id: 'AskByQueryHandler', bc: 'recall', methods: [
+    { name: 'HandleAsync', calls: ['OnnxEmbeddingService.EmbedQueryAsync', 'RecallQuery.SearchAsync', 'OllamaLlmService.ChatAsync', 'AskByQueryHandler.ExtractReferencedIndices'] },
+    { name: 'ExtractReferencedIndices' },
+  ]},
+  { id: 'RecallQuery', bc: 'recall', methods: [ { name: 'SearchAsync' } ] },
+  { id: 'OnnxEmbeddingService', bc: 'shared', methods: [
+    { name: 'EmbedQueryAsync', calls: ['OnnxEmbeddingService.ApplyPrefix', 'OnnxEmbeddingService.EmbedSync'] },
+    { name: 'EmbedDocumentAsync', calls: ['OnnxEmbeddingService.ApplyPrefix', 'OnnxEmbeddingService.EmbedSync'] },
+    { name: 'EmbedSync' }, { name: 'ApplyPrefix' },
+  ]},
+  { id: 'OllamaLlmService', bc: 'shared', methods: [
+    { name: 'ChatAsync', calls: ['OllamaLlmService.MapOllamaResponse', 'OllamaLlmService.StripThinkBlock'] },
+    { name: 'StripThinkBlock' }, { name: 'MapOllamaResponse' },
+  ]},
+  { id: 'HtmlContentExtractor', bc: 'shared', methods: [
+    { name: 'ExtractAsync', calls: ['HtmlContentExtractor.AssertHostIsPublicAsync', 'HtmlContentExtractor.BuildExtractorId'] },
+    { name: 'AssertHostIsPublicAsync' }, { name: 'BuildExtractorId' },
+  ]},
+];
+
+const BC_COLOR = {
+  host:    '#dcdcaa',
+  capture: '#4ec9b0',
+  recall:  '#c586c0',
+  shared:  '#569cd6',
+};
+
+// All method ids (used to filter out external call targets)
+const methodIds = new Set();
+CLASSES.forEach(c => c.methods.forEach(m => methodIds.add(`${c.id}.${m.name}`)));
+
+// Sanitize ids — DOT prefers safe identifiers, so quote everything
+function q(s) { return '"' + s.replace(/"/g, '\\"') + '"'; }
+
+function buildDot(splines) {
+  const lines = [];
+  lines.push('digraph CodeMap {');
+  lines.push('  bgcolor="#1e1e1e";');
+  lines.push('  rankdir=LR;');
+  lines.push('  compound=true;');
+  lines.push(`  splines="${splines}";`);
+  lines.push('  nodesep=0.30;');
+  lines.push('  ranksep=0.85;');
+  lines.push('  newrank=true;');
+  lines.push('  fontname="SF Mono, Menlo, Consolas, monospace";');
+  lines.push('  node [shape=box, style="rounded,filled", fillcolor="#252526",');
+  lines.push('         color="#c0c8d2", fontcolor="#d4d4d4", fontsize=11,');
+  lines.push('         fontname="SF Mono, Menlo, Consolas, monospace",');
+  lines.push('         margin="0.18,0.06", height=0.32];');
+  lines.push('  edge [color="#c0c8d2", penwidth=1.4, arrowsize=0.7];');
+  lines.push('');
+
+  // One cluster per class
+  CLASSES.forEach((c, i) => {
+    const color = BC_COLOR[c.bc];
+    lines.push(`  subgraph ${q('cluster_' + c.id)} {`);
+    lines.push(`    label=${q(c.id)};`);
+    lines.push(`    fontcolor="${color}";`);
+    lines.push(`    fontsize=12;`);
+    lines.push(`    color="${color}";`);
+    lines.push(`    penwidth=2;`);
+    lines.push(`    style="rounded";`);
+    lines.push(`    bgcolor="#1e1e1e";`);
+    lines.push(`    margin=14;`);
+    c.methods.forEach(m => {
+      const id = `${c.id}.${m.name}`;
+      lines.push(`    ${q(id)} [label="+ ${m.name}()"];`);
+    });
+    lines.push('  }');
+  });
+
+  lines.push('');
+
+  // Edges
+  CLASSES.forEach(c => {
+    c.methods.forEach(m => {
+      (m.calls || []).forEach(target => {
+        const source = `${c.id}.${m.name}`;
+        if (source === target) return;
+        if (!methodIds.has(target)) return;
+        lines.push(`  ${q(source)} -> ${q(target)};`);
+      });
+    });
+  });
+
+  lines.push('}');
+  return lines.join('\n');
+}
+
+// ============================================================
+//  Render
+// ============================================================
+const canvas = document.getElementById('canvas');
+const status = document.getElementById('status');
+const splineSel = document.getElementById('splineMode');
+const engineSel = document.getElementById('engineMode');
+
+let gv = null;
+
+async function render() {
+  if (!gv) return;
+  status.textContent = 'Layouting…';
+  const dot = buildDot(splineSel.value);
+  try {
+    const t0 = performance.now();
+    const svg = gv.layout(dot, 'svg', engineSel.value);
+    const ms = (performance.now() - t0).toFixed(0);
+    canvas.innerHTML = svg;
+    // make SVG fill canvas, keep aspect via preserveAspectRatio
+    const svgEl = canvas.querySelector('svg');
+    if (svgEl) {
+      svgEl.removeAttribute('width');
+      svgEl.removeAttribute('height');
+      svgEl.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      installPanZoom(svgEl);
+    }
+    console.log(`[gv] rendered in ${ms} ms`);
+  } catch (err) {
+    canvas.innerHTML = '';
+    const s = document.createElement('div');
+    s.id = 'status';
+    s.style.color = '#f48771';
+    s.textContent = 'Graphviz error: ' + err.message;
+    canvas.appendChild(s);
+    console.error(err);
+  }
+}
+
+// viewBox-driven pan/zoom on the rendered SVG
+function installPanZoom(svgEl) {
+  // Read existing viewBox or synthesize from width/height
+  let vb = (svgEl.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+  if (vb.length !== 4) {
+    const bb = svgEl.getBBox();
+    vb = [bb.x, bb.y, bb.width, bb.height];
+  }
+  let [x, y, w, h] = vb;
+  const sync = () => svgEl.setAttribute('viewBox', `${x} ${y} ${w} ${h}`);
+  sync();
+
+  let dragging = false, lastX = 0, lastY = 0;
+  canvas.addEventListener('mousedown', e => {
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    canvas.classList.add('dragging');
+  });
+  window.addEventListener('mouseup', () => { dragging = false; canvas.classList.remove('dragging'); });
+  window.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = w / rect.width;
+    const scaleY = h / rect.height;
+    x -= (e.clientX - lastX) * scaleX;
+    y -= (e.clientY - lastY) * scaleY;
+    lastX = e.clientX; lastY = e.clientY;
+    sync();
+  });
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mx = x + (e.clientX - rect.left) / rect.width * w;
+    const my = y + (e.clientY - rect.top) / rect.height * h;
+    const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+    w *= factor; h *= factor;
+    x = mx - (e.clientX - rect.left) / rect.width * w;
+    y = my - (e.clientY - rect.top) / rect.height * h;
+    sync();
+  }, { passive: false });
+}
+
+splineSel.addEventListener('change', render);
+engineSel.addEventListener('change', render);
+
+(async () => {
+  try {
+    gv = await Graphviz.load();
+    status.textContent = '';
+    render();
+  } catch (err) {
+    status.style.color = '#f48771';
+    status.textContent = 'Failed to load Graphviz WASM: ' + err.message;
+    console.error(err);
+  }
+})();
+</script>
+
+</body>
+</html>

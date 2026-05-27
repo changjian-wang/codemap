@@ -36,7 +36,7 @@ Six core moves, replacing the v0.0.x stack:
 | Q5 (revised) | TS / JS analyzer | TS Compiler API + ts-morph, in-process. Symmetric with the principle in §2-3: no `vscode.commands` round-trip. |
 | Q6 | Reading order granularity | Method ids (`CodeMapGraph.readingOrder: string[]`), not class ids. |
 | Q7 | Eval backward-compat | `classEdges` is a **derived view** aggregated from `methodEdges` at the boundary. v0.0.6/7/8 YAML baselines remain scoreable without duplicate source of truth. |
-| Q8 | C# project entry format | Require `.slnx`. Effective toolchain floor: **.NET 9 SDK** (for `.slnx` support) even though runtime stays at .NET 8. |
+| Q8 | C# project entry format | Require `.slnx`. Effective toolchain floor: **.NET 9 SDK** (for `.slnx` support) even though runtime stays at .NET 8. Implementation note: `MSBuildWorkspace.OpenSolutionAsync` does **not** parse `.slnx` on Roslyn 4.11 — the calibrator host parses the slnx XML itself and calls `OpenProjectAsync` per `<Project Path="…"/>` entry. Verified by R2 spike (§7.2). |
 
 ### 2.2 `CalibratorService` interface principle
 
@@ -96,4 +96,36 @@ Status: pending. Acceptance: load `pixi.js@^8` in a webview, render 100 nodes + 
 
 ### 7.2 R2 — Roslyn against `lumen.slnx`
 
-Status: pending. Acceptance: `MSBuildWorkspace.OpenSolutionAsync(lumen.slnx)` succeeds on .NET 9 SDK; can enumerate `INamedTypeSymbol`s in `Lumen.Capture` and resolve at least one cross-project call.
+Status: **Resolved 2026-05-27** (`tools/spikes/roslyn-r2/`, since deleted per `prototype` skill).
+
+Result: `MSBuildWorkspace` on Microsoft.CodeAnalysis 4.11 + .NET 9 SDK 9.0.314 works against `lumen.slnx` **with a caveat**: `OpenSolutionAsync` throws `InvalidProjectFileException("No file format header found")` on `.slnx` because Roslyn's solution parser still expects the classic `Microsoft Visual Studio Solution File` header. The workaround is short and durable: parse the `.slnx` XML (a flat `<Solution><Folder><Project Path="…"/></Folder></Solution>`) and call `workspace.OpenProjectAsync(csprojPath)` per project. Transitive P2P references load automatically and dedupe by project name (with a benign `ArgumentException` when a project is already in the workspace — the spike just skips and continues).
+
+Numbers from `lumen.slnx`: 18 `<Project Path/>` declared → 11 distinct projects loaded (7 already present via transitive references). Cold load (first run, includes NuGet restore + project graph build) took 67 s on the test machine; expected to drop sharply on warm runs. `GetCompilationAsync` returned a non-null `Compilation`, and walking `ClassDeclarationSyntax` produced 8 `INamedTypeSymbol`s in the inspected project. No fatal `WorkspaceFailed` diagnostics.
+
+Implication for the implementation: the C# calibrator host owns slnx parsing (a 10-line `XDocument.Descendants("Project")` walk). This is captured in Q8's implementation note. Cold-start cost (67 s) is a UX concern — Phase 2.5 must make calibrator startup a background warmup, not a per-request blocker.
+
+Core absorbed from the spike (the snippet the Phase 2.2 implementation will mirror):
+
+```csharp
+MSBuildLocator.RegisterDefaults();
+using var workspace = MSBuildWorkspace.Create();
+var doc = XDocument.Load(slnxPath);
+var baseDir = Path.GetDirectoryName(slnxPath)!;
+
+foreach (var project in doc.Descendants("Project"))
+{
+    var rel = project.Attribute("Path")?.Value;
+    if (string.IsNullOrWhiteSpace(rel)) continue;
+    var csproj = Path.GetFullPath(Path.Combine(baseDir, rel));
+    if (!File.Exists(csproj)) continue;
+    try
+    {
+        await workspace.OpenProjectAsync(csproj);
+    }
+    catch (ArgumentException)
+    {
+        // already loaded transitively; safe to skip
+    }
+}
+// workspace.CurrentSolution now contains every reachable project
+```

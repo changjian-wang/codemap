@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>CodeMap R1 — Pixi.js perf spike</title>
+  <style>
+    body { margin: 0; background: #0b0d12; color: #e6e9ef; font-family: ui-sans-serif, system-ui, sans-serif; }
+    #hud, #controls {
+      position: fixed; padding: 10px 14px;
+      background: rgba(15, 18, 25, 0.85);
+      border: 1px solid #1f2937;
+      border-radius: 6px;
+      font-size: 12px; line-height: 1.6;
+      backdrop-filter: blur(6px);
+    }
+    #hud { top: 10px; left: 10px; }
+    #controls { top: 10px; right: 10px; }
+    .fps { color: #6ee7b7; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .warn { color: #fbbf24; }
+    canvas { display: block; }
+    label { user-select: none; }
+    select, input { background: #111827; color: #e6e9ef; border: 1px solid #334155; border-radius: 4px; padding: 2px 6px; }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div>nodes: <span id="nodeCount">0</span> &nbsp; edges: <span id="edgeCount">0</span></div>
+    <div>fps: <span class="fps" id="fps">—</span> &nbsp; frametime: <span id="ft">—</span> ms</div>
+    <div id="renderer" style="opacity: 0.7"></div>
+  </div>
+  <div id="controls">
+    <label>nodes:
+      <select id="nodeSelect">
+        <option value="100" selected>100</option>
+        <option value="500">500</option>
+        <option value="1000">1000</option>
+        <option value="2000">2000</option>
+      </select>
+    </label>
+    <label style="margin-left: 10px">
+      <input type="checkbox" id="animate" checked /> animate
+    </label>
+    <label style="margin-left: 10px">
+      edges/node:
+      <select id="edgeRatio">
+        <option value="2" selected>2</option>
+        <option value="5">5</option>
+      </select>
+    </label>
+  </div>
+  <script type="module">
+    // ADR-005 §7.1 spike. Question: can Pixi.js v8 render 100 nodes + 200 edges
+    // at >= 30 fps in a webview-equivalent environment? Bundle size?
+    // ESM via esm.sh — confirms that VS Code webview CSP with `script-src`
+    // allowing https origins will work (1.1 will verify CSP for real).
+    import * as PIXI from 'https://esm.sh/pixi.js@8.6.0';
+
+    const app = new PIXI.Application();
+    await app.init({
+      background: 0x0b0d12,
+      resizeTo: window,
+      antialias: true,
+      autoDensity: true,
+      resolution: window.devicePixelRatio || 1,
+    });
+    document.body.appendChild(app.canvas);
+
+    document.getElementById('renderer').textContent =
+      'renderer: ' + (app.renderer.type === PIXI.RendererType.WEBGL ? 'WebGL' : 'WebGPU/Canvas');
+
+    const nodes = [];
+    const edges = [];
+    const nodeContainer = new PIXI.Container();
+    const edgeGraphics = new PIXI.Graphics();
+    app.stage.addChild(edgeGraphics);
+    app.stage.addChild(nodeContainer);
+
+    function rebuild(n, ratio) {
+      nodes.length = 0;
+      edges.length = 0;
+      nodeContainer.removeChildren();
+      for (let i = 0; i < n; i++) {
+        const g = new PIXI.Graphics();
+        g.circle(0, 0, 6).fill(0x60a5fa).stroke({ color: 0x1e3a8a, width: 1 });
+        g.x = Math.random() * app.screen.width;
+        g.y = Math.random() * app.screen.height;
+        g._vx = (Math.random() - 0.5) * 0.7;
+        g._vy = (Math.random() - 0.5) * 0.7;
+        nodeContainer.addChild(g);
+        nodes.push(g);
+      }
+      const e = n * ratio;
+      for (let i = 0; i < e; i++) {
+        const a = Math.floor(Math.random() * n);
+        let b = Math.floor(Math.random() * n);
+        if (a === b) b = (b + 1) % n;
+        edges.push([a, b]);
+      }
+      document.getElementById('nodeCount').textContent = nodes.length;
+      document.getElementById('edgeCount').textContent = edges.length;
+    }
+
+    function currentNodeCount() {
+      return parseInt(document.getElementById('nodeSelect').value, 10);
+    }
+    function currentEdgeRatio() {
+      return parseInt(document.getElementById('edgeRatio').value, 10);
+    }
+    rebuild(currentNodeCount(), currentEdgeRatio());
+
+    document.getElementById('nodeSelect').addEventListener('change', () =>
+      rebuild(currentNodeCount(), currentEdgeRatio()),
+    );
+    document.getElementById('edgeRatio').addEventListener('change', () =>
+      rebuild(currentNodeCount(), currentEdgeRatio()),
+    );
+
+    const animateBox = document.getElementById('animate');
+    const fpsEl = document.getElementById('fps');
+    const ftEl = document.getElementById('ft');
+
+    let frames = 0;
+    let lastT = performance.now();
+    let frameTimeAccum = 0;
+
+    app.ticker.add((tick) => {
+      const t0 = performance.now();
+      if (animateBox.checked) {
+        const w = app.screen.width;
+        const h = app.screen.height;
+        for (const n of nodes) {
+          n.x += n._vx;
+          n.y += n._vy;
+          if (n.x < 4 || n.x > w - 4) n._vx *= -1;
+          if (n.y < 4 || n.y > h - 4) n._vy *= -1;
+        }
+      }
+      edgeGraphics.clear();
+      for (const [a, b] of edges) {
+        const na = nodes[a];
+        const nb = nodes[b];
+        edgeGraphics.moveTo(na.x, na.y).lineTo(nb.x, nb.y);
+      }
+      edgeGraphics.stroke({ color: 0x334155, width: 1, alpha: 0.5 });
+
+      frames++;
+      frameTimeAccum += performance.now() - t0;
+      const now = performance.now();
+      if (now - lastT > 500) {
+        const fps = Math.round((frames * 1000) / (now - lastT));
+        const ft = (frameTimeAccum / frames).toFixed(2);
+        fpsEl.textContent = fps;
+        fpsEl.className = fps >= 30 ? 'fps' : 'fps warn';
+        ftEl.textContent = ft;
+        frames = 0;
+        frameTimeAccum = 0;
+        lastT = now;
+      }
+    });
+  </script>
+</body>
+</html>

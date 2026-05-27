@@ -2,160 +2,1039 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>CodeMap R1 — Pixi.js perf spike</title>
+  <title>CodeMap v2 — Pixi viewer (real fixture)</title>
   <style>
-    body { margin: 0; background: #0b0d12; color: #e6e9ef; font-family: ui-sans-serif, system-ui, sans-serif; }
-    #hud, #controls {
-      position: fixed; padding: 10px 14px;
-      background: rgba(15, 18, 25, 0.85);
-      border: 1px solid #1f2937;
-      border-radius: 6px;
-      font-size: 12px; line-height: 1.6;
-      backdrop-filter: blur(6px);
+    html, body {
+      margin: 0; height: 100%; background: #1e1e1e; color: #d4d4d4;
+      font-family: 'SF Mono', Menlo, Consolas, monospace; overflow: hidden;
     }
-    #hud { top: 10px; left: 10px; }
-    #controls { top: 10px; right: 10px; }
-    .fps { color: #6ee7b7; font-weight: 700; font-variant-numeric: tabular-nums; }
-    .warn { color: #fbbf24; }
+    #hud {
+      position: fixed; top: 10px; left: 10px; z-index: 10;
+      padding: 10px 14px;
+      background: #252526;
+      border: 1px solid #333;
+      border-radius: 3px;
+      font-size: 12px; line-height: 1.6;
+      max-width: 480px;
+    }
+    .fps { color: #4ec9b0; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .warn { color: #dcdcaa; }
+    .hint { color: #858585; font-size: 11px; margin-top: 6px; }
+    .key { color: #858585; }
     canvas { display: block; }
-    label { user-select: none; }
-    select, input { background: #111827; color: #e6e9ef; border: 1px solid #334155; border-radius: 4px; padding: 2px 6px; }
+    #err {
+      display: none; position: fixed; top: 0; left: 0; right: 0;
+      padding: 12px 18px; background: #7f1d1d; color: #fee2e2;
+      font-size: 12px; z-index: 100; white-space: pre-wrap;
+      font-family: ui-monospace, monospace;
+    }
+    #legend {
+      position: fixed; bottom: 10px; left: 10px; z-index: 10;
+      padding: 8px 12px;
+      background: #252526;
+      border: 1px solid #333;
+      border-radius: 3px;
+      font-size: 11px; line-height: 1.8;
+    }
+    .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; margin-right: 6px; }
+    .line { display: inline-block; width: 22px; height: 0; vertical-align: middle; margin-right: 6px; border-top-width: 1.2px; border-top-style: solid; }
   </style>
+  <script>
+    // Inline (non-module) error handler — registers BEFORE the module script
+    // so a module-load failure (CORS, syntax, network) still surfaces a banner
+    // instead of silently leaving the HUD at "—".
+    document.title = '[loading] CodeMap v2 viewer';
+    function _codemapShowErr(msg) {
+      var el = document.getElementById('err');
+      if (el) { el.style.display = 'block'; el.textContent = msg; }
+      document.title = '[ERR] viewer — see banner';
+      try { console.error(msg); } catch (_) {}
+    }
+    window.addEventListener('error', function (e) {
+      _codemapShowErr('JS error: ' + ((e.error && e.error.stack) || (e.message + ' @ ' + e.filename + ':' + e.lineno)));
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      _codemapShowErr('Unhandled rejection: ' + ((e.reason && e.reason.stack) || e.reason));
+    });
+  </script>
 </head>
 <body>
   <div id="hud">
-    <div>nodes: <span id="nodeCount">0</span> &nbsp; edges: <span id="edgeCount">0</span></div>
-    <div>fps: <span class="fps" id="fps">—</span> &nbsp; frametime: <span id="ft">—</span> ms</div>
-    <div id="renderer" style="opacity: 0.7"></div>
+    <div><span class="key">graph:</span> <span id="graphTitle">—</span></div>
+    <div><span class="key">classes:</span> <span id="classCount">0</span> &nbsp; <span class="key">methods:</span> <span id="methodCount">0</span> &nbsp; <span class="key">edges:</span> <span id="edgeCount">0</span></div>
+    <div><span class="key">fps:</span> <span class="fps" id="fps">—</span> &nbsp; <span class="key">renderer:</span> <span id="renderer">—</span></div>
+    <div class="hint">drag to pan · wheel to zoom · `r` to reset view</div>
   </div>
-  <div id="controls">
-    <label>nodes:
-      <select id="nodeSelect">
-        <option value="100" selected>100</option>
-        <option value="500">500</option>
-        <option value="1000">1000</option>
-        <option value="2000">2000</option>
-      </select>
-    </label>
-    <label style="margin-left: 10px">
-      <input type="checkbox" id="animate" checked /> animate
-    </label>
-    <label style="margin-left: 10px">
-      edges/node:
-      <select id="edgeRatio">
-        <option value="2" selected>2</option>
-        <option value="5">5</option>
-      </select>
-    </label>
+  <div id="legend">
+    <div><span class="swatch" style="background:#4ec9b0"></span>capture &nbsp; <span class="swatch" style="background:#c586c0"></span>recall &nbsp; <span class="swatch" style="background:#569cd6"></span>shared &nbsp; <span class="swatch" style="background:#dcdcaa"></span>ext &nbsp; <span class="swatch" style="background:#858585"></span>stub</div>
+    <div><span class="line" style="border-color:#c0c8d2"></span>verified call &nbsp; <span class="line" style="border-color:#c0c8d2; border-top-style:dashed"></span>external &nbsp; <span class="line" style="border-color:#858585; border-top-style:dashed"></span>unverified</div>
+    <div>amber ▶ = entry method &nbsp;·&nbsp; amber pill = verification:partial &nbsp;·&nbsp; italic = unresolved stub</div>
   </div>
-  <script type="module">
-    // ADR-005 §7.1 spike. Question: can Pixi.js v8 render 100 nodes + 200 edges
-    // at >= 30 fps in a webview-equivalent environment? Bundle size?
-    // ESM via esm.sh — confirms that VS Code webview CSP with `script-src`
-    // allowing https origins will work (1.1 will verify CSP for real).
-    import * as PIXI from 'https://esm.sh/pixi.js@8.6.0';
+  <div id="err"></div>
 
-    const app = new PIXI.Application();
+  <script type="application/json" id="fixture-data">
+{
+  "_comment": "v2 fixture matching src/shared/types-v2.draft.ts. Trimmed to the 5 classes from lumen-mini/golden.json, but expanded to method-as-node + cross-bc edges + an unverified node + an ext: dep + a verification:partial method so the Pixi renderer has every shape variant on screen at once.",
+  "schemaVersion": 2,
+  "rootRequest": "@codemap /scope src/Lumen.Capture",
+  "scope": "src/Lumen.Capture",
+  "workspaceRoot": "file:///c:/github/lumen/apps/api",
+  "rootIntent": "Minimal Lumen backend slice: URL ingest + ask-by-query recall",
+  "narrative": "Ingest path canonicalizes URLs, dedupes in-flight jobs, and writes a capture_jobs row that a BackgroundService claims and processes. Recall path embeds the query and probes ChunkStore for nearest chunks.",
+  "boundedContexts": ["capture", "recall", "shared"],
+
+  "classes": {
+    "IngestUrlHandler": {
+      "id": "IngestUrlHandler",
+      "kind": "class",
+      "boundedContext": "capture",
+      "file": "src/Lumen.Capture/Features/IngestUrl/IngestUrlHandler.cs",
+      "range": { "startLine": 14, "endLine": 142 },
+      "intent": "URL canonicalize → dedupe in-flight → insert capture_jobs row → worker runs extract+embed async",
+      "layer": "service",
+      "confidence": 0.9,
+      "risks": [
+        { "type": "concurrency", "desc": "UNIQUE-index race on canonical URL" },
+        { "type": "external_io", "desc": "Fetches remote URLs via HtmlContentExtractor" }
+      ],
+      "isEntry": true,
+      "entryKind": "http_endpoint",
+      "entryMeta": { "routes": ["POST /api/captures/url"] },
+      "methodIds": [
+        "IngestUrlHandler.EnqueueAsync",
+        "IngestUrlHandler.ExecuteAsync"
+      ],
+      "verification": "verified",
+      "verificationDetails": { "rangeAdjusted": true, "droppedTargets": [] }
+    },
+
+    "WebContentExtractor": {
+      "id": "WebContentExtractor",
+      "kind": "class",
+      "boundedContext": "capture",
+      "file": "src/Lumen.Capture/Adapters/WebContentExtractor.cs",
+      "range": { "startLine": 8, "endLine": 56 },
+      "intent": "Fetches a URL and extracts main-content HTML → Markdown",
+      "layer": "service",
+      "confidence": 0.92,
+      "risks": [{ "type": "external_io", "desc": "Outbound HTTP" }],
+      "methodIds": ["WebContentExtractor.ExtractAsync"],
+      "verification": "verified"
+    },
+
+    "ChunkStore": {
+      "id": "ChunkStore",
+      "kind": "class",
+      "boundedContext": "capture",
+      "file": "src/Lumen.Capture/Persistence/ChunkStore.cs",
+      "range": { "startLine": 12, "endLine": 88 },
+      "intent": "Dapper repository over event_chunks with pgvector probe",
+      "layer": "repo",
+      "confidence": 0.95,
+      "risks": [],
+      "isShared": true,
+      "methodIds": [
+        "ChunkStore.InsertRangeAsync",
+        "ChunkStore.SearchByVectorAsync"
+      ],
+      "verification": "verified"
+    },
+
+    "AskByQueryHandler": {
+      "id": "AskByQueryHandler",
+      "kind": "class",
+      "boundedContext": "recall",
+      "file": "src/Lumen.Capture/Features/AskByQuery/AskByQueryHandler.cs",
+      "range": { "startLine": 16, "endLine": 98 },
+      "intent": "Embeds the query, probes ChunkStore, builds a grounded prompt, calls LLM",
+      "layer": "service",
+      "confidence": 0.88,
+      "risks": [
+        { "type": "security", "desc": "Prompt-injection surface" },
+        { "type": "low_confidence", "desc": "Grounded-ask prompt v2 not yet pinned" }
+      ],
+      "isEntry": true,
+      "entryKind": "http_endpoint",
+      "entryMeta": { "routes": ["POST /api/recall/ask"] },
+      "methodIds": ["AskByQueryHandler.HandleAsync"],
+      "verification": "partial",
+      "verificationDetails": {
+        "rangeAdjusted": false,
+        "droppedTargets": ["GroundedAskPromptsV2"],
+        "reason": "Callee not found in workspace symbols; LLM may have hallucinated"
+      }
+    },
+
+    "OpenAIEmbedder": {
+      "id": "OpenAIEmbedder",
+      "kind": "class",
+      "boundedContext": "recall",
+      "file": "src/Lumen.Capture/Adapters/OpenAIEmbedder.cs",
+      "range": { "startLine": 9, "endLine": 48 },
+      "intent": "Embeds text via OpenAI HTTP API",
+      "layer": "service",
+      "confidence": 0.9,
+      "risks": [{ "type": "external_io", "desc": "Outbound HTTP to OpenAI" }],
+      "methodIds": ["OpenAIEmbedder.EmbedAsync"],
+      "verification": "verified"
+    }
+  },
+
+  "methods": {
+    "IngestUrlHandler.EnqueueAsync": {
+      "id": "IngestUrlHandler.EnqueueAsync",
+      "ownerClassId": "IngestUrlHandler",
+      "name": "EnqueueAsync",
+      "signature": "(IngestUrlRequest req, CancellationToken ct)",
+      "line": 49,
+      "visibility": "public",
+      "intent": "Canonicalize URL, dedupe in-flight, insert pending capture_jobs row",
+      "risks": ["concurrency"],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "IngestUrlHandler.ExecuteAsync": {
+      "id": "IngestUrlHandler.ExecuteAsync",
+      "ownerClassId": "IngestUrlHandler",
+      "name": "ExecuteAsync",
+      "signature": "(Guid jobId, CancellationToken ct)",
+      "line": 112,
+      "visibility": "public",
+      "intent": "Worker tick: extract → embed → chunk → mark succeeded/failed",
+      "risks": ["external_io", "concurrency"],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "WebContentExtractor.ExtractAsync": {
+      "id": "WebContentExtractor.ExtractAsync",
+      "ownerClassId": "WebContentExtractor",
+      "name": "ExtractAsync",
+      "signature": "(string url, CancellationToken ct)",
+      "line": 18,
+      "visibility": "public",
+      "intent": "HTTP GET + SmartReader → Markdown",
+      "risks": ["external_io"],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "ChunkStore.InsertRangeAsync": {
+      "id": "ChunkStore.InsertRangeAsync",
+      "ownerClassId": "ChunkStore",
+      "name": "InsertRangeAsync",
+      "signature": "(IEnumerable<EventChunk> chunks, CancellationToken ct)",
+      "line": 22,
+      "visibility": "public",
+      "intent": "Batch insert ≤32 chunks per event",
+      "risks": [],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "ChunkStore.SearchByVectorAsync": {
+      "id": "ChunkStore.SearchByVectorAsync",
+      "ownerClassId": "ChunkStore",
+      "name": "SearchByVectorAsync",
+      "signature": "(float[] q, int k, CancellationToken ct)",
+      "line": 54,
+      "visibility": "public",
+      "intent": "pgvector cosine probe, returns top-k chunks",
+      "risks": [],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "AskByQueryHandler.HandleAsync": {
+      "id": "AskByQueryHandler.HandleAsync",
+      "ownerClassId": "AskByQueryHandler",
+      "name": "HandleAsync",
+      "signature": "(AskByQueryRequest req, CancellationToken ct)",
+      "line": 28,
+      "visibility": "public",
+      "intent": "Embed query → search chunks → build prompt → call LLM",
+      "risks": ["security", "low_confidence"],
+      "readState": "unread",
+      "verification": "partial"
+    },
+    "OpenAIEmbedder.EmbedAsync": {
+      "id": "OpenAIEmbedder.EmbedAsync",
+      "ownerClassId": "OpenAIEmbedder",
+      "name": "EmbedAsync",
+      "signature": "(string text, CancellationToken ct)",
+      "line": 17,
+      "visibility": "public",
+      "intent": "POST /v1/embeddings to OpenAI, returns float[]",
+      "risks": ["external_io"],
+      "readState": "unread",
+      "verification": "verified"
+    }
+  },
+
+  "externalDeps": {
+    "ext:SmartReader": { "id": "ext:SmartReader", "name": "SmartReader", "kind": "package" },
+    "ext:Dawning.ORM.Dapper": { "id": "ext:Dawning.ORM.Dapper", "name": "Dawning.ORM.Dapper", "kind": "package" },
+    "ext:OpenAI": { "id": "ext:OpenAI", "name": "OpenAI", "kind": "package" },
+    "ext:Pgvector": { "id": "ext:Pgvector", "name": "Pgvector", "kind": "package" }
+  },
+
+  "methodEdges": [
+    { "id": "e0", "source": "IngestUrlHandler.ExecuteAsync", "target": "WebContentExtractor.ExtractAsync", "kind": "calls", "verified": true },
+    { "id": "e1", "source": "IngestUrlHandler.ExecuteAsync", "target": "ChunkStore.InsertRangeAsync", "kind": "calls", "verified": true },
+    { "id": "e2", "source": "WebContentExtractor.ExtractAsync", "target": "ext:SmartReader", "kind": "external_calls", "verified": true },
+    { "id": "e3", "source": "ChunkStore.InsertRangeAsync", "target": "ext:Dawning.ORM.Dapper", "kind": "external_calls", "verified": true },
+    { "id": "e4", "source": "ChunkStore.SearchByVectorAsync", "target": "ext:Pgvector", "kind": "external_calls", "verified": true },
+    { "id": "e5", "source": "AskByQueryHandler.HandleAsync", "target": "OpenAIEmbedder.EmbedAsync", "kind": "calls", "verified": true },
+    { "id": "e6", "source": "AskByQueryHandler.HandleAsync", "target": "ChunkStore.SearchByVectorAsync", "kind": "calls", "verified": true },
+    { "id": "e7", "source": "AskByQueryHandler.HandleAsync", "target": "GroundedAskPromptsV2", "kind": "calls", "verified": false },
+    { "id": "e8", "source": "OpenAIEmbedder.EmbedAsync", "target": "ext:OpenAI", "kind": "external_calls", "verified": true }
+  ],
+
+  "classEdges": [
+    { "source": "IngestUrlHandler", "target": "WebContentExtractor", "kind": "calls", "multiplicity": 1, "verified": true },
+    { "source": "IngestUrlHandler", "target": "ChunkStore", "kind": "calls", "multiplicity": 1, "verified": true },
+    { "source": "WebContentExtractor", "target": "ext:SmartReader", "kind": "external_calls", "multiplicity": 1, "verified": true },
+    { "source": "ChunkStore", "target": "ext:Dawning.ORM.Dapper", "kind": "external_calls", "multiplicity": 1, "verified": true },
+    { "source": "ChunkStore", "target": "ext:Pgvector", "kind": "external_calls", "multiplicity": 1, "verified": true },
+    { "source": "AskByQueryHandler", "target": "OpenAIEmbedder", "kind": "calls", "multiplicity": 1, "verified": true },
+    { "source": "AskByQueryHandler", "target": "ChunkStore", "kind": "calls", "multiplicity": 1, "verified": true },
+    { "source": "AskByQueryHandler", "target": "GroundedAskPromptsV2", "kind": "calls", "multiplicity": 1, "verified": false },
+    { "source": "OpenAIEmbedder", "target": "ext:OpenAI", "kind": "external_calls", "multiplicity": 1, "verified": true }
+  ],
+
+  "entryMethodIds": [
+    "IngestUrlHandler.EnqueueAsync",
+    "AskByQueryHandler.HandleAsync"
+  ],
+
+  "readingOrder": [
+    "IngestUrlHandler.EnqueueAsync",
+    "IngestUrlHandler.ExecuteAsync",
+    "WebContentExtractor.ExtractAsync",
+    "ChunkStore.InsertRangeAsync",
+    "AskByQueryHandler.HandleAsync",
+    "OpenAIEmbedder.EmbedAsync",
+    "ChunkStore.SearchByVectorAsync"
+  ]
+}
+  </script>
+
+  <script type="module">
+    document.title = '[module-running] CodeMap v2 viewer';
+
+    let PIXI;
+    // CDN selection — see commit body / SPIKE notes for full history.
+    // Short version: every CDN that *rewrites* Pixi's internal ESM graph
+    // (jsdelivr/+esm, esm.sh, esm.sh?bundle) ends up either breaking
+    // RenderGroup wiring or double-registering the `batcher` extension.
+    // The only stable option is Pixi's *own* pre-rolled single-file ESM
+    // bundle shipped on npm (`dist/pixi.min.mjs`, ~0.67 MB, zero internal
+    // `import` statements) served as a static asset by jsdelivr.
+    try {
+      PIXI = await import('https://cdn.jsdelivr.net/npm/pixi.js@8.6.0/dist/pixi.min.mjs');
+    } catch (err) {
+      _codemapShowErr(
+        'jsdelivr failed loading pixi.min.mjs: ' + err.message + '\n' +
+        'Make sure the page is opened over http:// (not file://) so cross-origin ESM can load.'
+      );
+      throw err;
+    }
+    const { Application, Container, Graphics, Text } = PIXI;
+
+    const graph = JSON.parse(document.getElementById('fixture-data').textContent);
+    document.getElementById('graphTitle').textContent = graph.rootRequest;
+    document.getElementById('classCount').textContent = Object.keys(graph.classes).length;
+    document.getElementById('methodCount').textContent = Object.keys(graph.methods).length;
+    document.getElementById('edgeCount').textContent = graph.methodEdges.length;
+
+    const app = new Application();
     await app.init({
-      background: 0x0b0d12,
+      background: 0x1e1e1e,
       resizeTo: window,
       antialias: true,
       autoDensity: true,
       resolution: window.devicePixelRatio || 1,
     });
     document.body.appendChild(app.canvas);
-
     document.getElementById('renderer').textContent =
-      'renderer: ' + (app.renderer.type === PIXI.RendererType.WEBGL ? 'WebGL' : 'WebGPU/Canvas');
+      app.renderer.type === PIXI.RendererType.WEBGL ? 'WebGL' : 'WebGPU/other';
 
-    const nodes = [];
-    const edges = [];
-    const nodeContainer = new PIXI.Container();
-    const edgeGraphics = new PIXI.Graphics();
-    app.stage.addChild(edgeGraphics);
-    app.stage.addChild(nodeContainer);
+    // ----- Palette (VS Code dark / GV mockup style) ----------------------
+    const BC_COLORS = {
+      capture: 0x4ec9b0,   // teal
+      recall:  0xc586c0,   // pink-purple
+      shared:  0x569cd6,   // blue
+    };
+    const EXT_COLOR    = 0xdcdcaa;   // yellow (host / ext)
+    const STUB_COLOR   = 0x858585;   // dim gray
+    const ENTRY_RING   = 0xf59e0b;   // amber (entry method)
+    const PARTIAL      = 0xf59e0b;   // amber (verification:partial)
+    const NEUTRAL_EDGE = 0xc0c8d2;   // light gray for verified / external
+    const DIM_EDGE     = 0x858585;   // dim for unverified
+    // Legacy aliases (still referenced elsewhere) ------------------------
+    const VERIFIED_EDGE   = NEUTRAL_EDGE;
+    const EXT_EDGE        = NEUTRAL_EDGE;
+    const UNVERIFIED_EDGE = DIM_EDGE;
+    const PILL_FILL    = 0x252526;   // VS panel
+    const PILL_BORDER  = 0xc0c8d2;   // neutral light
+    const TEXT_PRIMARY = 0xd4d4d4;
+    const PAGE_BG      = 0x1e1e1e;
+    const MONO_FONT    = 'SF Mono, Menlo, Consolas, monospace';
 
-    function rebuild(n, ratio) {
-      nodes.length = 0;
-      edges.length = 0;
-      nodeContainer.removeChildren();
-      for (let i = 0; i < n; i++) {
-        const g = new PIXI.Graphics();
-        g.circle(0, 0, 6).fill(0x60a5fa).stroke({ color: 0x1e3a8a, width: 1 });
-        g.x = Math.random() * app.screen.width;
-        g.y = Math.random() * app.screen.height;
-        g._vx = (Math.random() - 0.5) * 0.7;
-        g._vy = (Math.random() - 0.5) * 0.7;
-        nodeContainer.addChild(g);
-        nodes.push(g);
-      }
-      const e = n * ratio;
-      for (let i = 0; i < e; i++) {
-        const a = Math.floor(Math.random() * n);
-        let b = Math.floor(Math.random() * n);
-        if (a === b) b = (b + 1) % n;
-        edges.push([a, b]);
-      }
-      document.getElementById('nodeCount').textContent = nodes.length;
-      document.getElementById('edgeCount').textContent = edges.length;
+    // ----- Build column buckets -------------------------------------------
+    const bcs = [...graph.boundedContexts, 'ext'];
+    const buckets = Object.fromEntries(bcs.map((b) => [b, []]));
+
+    for (const c of Object.values(graph.classes)) {
+      const bc = buckets[c.boundedContext] ? c.boundedContext : 'shared';
+      buckets[bc].push({ ...c, _kind: 'real' });
+    }
+    for (const dep of Object.values(graph.externalDeps)) {
+      buckets['ext'].push({ id: dep.id, name: dep.name, _kind: 'ext', methodIds: [], boundedContext: 'ext' });
+    }
+    // class-id fallback stubs (e.g. GroundedAskPromptsV2)
+    const referenced = new Set();
+    for (const e of graph.methodEdges) referenced.add(e.target);
+    for (const t of referenced) {
+      if (graph.methods[t] || graph.externalDeps[t] || graph.classes[t]) continue;
+      buckets['ext'].push({ id: t, name: t, _kind: 'stub', methodIds: [], boundedContext: 'ext' });
     }
 
-    function currentNodeCount() {
-      return parseInt(document.getElementById('nodeSelect').value, 10);
-    }
-    function currentEdgeRatio() {
-      return parseInt(document.getElementById('edgeRatio').value, 10);
-    }
-    rebuild(currentNodeCount(), currentEdgeRatio());
+    // Drop empty BC columns (e.g. `shared` when no class lives in it).
+    // We do this *after* all bucket population so stub injection above can
+    // still target the canonical bucket names.
+    const visibleBcs = bcs.filter((b) => buckets[b].length > 0);
 
-    document.getElementById('nodeSelect').addEventListener('change', () =>
-      rebuild(currentNodeCount(), currentEdgeRatio()),
-    );
-    document.getElementById('edgeRatio').addEventListener('change', () =>
-      rebuild(currentNodeCount(), currentEdgeRatio()),
-    );
+    // ----- Layout ---------------------------------------------------------
+    const screenW = app.screen.width;
+    const PAD = { top: 130, left: 30, right: 30 };
+    const colW = Math.max(240, Math.min(420, (screenW - PAD.left - PAD.right) / visibleBcs.length));
 
-    const animateBox = document.getElementById('animate');
-    const fpsEl = document.getElementById('fps');
-    const ftEl = document.getElementById('ft');
+    const HEADER_H = 30;
+    const METHOD_H = 30;       // row pitch (was 26 before pills)
+    const PILL_H = 22;         // pill height
+    const PILL_HPAD = 10;      // pill horizontal text padding
+    const CARD_PAD = 12;
+    const CARD_GAP = 18;
+    const COL_INNER_PAD = 16;
 
-    let frames = 0;
-    let lastT = performance.now();
-    let frameTimeAccum = 0;
+    const classLayouts = {};
+    const methodLayouts = {};
 
-    app.ticker.add((tick) => {
-      const t0 = performance.now();
-      if (animateBox.checked) {
-        const w = app.screen.width;
-        const h = app.screen.height;
-        for (const n of nodes) {
-          n.x += n._vx;
-          n.y += n._vy;
-          if (n.x < 4 || n.x > w - 4) n._vx *= -1;
-          if (n.y < 4 || n.y > h - 4) n._vy *= -1;
+    visibleBcs.forEach((bc, ci) => {
+      const colX = PAD.left + ci * colW;
+      let y = PAD.top;
+      for (const c of buckets[bc]) {
+        const cardW = colW - COL_INNER_PAD;
+        const cardH = HEADER_H + Math.max(c.methodIds.length, c._kind === 'real' ? 0 : 1) * METHOD_H + CARD_PAD;
+        classLayouts[c.id] = { x: colX, y, w: cardW, h: cardH, c, bc };
+
+        let my = y + HEADER_H + 10;
+        for (const mid of c.methodIds) {
+          methodLayouts[mid] = { cx: colX + 18, cy: my + 4, classId: c.id, bc };
+          my += METHOD_H;
         }
+        // ext / stub cards have no per-method dots. Edge endpoints for them
+        // resolve via classLayouts -> card left edge (see endpointFor()).
+        y += cardH + CARD_GAP;
       }
-      edgeGraphics.clear();
-      for (const [a, b] of edges) {
-        const na = nodes[a];
-        const nb = nodes[b];
-        edgeGraphics.moveTo(na.x, na.y).lineTo(nb.x, nb.y);
-      }
-      edgeGraphics.stroke({ color: 0x334155, width: 1, alpha: 0.5 });
+    });
 
+    // ----- Layers ---------------------------------------------------------
+    // Pixi v8: stage is the RenderGroup root. Wrapping it in an extra
+    // Container breaks renderer internals (`addRenderable` of undefined),
+    // so we pan/zoom the stage directly.
+    const root = app.stage;
+    const bgLayer = new Container();
+    const edgeLayer = new Container();
+    const nodeLayer = new Container();
+    const labelLayer = new Container();
+    root.addChild(bgLayer);
+    root.addChild(edgeLayer);
+    root.addChild(nodeLayer);
+    root.addChild(labelLayer);
+
+    // ----- BC column headers ---------------------------------------------
+    visibleBcs.forEach((bc, ci) => {
+      const colX = PAD.left + ci * colW;
+      const color = bc === 'ext' ? EXT_COLOR : (BC_COLORS[bc] ?? 0xe6e9ef);
+
+      const headerBg = new Graphics();
+      headerBg.roundRect(colX, PAD.top - 50, colW - COL_INNER_PAD, 36, 4)
+              .fill({ color, alpha: 0.10 })
+              .stroke({ color, width: 1, alpha: 0.5 });
+      bgLayer.addChild(headerBg);
+
+      const label = new Text({
+        text: bc,
+        style: { fill: color, fontSize: 14, fontWeight: '700', fontFamily: 'ui-sans-serif, system-ui, sans-serif' },
+      });
+      label.x = colX + 12;
+      label.y = PAD.top - 42;
+      labelLayer.addChild(label);
+    });
+
+    // ----- Class cards ----------------------------------------------------
+    for (const id in classLayouts) {
+      const { x, y, w, h, c, bc } = classLayouts[id];
+      const color = bc === 'ext' ? EXT_COLOR : BC_COLORS[bc];
+      const isStub = c._kind === 'stub';
+      const isExt  = c._kind === 'ext';
+
+      const card = new Graphics();
+      card.roundRect(x, y, w, h, 12)
+          .fill({ color: PAGE_BG, alpha: 1 })
+          .stroke({ color, width: 2, alpha: isStub ? 0.5 : 1 });
+      bgLayer.addChild(card);
+
+      // class title (BC color, monospace, GV-style)
+      const titleStr = isStub ? `${c.name} (unresolved)` : c.name;
+      const title = new Text({
+        text: titleStr,
+        style: {
+          fill: isStub ? STUB_COLOR : color,
+          fontSize: 12,
+          fontWeight: '600',
+          fontStyle: isStub ? 'italic' : 'normal',
+          fontFamily: MONO_FONT,
+        },
+      });
+      title.x = x + CARD_PAD;
+      title.y = y + 8;
+      labelLayer.addChild(title);
+
+      // entry badge (top-right)
+      if (c.isEntry) {
+        const badge = new Graphics();
+        badge.circle(x + w - 14, y + 14, 5).fill(ENTRY_RING);
+        nodeLayer.addChild(badge);
+      }
+
+      // verification: partial → amber outline overlay
+      if (c.verification === 'partial') {
+        const overlay = new Graphics();
+        overlay.roundRect(x - 1, y - 1, w + 2, h + 2, 13).stroke({ color: PARTIAL, width: 1.5, alpha: 0.85 });
+        bgLayer.addChild(overlay);
+      }
+    }
+
+    // ----- Method nodes (MindNode-style pills) ----------------------------
+    // Each method becomes a rounded "pill" containing the label.
+    // Edges connect to the left / right (or top / bottom) edges of the pill,
+    // not to a separate dot. Variant treatment:
+    //   - regular   : BC-color tinted bg (alpha 0.18) + BC-color 1px border
+    //   - partial   : amber 2px border (verification:partial)
+    //   - entry     : extra amber outer outline ring (entryMethodIds)
+    for (const mid in methodLayouts) {
+      const ml = methodLayouts[mid];
+      const m  = graph.methods[mid];
+      const bcColor = ml.bc === 'ext' ? EXT_COLOR : BC_COLORS[ml.bc];
+
+      const isPartial = !!(m && m.verification === 'partial');
+      const isEntry   = graph.entryMethodIds.includes(mid);
+      const rawName   = m ? m.name : (graph.externalDeps[mid]?.name ?? mid);
+      // GV-style UML public marker on real methods; ext / stub fallback
+      // pills don't get a `+ ` prefix (they're not class methods).
+      const textStr   = m ? `+ ${rawName}()` : rawName;
+
+      const pillFill   = PILL_FILL;
+      const pillBorder = isPartial ? PARTIAL : PILL_BORDER;
+      const pillBorderW = isPartial ? 2 : 1;
+      const textColor  = TEXT_PRIMARY;
+
+      // Build label first so we can size the pill to fit
+      const label = new Text({
+        text: textStr,
+        style: {
+          fill: textColor, fontSize: 11, fontWeight: '400',
+          fontFamily: MONO_FONT,
+        },
+      });
+
+      // Pill anchored at ml.cx (left edge), centered vertically on ml.cy.
+      // Clamp pill width so it doesn't overflow its host card.
+      // Entry methods get +10px extra width on the left to host the ▶
+      // indicator INSIDE the pill (so it never collides with the column /
+      // class card outline).
+      const cl = classLayouts[ml.classId];
+      const entryLeadPad = isEntry ? 10 : 0;
+      const maxPillW = cl ? (cl.x + cl.w - CARD_PAD) - ml.cx : 240;
+      const labelW = Math.min(label.width, maxPillW - 2 * PILL_HPAD - entryLeadPad);
+      const pillW = labelW + 2 * PILL_HPAD + entryLeadPad;
+      const pillX = ml.cx;
+      const pillY = ml.cy - PILL_H / 2;
+
+      const pill = new Graphics();
+      pill.roundRect(pillX, pillY, pillW, PILL_H, PILL_H / 2)
+          .fill({ color: pillFill, alpha: 1 })
+          .stroke({ color: pillBorder, width: pillBorderW, alpha: 1.0 });
+      nodeLayer.addChild(pill);
+
+      if (isEntry) {
+        // GV-style entry indicator: small amber "play" triangle INSIDE
+        // the pill's left padding zone, NOT around it. Keeps amber
+        // outline reserved exclusively for verification:partial.
+        const triX = pillX + 6;
+        const tri = new Graphics();
+        tri.moveTo(triX,     ml.cy - 5)
+           .lineTo(triX,     ml.cy + 5)
+           .lineTo(triX + 8, ml.cy)
+           .closePath()
+           .fill({ color: ENTRY_RING, alpha: 1 });
+        nodeLayer.addChild(tri);
+      }
+
+      label.x = pillX + PILL_HPAD + entryLeadPad;
+      label.y = ml.cy - label.height / 2;
+      labelLayer.addChild(label);
+
+      // Store pill bounds for edge endpoint resolution
+      ml.pillL  = pillX;
+      ml.pillR  = pillX + pillW;
+      ml.pillCx = pillX + pillW / 2;
+      ml.pillCy = ml.cy;
+    }
+
+    // ----- Edge endpoint resolver (kept for legacy callers) --------------
+    function endpointFor(id) {
+      if (methodLayouts[id]) {
+        const ml = methodLayouts[id];
+        return { x: ml.pillCx, y: ml.pillCy };
+      }
+      if (classLayouts[id]) {
+        const cl = classLayouts[id];
+        return { x: cl.x, y: cl.y + cl.h / 2 };
+      }
+      return null;
+    }
+
+    // ----- Edge geometry --------------------------------------------------
+    // Resolve the source/target endpoint of an edge on the *boundary* of the
+    // pill (or ext/stub card), and pick a flow orientation:
+    //   - same-lane (source.bc === target.bc) ........... vertical flow
+    //       (out bottom of source pill, into top of target pill)
+    //   - cross-lane or ext/stub target .................. horizontal flow
+    //       (out right of source pill, into left of target pill/card)
+
+    // Attachment fanning: when multiple edges land on the same pill side
+    // they would all share pillCy/pillCx and overlap. Pre-compute each
+    // edge's side ('L'|'R'|'T'|'B') on its source and target pill, then
+    // sort co-side edges by the OTHER endpoint's position and space them
+    // evenly along the pill side so endpoints don't collide.
+    const ATTACH_SPACING = 10;
+    const attachments = new Map();  // `${pillId}@${side}` -> [{ed, other}]
+    function edgeSides(ed) {
+      const sLayout = methodLayouts[ed.source];
+      const tLayout = methodLayouts[ed.target];
+      const sClass  = classLayouts[ed.source];
+      const tClass  = classLayouts[ed.target];
+      if (!(sLayout || sClass) || !(tLayout || tClass)) return null;
+      if (sLayout && tLayout && sLayout.bc === tLayout.bc) {
+        const down = sLayout.cy <= tLayout.cy;
+        return {
+          sSide: down ? 'B' : 'T',
+          tSide: down ? 'T' : 'B',
+          sOther: tLayout.cx,  // x-position of other pill (top/bottom = fan along x)
+          tOther: sLayout.cx,
+        };
+      }
+      const aRightX = sLayout ? sLayout.pillR : (sClass.x + sClass.w);
+      const bLeftX  = tLayout ? tLayout.pillL : tClass.x;
+      const fwd = bLeftX >= aRightX - 20;
+      return {
+        sSide: fwd ? 'R' : 'L',
+        tSide: fwd ? 'L' : 'R',
+        sOther: tLayout ? tLayout.pillCy : (tClass.y + tClass.h / 2),
+        tOther: sLayout ? sLayout.pillCy : (sClass.y + sClass.h / 2),
+      };
+    }
+    for (const ed of graph.methodEdges) {
+      const s = edgeSides(ed);
+      if (!s) continue;
+      if (methodLayouts[ed.source]) {
+        const key = `${ed.source}@${s.sSide}`;
+        if (!attachments.has(key)) attachments.set(key, []);
+        attachments.get(key).push({ ed, other: s.sOther });
+      }
+      if (methodLayouts[ed.target]) {
+        const key = `${ed.target}@${s.tSide}`;
+        if (!attachments.has(key)) attachments.set(key, []);
+        attachments.get(key).push({ ed, other: s.tOther });
+      }
+    }
+    for (const list of attachments.values()) list.sort((a, b) => a.other - b.other);
+    function attachOff(pillId, side, ed) {
+      const list = attachments.get(`${pillId}@${side}`);
+      if (!list || list.length <= 1) return 0;
+      const i = list.findIndex(x => x.ed === ed);
+      if (i < 0) return 0;
+      return (i - (list.length - 1) / 2) * ATTACH_SPACING;
+    }
+
+    function bezierForEdge(ed) {
+      const sLayout = methodLayouts[ed.source];
+      const tLayout = methodLayouts[ed.target];
+      const sClass  = classLayouts[ed.source];
+      const tClass  = classLayouts[ed.target];
+
+      let a, b, orient;
+      const sameLane = sLayout && tLayout && sLayout.bc === tLayout.bc;
+      if (sameLane) {
+        // vertical flow within a column; fan along x at the top/bottom side
+        const down = sLayout.cy <= tLayout.cy;
+        const sxo = attachOff(ed.source, down ? 'B' : 'T', ed);
+        const txo = attachOff(ed.target, down ? 'T' : 'B', ed);
+        if (down) {
+          a = { x: sLayout.pillCx + sxo, y: sLayout.cy + PILL_H / 2 };
+          b = { x: tLayout.pillCx + txo, y: tLayout.cy - PILL_H / 2 };
+        } else {
+          a = { x: sLayout.pillCx + sxo, y: sLayout.cy - PILL_H / 2 };
+          b = { x: tLayout.pillCx + txo, y: tLayout.cy + PILL_H / 2 };
+        }
+        orient = 'v';
+        const dy = b.y - a.y;
+        return {
+          p0: a,
+          p1: { x: a.x, y: a.y + dy * 0.3 },
+          p2: { x: b.x, y: a.y + dy * 0.7 },
+          p3: b,
+          orient,
+        };
+      }
+
+      // Cross-lane: try forward (L→R) first using right-of-source → left-of-target
+      const sROff = sLayout ? attachOff(ed.source, 'R', ed) : 0;
+      const tLOff = tLayout ? attachOff(ed.target, 'L', ed) : 0;
+      const aRight = sLayout ? { x: sLayout.pillR, y: sLayout.pillCy + sROff }
+                             : sClass ? { x: sClass.x + sClass.w, y: sClass.y + sClass.h / 2 } : null;
+      const bLeft  = tLayout ? { x: tLayout.pillL, y: tLayout.pillCy + tLOff }
+                             : tClass ? { x: tClass.x, y: tClass.y + tClass.h / 2 } : null;
+      if (!aRight || !bLeft) return null;
+
+      if (bLeft.x >= aRight.x - 20) {
+        // Forward L→R: standard sankey bezier
+        a = aRight; b = bLeft; orient = 'h';
+        const dx = b.x - a.x;
+        return {
+          p0: a,
+          p1: { x: a.x + dx * 0.3, y: a.y },
+          p2: { x: a.x + dx * 0.7, y: b.y },
+          p3: b,
+          orient,
+        };
+      }
+
+      // Reverse R→L: target is meaningfully left of source. Route from
+      // source pill's LEFT side to target pill's RIGHT side and sag the
+      // curve downward (under intermediate cards). Key trick: force
+      // p2.y === p3.y so the endpoint tangent is horizontal — arrow is
+      // guaranteed to enter target pill's right side cleanly, no skew.
+      const sLOff = sLayout ? attachOff(ed.source, 'L', ed) : 0;
+      const tROff = tLayout ? attachOff(ed.target, 'R', ed) : 0;
+      const aLeft  = sLayout ? { x: sLayout.pillL, y: sLayout.pillCy + sLOff }
+                             : { x: sClass.x, y: sClass.y + sClass.h / 2 };
+      const bRight = tLayout ? { x: tLayout.pillR, y: tLayout.pillCy + tROff }
+                             : { x: tClass.x + tClass.w, y: tClass.y + tClass.h / 2 };
+      a = aLeft; b = bRight; orient = 'h-rev';
+      const sag = Math.max(80, Math.abs(b.x - a.x) * 0.18);
+      const sagY = Math.max(a.y, b.y) + sag;
+      return {
+        p0: a,
+        p1: { x: a.x - 60, y: sagY },  // big horizontal pull on source side too
+        p2: { x: b.x + 60, y: b.y },   // p2.y = p3.y -> horizontal tangent at endpoint
+        p3: b,
+        orient,
+      };
+    }
+
+    // ----- Edges ---------------------------------------------------------
+    function bezierPt(t, p0, p1, p2, p3) {
+      const u = 1 - t;
+      return {
+        x: u*u*u*p0.x + 3*u*u*t*p1.x + 3*u*t*t*p2.x + t*t*t*p3.x,
+        y: u*u*u*p0.y + 3*u*u*t*p1.y + 3*u*t*t*p2.y + t*t*t*p3.y,
+      };
+    }
+    function bezierTangent(t, p0, p1, p2, p3) {
+      const u = 1 - t;
+      return {
+        x: 3*u*u*(p1.x - p0.x) + 6*u*t*(p2.x - p1.x) + 3*t*t*(p3.x - p2.x),
+        y: 3*u*u*(p1.y - p0.y) + 6*u*t*(p2.y - p1.y) + 3*t*t*(p3.y - p2.y),
+      };
+    }
+    function sampleBezier(p0, p1, p2, p3, n) {
+      const pts = [];
+      for (let i = 0; i <= n; i++) pts.push(bezierPt(i / n, p0, p1, p2, p3));
+      return pts;
+    }
+    function dashAlongPolyline(g, pts, segLen, gapLen) {
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) {
+        cum.push(cum[i-1] + Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y));
+      }
+      const total = cum[cum.length - 1];
+      const step = segLen + gapLen;
+      function lerpAt(d) {
+        if (d <= 0) return pts[0];
+        if (d >= total) return pts[pts.length - 1];
+        let lo = 0, hi = cum.length - 1;
+        while (lo + 1 < hi) {
+          const mid = (lo + hi) >> 1;
+          if (cum[mid] <= d) lo = mid; else hi = mid;
+        }
+        const t = (d - cum[lo]) / (cum[lo+1] - cum[lo] || 1);
+        return {
+          x: pts[lo].x + (pts[lo+1].x - pts[lo].x) * t,
+          y: pts[lo].y + (pts[lo+1].y - pts[lo].y) * t,
+        };
+      }
+      let d = 0;
+      while (d < total) {
+        const dEnd = Math.min(d + segLen, total);
+        const pa = lerpAt(d), pb = lerpAt(dEnd);
+        g.moveTo(pa.x, pa.y).lineTo(pb.x, pb.y);
+        d += step;
+      }
+    }
+
+    // Tapered ribbon: filled polygon built from samples of the bezier with
+    // an asymmetric width — thick at source, thin at target. The taper itself
+    // signals direction (MindNode-style) so no arrowhead is needed on the
+    // verified intra-lane edges.
+    function drawTaperedRibbon(g, p0, p1, p2, p3, color, alpha, srcW, dstW) {
+      const n = 28;
+      const top = [];
+      const bot = [];
+      for (let i = 0; i <= n; i++) {
+        const t = i / n;
+        const pt = bezierPt(t, p0, p1, p2, p3);
+        const tan = bezierTangent(t, p0, p1, p2, p3);
+        const tlen = Math.hypot(tan.x, tan.y) || 1;
+        const nx = -tan.y / tlen, ny = tan.x / tlen;
+        const w = srcW * (1 - t) + dstW * t;
+        const h = w / 2;
+        top.push({ x: pt.x + nx * h, y: pt.y + ny * h });
+        bot.push({ x: pt.x - nx * h, y: pt.y - ny * h });
+      }
+      g.moveTo(top[0].x, top[0].y);
+      for (let i = 1; i <= n; i++) g.lineTo(top[i].x, top[i].y);
+      for (let i = n; i >= 0; i--) g.lineTo(bot[i].x, bot[i].y);
+      g.closePath();
+      g.fill({ color, alpha });
+    }
+
+    const edgesG = new Graphics();
+    for (const e of graph.methodEdges) {
+      const bz = bezierForEdge(e);
+      if (!bz) continue;
+      const { p0, p1, p2, p3 } = bz;
+      const isExt = e.kind === 'external_calls' || e.target.startsWith('ext:');
+      // GV style: edges are neutral. Verified = solid neutral, ext = dashed
+      // neutral, unverified = dashed dim. No BC-tinted source coloring.
+      const color = !e.verified ? DIM_EDGE : NEUTRAL_EDGE;
+      const alpha = !e.verified ? 0.65 : (isExt ? 0.75 : 0.9);
+      const dashed = !e.verified || isExt;
+
+      if (dashed) {
+        const pts = sampleBezier(p0, p1, p2, p3, 48);
+        dashAlongPolyline(edgesG, pts, 6, 5);
+        edgesG.stroke({ color, width: 1.2, alpha });
+      } else {
+        edgesG.moveTo(p0.x, p0.y)
+              .bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y)
+              .stroke({ color, width: 1.4, alpha });
+      }
+
+      // Arrowhead on every edge (no taper to signal direction now)
+      const tan = bezierTangent(1, p0, p1, p2, p3);
+      const tlen = Math.hypot(tan.x, tan.y);
+      if (tlen > 0.01) {
+        const ux = tan.x / tlen, uy = tan.y / tlen;
+        const tipX = p3.x - ux * 8;
+        const tipY = p3.y - uy * 8;
+        const leftX = tipX - uy * 3.5;
+        const leftY = tipY + ux * 3.5;
+        const rightX = tipX + uy * 3.5;
+        const rightY = tipY - ux * 3.5;
+        // Apex pinned to p3 exactly so the arrow tip sits flush against
+        // the stroke's endpoint (no 1.5px visible gap).
+        edgesG.moveTo(p3.x, p3.y)
+              .lineTo(leftX, leftY)
+              .lineTo(rightX, rightY)
+              .closePath()
+              .fill({ color, alpha });
+      }
+    }
+    edgeLayer.addChild(edgesG);
+
+    // ----- Edge hover overlay --------------------------------------------
+    // Sit on top of `edgesG` so the highlighted curve paints over the
+    // regular stroke. Cleared & redrawn whenever the hovered edge changes.
+    const hoverG = new Graphics();
+    edgeLayer.addChild(hoverG);
+    let hoverEdgeIdx = -1;
+    function distToBezier(mx, my, bz) {
+      let minD2 = Infinity;
+      for (let i = 0; i <= 30; i++) {
+        const pt = bezierPt(i / 30, bz.p0, bz.p1, bz.p2, bz.p3);
+        const d2 = (pt.x - mx) * (pt.x - mx) + (pt.y - my) * (pt.y - my);
+        if (d2 < minD2) minD2 = d2;
+      }
+      return Math.sqrt(minD2);
+    }
+    function redrawHover() {
+      hoverG.clear();
+      if (hoverEdgeIdx < 0) return;
+      const ed = graph.methodEdges[hoverEdgeIdx];
+      const bz = bezierForEdge(ed);
+      if (!bz) return;
+      hoverG.moveTo(bz.p0.x, bz.p0.y)
+            .bezierCurveTo(bz.p1.x, bz.p1.y, bz.p2.x, bz.p2.y, bz.p3.x, bz.p3.y)
+            .stroke({ color: 0xfbbf24, width: 2.5, alpha: 1.0 });
+      hoverG.circle(bz.p0.x, bz.p0.y, 3.5).fill({ color: 0xfbbf24, alpha: 0.95 });
+      hoverG.circle(bz.p3.x, bz.p3.y, 3.5).fill({ color: 0xfbbf24, alpha: 0.95 });
+    }
+
+    // ----- Fit-to-screen ------------------------------------------------
+    // Bounding box over every class card plus the column-header band.
+    let _minX = Infinity, _minY = Infinity, _maxX = -Infinity, _maxY = -Infinity;
+    for (const cl of Object.values(classLayouts)) {
+      if (cl.x < _minX) _minX = cl.x;
+      if (cl.y < _minY) _minY = cl.y;
+      if (cl.x + cl.w > _maxX) _maxX = cl.x + cl.w;
+      if (cl.y + cl.h > _maxY) _maxY = cl.y + cl.h;
+    }
+    _minY = Math.min(_minY, PAD.top - 50);
+    const bboxW = Math.max(1, _maxX - _minX);
+    const bboxH = Math.max(1, _maxY - _minY);
+    const fitMargin = 40;
+
+    // Two placement modes; pick whichever shows the graph LARGER:
+    //   A. To the right of the HUD (good for tall graphs).
+    //   B. Below the HUD spanning full viewport width (good for short graphs).
+    // This automatically reclaims the empty band under the HUD for small
+    // graphs without ever covering the HUD for big ones.
+    function fitToScreen() {
+      const hR = document.getElementById('hud').getBoundingClientRect();
+      const lR = document.getElementById('legend').getBoundingClientRect();
+      const w = app.screen.width, h = app.screen.height;
+
+      // Allow modest up-scaling (cap 1.5) so small graphs actually fill the
+      // viewport. With a 1.0 cap both modes saturate equal on any short graph
+      // and Mode A always wins by tie-break, defeating Mode B entirely.
+      const MAX_SCALE = 1.5;
+
+      const aLeft = Math.max(fitMargin, hR.right + 20);
+      const aTop = fitMargin;
+      const aVw = Math.max(1, (w - fitMargin) - aLeft);
+      const aVh = Math.max(1, (h - lR.height - 20) - aTop);
+      const aScale = Math.min(aVw / bboxW, aVh / bboxH, MAX_SCALE);
+
+      const bLeft = fitMargin;
+      const bTop = hR.bottom + 20;
+      const bVw = Math.max(1, (w - fitMargin) - bLeft);
+      const bVh = Math.max(1, (h - lR.height - 20) - bTop);
+      const bScale = Math.min(bVw / bboxW, bVh / bboxH, MAX_SCALE);
+
+      const useB = bScale > aScale;
+      const left = useB ? bLeft : aLeft;
+      const top  = useB ? bTop  : aTop;
+      const vw   = useB ? bVw   : aVw;
+      const vh   = useB ? bVh   : aVh;
+      const sc   = useB ? bScale : aScale;
+
+      root.scale.set(sc, sc);
+      root.x = left + (vw - bboxW * sc) / 2 - _minX * sc;
+      root.y = top  + (vh - bboxH * sc) / 2 - _minY * sc;
+      return { x: root.x, y: root.y, sx: sc, sy: sc };
+    }
+
+    // ----- Pan / zoom ----------------------------------------------------
+    let initial = fitToScreen();
+    window.addEventListener('resize', () => {
+      // Pixi's `resizeTo: window` keeps app.screen in sync; we just need
+      // to recompute fit + refresh the R-reset baseline.
+      initial = fitToScreen();
+    });
+    let dragging = false;
+    let lastX = 0, lastY = 0;
+    app.canvas.addEventListener('pointerdown', (e) => {
+      dragging = true; lastX = e.clientX; lastY = e.clientY;
+      app.canvas.setPointerCapture?.(e.pointerId);
+    });
+    app.canvas.addEventListener('pointerup', (e) => {
+      dragging = false;
+      app.canvas.releasePointerCapture?.(e.pointerId);
+    });
+    app.canvas.addEventListener('pointermove', (e) => {
+      if (dragging) {
+        root.x += e.clientX - lastX;
+        root.y += e.clientY - lastY;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        return;
+      }
+      // Hover hit-test in world coordinates. 12px threshold (in screen px)
+      // converted to world units, so the hover radius stays constant under
+      // zoom.
+      const mx = (e.clientX - root.x) / root.scale.x;
+      const my = (e.clientY - root.y) / root.scale.y;
+      const threshold = 12 / root.scale.x;
+      let bestIdx = -1, bestDist = threshold;
+      for (let i = 0; i < graph.methodEdges.length; i++) {
+        const bz = bezierForEdge(graph.methodEdges[i]);
+        if (!bz) continue;
+        const d = distToBezier(mx, my, bz);
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      }
+      if (bestIdx !== hoverEdgeIdx) {
+        hoverEdgeIdx = bestIdx;
+        redrawHover();
+      }
+    });
+    app.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      const mx = e.clientX, my = e.clientY;
+      const wx = (mx - root.x) / root.scale.x;
+      const wy = (my - root.y) / root.scale.y;
+      root.scale.x *= factor;
+      root.scale.y *= factor;
+      root.x = mx - wx * root.scale.x;
+      root.y = my - wy * root.scale.y;
+    }, { passive: false });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'r' || e.key === 'R') {
+        root.x = initial.x; root.y = initial.y;
+        root.scale.set(initial.sx, initial.sy);
+      }
+    });
+
+    // ----- FPS + render loop --------------------------------------------
+    // Pixi v8 ESM doesn't auto-register the TickerPlugin, so app.ticker is
+    // undefined and the stage would never repaint. Drive it ourselves with
+    // requestAnimationFrame and an explicit app.render() per tick.
+    const fpsEl = document.getElementById('fps');
+    let frames = 0, lastT = performance.now();
+    function loop() {
+      app.render();
       frames++;
-      frameTimeAccum += performance.now() - t0;
       const now = performance.now();
       if (now - lastT > 500) {
         const fps = Math.round((frames * 1000) / (now - lastT));
-        const ft = (frameTimeAccum / frames).toFixed(2);
         fpsEl.textContent = fps;
         fpsEl.className = fps >= 30 ? 'fps' : 'fps warn';
-        ftEl.textContent = ft;
         frames = 0;
-        frameTimeAccum = 0;
         lastT = now;
       }
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+
+    document.title = 'CodeMap v2 viewer (rendered)';
+
+    console.log('[codemap-r1] rendered', {
+      classes: Object.keys(graph.classes).length,
+      methods: Object.keys(graph.methods).length,
+      edges: graph.methodEdges.length,
+      buckets: Object.fromEntries(Object.entries(buckets).map(([k, v]) => [k, v.length])),
     });
   </script>
 </body>

@@ -637,6 +637,27 @@
       const aRightX = sLayout ? sLayout.pillR : (sClass.x + sClass.w);
       const bLeftX  = tLayout ? tLayout.pillL : tClass.x;
       const fwd = bLeftX >= aRightX - 20;
+      // Vertical-dominant cross-lane: when |dy| greatly exceeds the horizontal
+      // run, a standard sankey bezier degenerates into an L-shape whose middle
+      // segment slices through any cards stacked between source and target
+      // (e.g. HandleAsync → GroundedAskPromptsV2 grazing OpenAI's left mid).
+      // Route out of the source's B/T side so the curve flows in the same
+      // axis as the displacement.
+      if (fwd && sLayout) {
+        const sCy = sLayout.cy;
+        const tCy = tLayout ? tLayout.pillCy : (tClass.y + tClass.h / 2);
+        const dx = bLeftX - aRightX;
+        const dy = tCy - sCy;
+        if (Math.abs(dy) > Math.max(dx, 80) * 2.5) {
+          const down = dy > 0;
+          return {
+            sSide: down ? 'B' : 'T',
+            tSide: 'L',
+            sOther: bLeftX,           // fan co-side B/T edges by target x
+            tOther: sLayout.pillCy,   // fan co-side L edges by source y
+          };
+        }
+      }
       return {
         sSide: fwd ? 'R' : 'L',
         tSide: fwd ? 'L' : 'R',
@@ -699,15 +720,46 @@
       }
 
       // Cross-lane: try forward (L→R) first using right-of-source → left-of-target
-      const sROff = sLayout ? attachOff(ed.source, 'R', ed) : 0;
-      const tLOff = tLayout ? attachOff(ed.target, 'L', ed) : 0;
-      const aRight = sLayout ? { x: sLayout.pillR, y: sLayout.pillCy + sROff }
-                             : sClass ? { x: sClass.x + sClass.w, y: sClass.y + sClass.h / 2 } : null;
-      const bLeft  = tLayout ? { x: tLayout.pillL, y: tLayout.pillCy + tLOff }
-                             : tClass ? { x: tClass.x, y: tClass.y + tClass.h / 2 } : null;
-      if (!aRight || !bLeft) return null;
+      const aRightX = sLayout ? sLayout.pillR : (sClass.x + sClass.w);
+      const bLeftX  = tLayout ? tLayout.pillL : tClass.x;
+      const fwd = bLeftX >= aRightX - 20;
 
-      if (bLeft.x >= aRight.x - 20) {
+      // Vertical-dominant forward: |dy| >> dx. Exit source's B/T side instead
+      // of R so the bezier flows in the same axis as the displacement and
+      // doesn't graze the inner cards in the intervening lane. p2.y = p3.y
+      // keeps the endpoint tangent horizontal.
+      if (fwd && sLayout) {
+        const sCy = sLayout.cy;
+        const tCy = tLayout ? tLayout.pillCy : (tClass.y + tClass.h / 2);
+        const dxRaw = bLeftX - aRightX;
+        const dyRaw = tCy - sCy;
+        if (Math.abs(dyRaw) > Math.max(dxRaw, 80) * 2.5) {
+          const down = dyRaw > 0;
+          const sxo = attachOff(ed.source, down ? 'B' : 'T', ed);
+          const tLOff = tLayout ? attachOff(ed.target, 'L', ed) : 0;
+          const sy0 = down ? sLayout.cy + PILL_H / 2 : sLayout.cy - PILL_H / 2;
+          a = { x: sLayout.pillCx + sxo, y: sy0 };
+          b = tLayout ? { x: tLayout.pillL, y: tLayout.pillCy + tLOff }
+                      : { x: tClass.x, y: tClass.y + tClass.h / 2 };
+          orient = 'v-fwd';
+          const ndy = b.y - a.y;
+          return {
+            p0: a,
+            p1: { x: a.x, y: a.y + ndy * 0.45 },  // pull down vertically out of source
+            p2: { x: b.x - 60, y: b.y },          // horizontal approach to target
+            p3: b,
+            orient,
+          };
+        }
+      }
+
+      if (fwd) {
+        const sROff = sLayout ? attachOff(ed.source, 'R', ed) : 0;
+        const tLOff = tLayout ? attachOff(ed.target, 'L', ed) : 0;
+        const aRight = sLayout ? { x: sLayout.pillR, y: sLayout.pillCy + sROff }
+                               : { x: sClass.x + sClass.w, y: sClass.y + sClass.h / 2 };
+        const bLeft  = tLayout ? { x: tLayout.pillL, y: tLayout.pillCy + tLOff }
+                               : { x: tClass.x, y: tClass.y + tClass.h / 2 };
         // Forward L→R: standard sankey bezier
         a = aRight; b = bLeft; orient = 'h';
         const dx = b.x - a.x;

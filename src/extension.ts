@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { registerChatParticipant } from './chat/participant';
+import { openPanel } from './webview/panel';
 
 // Phase 0.1 stub — see docs/adrs/005-renderer-rewrite-pixi.md
 // and docs/plan/v4-plan.md. The old orchestrator/calibrator/webview
@@ -11,9 +12,14 @@ const REBUILD_NOTICE =
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(registerChatParticipant(context));
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('codemap.showLastGraph', () => {
+      openPanel(context);
+    }),
+  );
+
   for (const id of [
     'codemap.resetReadingProgress',
-    'codemap.showLastGraph',
     'codemap.clearAnalyzerCache',
     'codemap.saveCurrentGraphAsGolden',
   ]) {

@@ -92,7 +92,7 @@
       },
       {
         "command": "codemap.showLastGraph",
-        "title": "CodeMap: Show Last Graph"
+        "title": "CodeMap: Show Fixture (Dev)"
       },
       {
         "command": "codemap.clearAnalyzerCache",
@@ -180,6 +180,7 @@
     "cytoscape-dagre": "^3.0.0",
     "cytoscape-elk": "^2.3.0",
     "dagre": "^0.8.5",
-    "elkjs": "^0.11.1"
+    "elkjs": "^0.11.1",
+    "pixi.js": "^8.18.1"
   }
 }

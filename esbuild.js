@@ -1,8 +1,15 @@
-// esbuild.js — extension host bundle (CJS, node).
-// Phase 0.1: the v0.0.x webview/cytoscape stack moved to legacy/ and is no
-// longer wired. Vendor copy will be reintroduced in Phase 1.0 once the
-// Pixi.js renderer ships. See docs/plan/v4-plan.md.
+// esbuild.js — extension host + webview scene bundles.
+// Phase 1.1a: webview pipeline lights up.
+//  - dist/extension.js: CJS bundle for the extension host (Node).
+//  - dist/webview/scene.js: ESM bundle for the webview, `pixi.js` left external.
+//  - dist/webview/vendor/pixi.min.mjs: vendor copy of the Pixi v8 ESM build,
+//    referenced from the webview via an import map. Pixi must not be inlined
+//    into scene.js — ADR-005 §7.1 (R1 finding): the ESM path is the only one
+//    that keeps Pixi's internal extension registry intact under VS Code's CSP.
 const esbuild = require('esbuild');
+const fs = require('fs');
+const path = require('path');
+
 const watch = process.argv.includes('--watch');
 
 const extensionConfig = {
@@ -17,13 +24,39 @@ const extensionConfig = {
   logLevel: 'info',
 };
 
+const sceneConfig = {
+  entryPoints: ['src/webview/scene/bootstrap.ts'],
+  bundle: true,
+  outfile: 'dist/webview/scene.js',
+  platform: 'browser',
+  target: 'es2022',
+  format: 'esm',
+  external: ['pixi.js'],
+  sourcemap: true,
+  logLevel: 'info',
+};
+
+function copyPixiVendor() {
+  const src = path.resolve('node_modules/pixi.js/dist/pixi.min.mjs');
+  const dst = path.resolve('dist/webview/vendor/pixi.min.mjs');
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.copyFileSync(src, dst);
+  console.log('[esbuild] vendor: pixi.min.mjs -> dist/webview/vendor/');
+}
+
 async function run() {
   if (watch) {
-    const ctx = await esbuild.context(extensionConfig);
-    await ctx.watch();
+    copyPixiVendor();
+    const extCtx = await esbuild.context(extensionConfig);
+    const sceneCtx = await esbuild.context(sceneConfig);
+    await Promise.all([extCtx.watch(), sceneCtx.watch()]);
     console.log('[esbuild] watching…');
   } else {
-    await esbuild.build(extensionConfig);
+    await Promise.all([
+      esbuild.build(extensionConfig),
+      esbuild.build(sceneConfig),
+    ]);
+    copyPixiVendor();
     console.log('[esbuild] build complete');
   }
 }

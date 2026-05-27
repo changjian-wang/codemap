@@ -2,13 +2,8 @@
 src/**
 test/**
 eval/**
-docs/plan/**
-docs/adrs/**
-docs/media/**
-# NOTE: docs/mockups/** MUST ship — panel.ts (renderHtml) reads
-# docs/mockups/codemap-view.html at runtime to produce the
-# Workspace view. Excluding it here in 0.0.4 silently broke the panel
-# ("Mockup file not found"). The 118 KB is worth a working webview.
+legacy/**
+docs/**
 .vscode/**
 .vscode-test/**
 .github/**

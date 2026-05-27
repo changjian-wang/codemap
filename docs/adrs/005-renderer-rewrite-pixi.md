@@ -19,7 +19,7 @@ We can no longer fix these by patching. The renderer, the calibrator, and the gr
 Six core moves, replacing the v0.0.x stack:
 
 1. **Renderer — Pixi.js + custom layout.** A WebGL 2D scene we control. d3-force is the default layout; ELK is the alternate for hierarchical views. The static mockup HTML is retired (lives under `legacy/docs/mockups/`).
-2. **Graph shape — v2 two-tier.** `ClassNode` is a swimlane container, `MethodNode` is the first-class graph node. Contract is `src/shared/types-v2.draft.ts`; concrete shape is `eval/samples/lumen-mini/fixture-v2.draft.json`.
+2. **Graph shape — v2 two-tier.** `ClassNode` is a swimlane container, `MethodNode` is the first-class graph node. Contract is `src/shared/types.ts`; concrete shape is `eval/samples/lumen-mini/fixture.json`.
 3. **Multi-language `CalibratorService` interface.** Every language uses its own native analyzer. The extension host never calls a language analyzer directly — it calls a `CalibratorService` implementation chosen by a `CalibratorRegistry` keyed on language id.
 4. **C# calibrator — Roslyn via dotnet-tool subprocess.** A standalone .NET project hosts `MSBuildWorkspace` and exposes the `CalibratorService` contract over JSON-RPC on stdin/stdout. Distribution is framework-dependent — users need .NET 8+ runtime, we do not bundle the runtime.
 5. **TS / JS calibrator — TS Compiler API + ts-morph, in-process.** No subprocess; the analyzer runs inside the extension host. Same `CalibratorService` interface as C#.
@@ -71,7 +71,7 @@ The extension host knows nothing about Roslyn, `MSBuildWorkspace`, ts-morph, or 
 ## 5. Migration / archive plan
 
 - All v0.0.x code under `legacy/src/`. Tests under `legacy/test/`. Eval baselines + samples under `legacy/eval/`. Old plans under `legacy/docs/plan/`. Mockups under `legacy/docs/mockups/`.
-- v1 `src/shared/types.ts` → `legacy/src/shared/types.ts`. New canonical contract becomes `src/shared/types-v2.draft.ts` (drops `.draft` suffix in Phase 0.4).
+- v1 `src/shared/types.ts` → `legacy/src/shared/types.ts`. New canonical contract is `src/shared/types.ts` (promoted from `types-v2.draft.ts` in Phase 0.4).
 - `src/extension.ts` and `src/chat/participant.ts` are stubs in Phase 0.1; rewired in Phase 3.3.
 - `src/chat/intent-router.ts`, `src/chat/scope.ts`, `src/editor/jump-to-source.ts` are kept — they are dependency-free utilities the new stack will reuse.
 
@@ -89,6 +89,7 @@ The extension host knows nothing about Roslyn, `MSBuildWorkspace`, ts-morph, or 
 - Phase 0.1 — Archive + stubs landed (this commit).
 - Phase 0.2 — `types-v2.draft.ts` + `fixture-v2.draft.json` landed.
 - Phase 0.3 — **Done 2026-05-27.** R1 and R2 spike conclusions logged in §7.1 / §7.2. Phase 1 / Phase 2 are now unblocked.
+- Phase 0.4 — **Done 2026-05-27.** v2 drafts promoted to canonical (`src/shared/types.ts` / `eval/samples/lumen-mini/fixture.json`); v4-plan Phase 2.2 rewritten to use the slnx XML walk per R2.
 
 ### 7.1 R1 — Pixi.js in VS Code webview
 

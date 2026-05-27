@@ -9,7 +9,7 @@
 
 ### 0.1 Cleanup & archive — AFK ✅
 
-- Move v0.0.x code into `legacy/`. New `src/` keeps `extension.ts` + `chat/{participant,intent-router,scope}.ts` + `editor/jump-to-source.ts` + `shared/types-v2.draft.ts`.
+- Move v0.0.x code into `legacy/`. New `src/` keeps `extension.ts` + `chat/{participant,intent-router,scope}.ts` + `editor/jump-to-source.ts` + `shared/types.ts`.
 - `extension.ts` and `chat/participant.ts` are stubs returning the rebuild notice.
 - Drop `esbuild.js` vendor copy (cytoscape / dagre / elkjs); reintroduce in 1.1 with Pixi.
 - `.vscodeignore` excludes `legacy/**` and the whole `docs/**`.
@@ -17,20 +17,20 @@
 
 ### 0.2 Graph shape v2 contract — AFK ✅
 
-- `src/shared/types-v2.draft.ts` — two-tier types with Conventions block locking Q1–Q3.
-- `eval/samples/lumen-mini/fixture-v2.draft.json` — concrete fixture covering every edge case (class-id fallback, partial verification, `isShared`, external deps).
+- `src/shared/types.ts` — two-tier types with Conventions block locking Q1–Q3.
+- `eval/samples/lumen-mini/fixture.json` — concrete fixture covering every edge case (class-id fallback, partial verification, `isShared`, external deps).
 - Acceptance: TypeScript compiles the fixture against the contract (Phase 1.1 will load it).
 
 ### 0.3 Tech spike — HITL
 
 Two independent prototypes runnable in parallel. Conclusions append to ADR-005 §7.1 / §7.2 before Phase 1 / Phase 2 start.
 
-- **R1 — Pixi.js in VS Code webview.** Single-file spike under `tools/spikes/pixi-r1/`. Render `fixture-v2.draft.json` as plain circles + lines. Goals: confirm CSP, bundle size (<1 MB extension contribution), 30 fps at 100 nodes. **Delete the spike after the conclusion lands in ADR.**
+- **R1 — Pixi.js in VS Code webview.** Single-file spike under `tools/spikes/pixi-r1/`. Render `fixture.json` as plain circles + lines. Goals: confirm CSP, bundle size (<1 MB extension contribution), 30 fps at 100 nodes. **Delete the spike after the conclusion lands in ADR.**
 - **R2 — Roslyn against `lumen.slnx`.** Single .NET console app under `tools/spikes/roslyn-r2/`. `MSBuildWorkspace.OpenSolutionAsync` + walk `INamedTypeSymbol` for `Lumen.Capture`. Goal: confirm `.slnx` opens, project-level analysis works on .NET 9 SDK. **Delete the spike after the conclusion lands in ADR.**
 
 Per the `prototype` skill: one spike, one question, delete or absorb. No orphans in `main`.
 
-### 0.4 Promote v2 draft to canonical — AFK
+### 0.4 Promote v2 draft to canonical — AFK ✅
 
 - `git mv src/shared/types-v2.draft.ts src/shared/types.ts`.
 - `git mv eval/samples/lumen-mini/fixture-v2.draft.json eval/samples/lumen-mini/fixture.json`.
@@ -89,9 +89,9 @@ A standalone .NET project + JSON-RPC contract. Built and tested in isolation; th
 
 ### 2.2 MSBuildWorkspace + `.slnx` open — HITL
 
-- `OpenSolutionAsync(path)` against `lumen.slnx`.
+- Parse `.slnx` via `XDocument.Descendants("Project")` and call `MSBuildWorkspace.OpenProjectAsync(csprojPath)` per project. `OpenSolutionAsync` is unusable on `.slnx` — it throws `InvalidProjectFileException("No file format header found")` because Roslyn's solution parser still expects the classic `Microsoft Visual Studio Solution File` header (R2 finding, see ADR-005 §7.2). Skip the benign `ArgumentException` raised when a project is already loaded via transitive references.
 - Surface diagnostics through JSON-RPC notifications (not exceptions).
-- Acceptance: open `lumen.slnx`, return project count + first project name.
+- Acceptance: open `lumen.slnx`, return distinct project count + first project name. Note: cold start may be ~60 s on first run (NuGet restore + project graph build); Phase 2.5 must hide this behind a background warmup.
 
 ### 2.3 Method callee resolution — AFK
 

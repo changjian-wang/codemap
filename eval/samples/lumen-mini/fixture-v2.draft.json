@@ -1,0 +1,295 @@
+{
+  "_comment": "v2 fixture matching src/shared/types-v2.draft.ts. Trimmed to the 5 classes from lumen-mini/golden.json, but expanded to method-as-node + cross-bc edges + an unverified node + an ext: dep + a verification:partial method so the Pixi renderer has every shape variant on screen at once.",
+  "schemaVersion": 2,
+  "rootRequest": "@codemap /scope src/Lumen.Capture",
+  "scope": "src/Lumen.Capture",
+  "workspaceRoot": "file:///c:/github/lumen/apps/api",
+  "rootIntent": "Minimal Lumen backend slice: URL ingest + ask-by-query recall",
+  "narrative": "Ingest path canonicalizes URLs, dedupes in-flight jobs, and writes a capture_jobs row that a BackgroundService claims and processes. Recall path embeds the query and probes ChunkStore for nearest chunks.",
+  "boundedContexts": ["capture", "recall", "shared"],
+
+  "classes": {
+    "IngestUrlHandler": {
+      "id": "IngestUrlHandler",
+      "kind": "class",
+      "boundedContext": "capture",
+      "file": "src/Lumen.Capture/Features/IngestUrl/IngestUrlHandler.cs",
+      "range": { "startLine": 14, "endLine": 142 },
+      "intent": "URL canonicalize → dedupe in-flight → insert capture_jobs row → worker runs extract+embed async",
+      "layer": "service",
+      "confidence": 0.9,
+      "risks": [
+        { "type": "concurrency", "desc": "UNIQUE-index race on canonical URL" },
+        { "type": "external_io", "desc": "Fetches remote URLs via HtmlContentExtractor" }
+      ],
+      "isEntry": true,
+      "entryKind": "http_endpoint",
+      "entryMeta": { "routes": ["POST /api/captures/url"] },
+      "methodIds": [
+        "IngestUrlHandler.EnqueueAsync",
+        "IngestUrlHandler.ExecuteAsync"
+      ],
+      "verification": "verified",
+      "verificationDetails": { "rangeAdjusted": true, "droppedTargets": [] }
+    },
+
+    "WebContentExtractor": {
+      "id": "WebContentExtractor",
+      "kind": "class",
+      "boundedContext": "capture",
+      "file": "src/Lumen.Capture/Adapters/WebContentExtractor.cs",
+      "range": { "startLine": 8, "endLine": 56 },
+      "intent": "Fetches a URL and extracts main-content HTML → Markdown",
+      "layer": "service",
+      "confidence": 0.92,
+      "risks": [{ "type": "external_io", "desc": "Outbound HTTP" }],
+      "methodIds": ["WebContentExtractor.ExtractAsync"],
+      "verification": "verified"
+    },
+
+    "ChunkStore": {
+      "id": "ChunkStore",
+      "kind": "class",
+      "boundedContext": "capture",
+      "file": "src/Lumen.Capture/Persistence/ChunkStore.cs",
+      "range": { "startLine": 12, "endLine": 88 },
+      "intent": "Dapper repository over event_chunks with pgvector probe",
+      "layer": "repo",
+      "confidence": 0.95,
+      "risks": [],
+      "isShared": true,
+      "methodIds": [
+        "ChunkStore.InsertRangeAsync",
+        "ChunkStore.SearchByVectorAsync"
+      ],
+      "verification": "verified"
+    },
+
+    "AskByQueryHandler": {
+      "id": "AskByQueryHandler",
+      "kind": "class",
+      "boundedContext": "recall",
+      "file": "src/Lumen.Capture/Features/AskByQuery/AskByQueryHandler.cs",
+      "range": { "startLine": 16, "endLine": 98 },
+      "intent": "Embeds the query, probes ChunkStore, builds a grounded prompt, calls LLM",
+      "layer": "service",
+      "confidence": 0.88,
+      "risks": [
+        { "type": "security", "desc": "Prompt-injection surface" },
+        { "type": "low_confidence", "desc": "Grounded-ask prompt v2 not yet pinned" }
+      ],
+      "isEntry": true,
+      "entryKind": "http_endpoint",
+      "entryMeta": { "routes": ["POST /api/recall/ask"] },
+      "methodIds": ["AskByQueryHandler.HandleAsync"],
+      "verification": "partial",
+      "verificationDetails": {
+        "rangeAdjusted": false,
+        "droppedTargets": ["GroundedAskPromptsV2"],
+        "reason": "Callee not found in workspace symbols; LLM may have hallucinated"
+      }
+    },
+
+    "OpenAIEmbedder": {
+      "id": "OpenAIEmbedder",
+      "kind": "class",
+      "boundedContext": "recall",
+      "file": "src/Lumen.Capture/Adapters/OpenAIEmbedder.cs",
+      "range": { "startLine": 9, "endLine": 48 },
+      "intent": "Embeds text via OpenAI HTTP API",
+      "layer": "service",
+      "confidence": 0.9,
+      "risks": [{ "type": "external_io", "desc": "Outbound HTTP to OpenAI" }],
+      "methodIds": ["OpenAIEmbedder.EmbedAsync"],
+      "verification": "verified"
+    }
+  },
+
+  "methods": {
+    "IngestUrlHandler.EnqueueAsync": {
+      "id": "IngestUrlHandler.EnqueueAsync",
+      "ownerClassId": "IngestUrlHandler",
+      "name": "EnqueueAsync",
+      "signature": "(IngestUrlRequest req, CancellationToken ct)",
+      "line": 49,
+      "visibility": "public",
+      "intent": "Canonicalize URL, dedupe in-flight, insert pending capture_jobs row",
+      "risks": ["concurrency"],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "IngestUrlHandler.ExecuteAsync": {
+      "id": "IngestUrlHandler.ExecuteAsync",
+      "ownerClassId": "IngestUrlHandler",
+      "name": "ExecuteAsync",
+      "signature": "(Guid jobId, CancellationToken ct)",
+      "line": 112,
+      "visibility": "public",
+      "intent": "Worker tick: extract → embed → chunk → mark succeeded/failed",
+      "risks": ["external_io", "concurrency"],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "WebContentExtractor.ExtractAsync": {
+      "id": "WebContentExtractor.ExtractAsync",
+      "ownerClassId": "WebContentExtractor",
+      "name": "ExtractAsync",
+      "signature": "(string url, CancellationToken ct)",
+      "line": 18,
+      "visibility": "public",
+      "intent": "HTTP GET + SmartReader → Markdown",
+      "risks": ["external_io"],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "ChunkStore.InsertRangeAsync": {
+      "id": "ChunkStore.InsertRangeAsync",
+      "ownerClassId": "ChunkStore",
+      "name": "InsertRangeAsync",
+      "signature": "(IEnumerable<EventChunk> chunks, CancellationToken ct)",
+      "line": 22,
+      "visibility": "public",
+      "intent": "Batch insert ≤32 chunks per event",
+      "risks": [],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "ChunkStore.SearchByVectorAsync": {
+      "id": "ChunkStore.SearchByVectorAsync",
+      "ownerClassId": "ChunkStore",
+      "name": "SearchByVectorAsync",
+      "signature": "(float[] q, int k, CancellationToken ct)",
+      "line": 54,
+      "visibility": "public",
+      "intent": "pgvector cosine probe, returns top-k chunks",
+      "risks": [],
+      "readState": "unread",
+      "verification": "verified"
+    },
+    "AskByQueryHandler.HandleAsync": {
+      "id": "AskByQueryHandler.HandleAsync",
+      "ownerClassId": "AskByQueryHandler",
+      "name": "HandleAsync",
+      "signature": "(AskByQueryRequest req, CancellationToken ct)",
+      "line": 28,
+      "visibility": "public",
+      "intent": "Embed query → search chunks → build prompt → call LLM",
+      "risks": ["security", "low_confidence"],
+      "readState": "unread",
+      "verification": "partial"
+    },
+    "OpenAIEmbedder.EmbedAsync": {
+      "id": "OpenAIEmbedder.EmbedAsync",
+      "ownerClassId": "OpenAIEmbedder",
+      "name": "EmbedAsync",
+      "signature": "(string text, CancellationToken ct)",
+      "line": 17,
+      "visibility": "public",
+      "intent": "POST /v1/embeddings to OpenAI, returns float[]",
+      "risks": ["external_io"],
+      "readState": "unread",
+      "verification": "verified"
+    }
+  },
+
+  "externalDeps": {
+    "ext:SmartReader": { "id": "ext:SmartReader", "name": "SmartReader", "kind": "package" },
+    "ext:Dawning.ORM.Dapper": { "id": "ext:Dawning.ORM.Dapper", "name": "Dawning.ORM.Dapper", "kind": "package" },
+    "ext:OpenAI": { "id": "ext:OpenAI", "name": "OpenAI", "kind": "package" },
+    "ext:Pgvector": { "id": "ext:Pgvector", "name": "Pgvector", "kind": "package" }
+  },
+
+  "methodEdges": [
+    {
+      "id": "e0",
+      "source": "IngestUrlHandler.ExecuteAsync",
+      "target": "WebContentExtractor.ExtractAsync",
+      "kind": "calls",
+      "verified": true
+    },
+    {
+      "id": "e1",
+      "source": "IngestUrlHandler.ExecuteAsync",
+      "target": "ChunkStore.InsertRangeAsync",
+      "kind": "calls",
+      "verified": true
+    },
+    {
+      "id": "e2",
+      "source": "WebContentExtractor.ExtractAsync",
+      "target": "ext:SmartReader",
+      "kind": "external_calls",
+      "verified": true
+    },
+    {
+      "id": "e3",
+      "source": "ChunkStore.InsertRangeAsync",
+      "target": "ext:Dawning.ORM.Dapper",
+      "kind": "external_calls",
+      "verified": true
+    },
+    {
+      "id": "e4",
+      "source": "ChunkStore.SearchByVectorAsync",
+      "target": "ext:Pgvector",
+      "kind": "external_calls",
+      "verified": true
+    },
+    {
+      "id": "e5",
+      "source": "AskByQueryHandler.HandleAsync",
+      "target": "OpenAIEmbedder.EmbedAsync",
+      "kind": "calls",
+      "verified": true
+    },
+    {
+      "id": "e6",
+      "source": "AskByQueryHandler.HandleAsync",
+      "target": "ChunkStore.SearchByVectorAsync",
+      "kind": "calls",
+      "verified": true
+    },
+    {
+      "_comment": "Class-id fallback: the LLM said HandleAsync calls GroundedAskPromptsV2 but the calibrator couldn't resolve a matching MethodNode and the class isn't in scope. Edge target is the bare class id — webview will render as a faint dashed line to a stub node.",
+      "id": "e7",
+      "source": "AskByQueryHandler.HandleAsync",
+      "target": "GroundedAskPromptsV2",
+      "kind": "calls",
+      "verified": false
+    },
+    {
+      "id": "e8",
+      "source": "OpenAIEmbedder.EmbedAsync",
+      "target": "ext:OpenAI",
+      "kind": "external_calls",
+      "verified": true
+    }
+  ],
+
+  "classEdges": [
+    { "source": "IngestUrlHandler", "target": "WebContentExtractor", "kind": "calls", "multiplicity": 1, "verified": true },
+    { "source": "IngestUrlHandler", "target": "ChunkStore", "kind": "calls", "multiplicity": 1, "verified": true },
+    { "source": "WebContentExtractor", "target": "ext:SmartReader", "kind": "external_calls", "multiplicity": 1, "verified": true },
+    { "source": "ChunkStore", "target": "ext:Dawning.ORM.Dapper", "kind": "external_calls", "multiplicity": 1, "verified": true },
+    { "source": "ChunkStore", "target": "ext:Pgvector", "kind": "external_calls", "multiplicity": 1, "verified": true },
+    { "source": "AskByQueryHandler", "target": "OpenAIEmbedder", "kind": "calls", "multiplicity": 1, "verified": true },
+    { "source": "AskByQueryHandler", "target": "ChunkStore", "kind": "calls", "multiplicity": 1, "verified": true },
+    { "source": "AskByQueryHandler", "target": "GroundedAskPromptsV2", "kind": "calls", "multiplicity": 1, "verified": false },
+    { "source": "OpenAIEmbedder", "target": "ext:OpenAI", "kind": "external_calls", "multiplicity": 1, "verified": true }
+  ],
+
+  "entryMethodIds": [
+    "IngestUrlHandler.EnqueueAsync",
+    "AskByQueryHandler.HandleAsync"
+  ],
+
+  "readingOrder": [
+    "IngestUrlHandler.EnqueueAsync",
+    "IngestUrlHandler.ExecuteAsync",
+    "WebContentExtractor.ExtractAsync",
+    "ChunkStore.InsertRangeAsync",
+    "AskByQueryHandler.HandleAsync",
+    "OpenAIEmbedder.EmbedAsync",
+    "ChunkStore.SearchByVectorAsync"
+  ]
+}

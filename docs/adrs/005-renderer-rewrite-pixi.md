@@ -88,11 +88,33 @@ The extension host knows nothing about Roslyn, `MSBuildWorkspace`, ts-morph, or 
 
 - Phase 0.1 — Archive + stubs landed (this commit).
 - Phase 0.2 — `types-v2.draft.ts` + `fixture-v2.draft.json` landed.
-- Phase 0.3 — R1 / R2 spike conclusions logged below before Phase 1 / Phase 2 start.
+- Phase 0.3 — **Done 2026-05-27.** R1 and R2 spike conclusions logged in §7.1 / §7.2. Phase 1 / Phase 2 are now unblocked.
 
 ### 7.1 R1 — Pixi.js in VS Code webview
 
-Status: pending. Acceptance: load `pixi.js@^8` in a webview, render 100 nodes + 200 edges at ≥30 fps; verify CSP / nonce / `vscode-webview-ui-toolkit` interop.
+Status: **Resolved 2026-05-27** (`tools/spikes/pixi-r1/`, kept as a Phase 1 reference impl).
+
+Re-scope: the original acceptance ("100 nodes / 200 edges @ ≥30 fps") was answered immediately by a synthetic-graph benchmark and was never the real risk. The spike was pivoted (per the `prototype` skill — one prototype, one question, but the question can be sharpened) into a much harder bar: **render the actual v2 graph fixture at production-quality visual fidelity using only Pixi v8 primitives**, treating `legacy/docs/mockups/codemap-view-gv.html` (Graphviz/VS Code dark mockup) as the visual contract.
+
+Result: Pixi v8 cleanly renders the full v2 schema variant matrix at 60 fps on `lumen-mini` (5 classes, 7 methods, 9 edges):
+
+- BC bucket → fixed 3-column lane layout (capture | recall | ext); cluster cards with BC-tinted outlines (teal / pink-purple / dim).
+- Class cards with `verification:partial` amber outline + status dot; ext / stub cards in italic when `unresolved`.
+- Method pills with `+ methodName()` GV labels, `entry` methods marked by an amber ▶ inside left padding.
+- Edges with three routing modes from one helper: same-lane vertical, forward L→R sankey bezier, reverse R→L cubic bezier with `p2.y === p3.y` to pin a horizontal endpoint tangent (so arrowheads enter the target pill cleanly even when the source is to the right).
+- Attachment fanning so co-side edges on the same pill don't share a single endpoint.
+- Pan / zoom / `r` reset / per-edge hover (12 px screen-px threshold over a 30-sample bezier polyline).
+
+Implication for Phase 1: Pixi v8 + hand-written column layout + custom bezier routing is the right shape. The spike's `bezierForEdge` + `attachOff` + entry/partial styling logic all transplant directly to `src/webview/`. Two design lessons survive into Phase 1:
+
+1. Edge routing must be **endpoint-aware** — multiple co-side edges need fanning, and reverse cross-lane edges need a separate code path so the endpoint tangent stays horizontal. A single sankey-style bezier for all edges is not enough.
+2. Visual signals must be **geometrically distinct AND chromatically distinct** — `verification:partial` (class outline) and `entry method` both wanted amber rings and collided; entry got demoted to a triangle glyph and amber is now reserved exclusively for `partial`.
+
+Remaining gap (the part R1 deliberately did **not** cover, deferred to Phase 1 implementation):
+
+- VS Code webview integration: CSP / `nonce` discipline, `vscode-webview-ui-toolkit` interop, `acquireVsCodeApi()` message bridge.
+- ESM packaging: the spike loads `pixi.js@8` from the jsdelivr ESM URL because that is the only path that keeps Pixi's internal extension graph intact; the production webview must vendor a build that survives the VS Code CSP without falling back to UMD.
+- Layout for graphs larger than `lumen-mini` (≥ 50 classes): the current `colX + i * colW` placement breaks down once cards overflow vertically. Phase 1 will need within-column packing (or scroll-on-overflow).
 
 ### 7.2 R2 — Roslyn against `lumen.slnx`
 

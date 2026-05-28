@@ -1,4 +1,13 @@
-import { Application, Graphics, Text } from 'pixi.js';
+// Pixi v8 emits `new Function()` for uniform sync by default — VS Code
+// webview CSP rejects that. This sibling module patches the offending
+// systems to use polyfilled code paths and must load BEFORE Application.
+import 'pixi.js/unsafe-eval';
+import { Application, Container, Graphics } from 'pixi.js';
+import type { CodeMapGraph } from '../../shared/types';
+import { computeLaneLayout, type LaneLayout, PILL_H, PAD } from './lane-layout';
+import { buildRouter, type PillRect, type CardRect } from './edge-routing';
+import { renderEdges } from './edge-renderer';
+import { renderBcHeaders, renderClassCards, renderMethodPills } from './node-renderer';
 
 interface VsCodeApi {
   postMessage(msg: unknown): void;
@@ -16,9 +25,11 @@ async function main(): Promise<void> {
     throw new Error('#stage container missing');
   }
 
+  const graph = loadFixture();
+
   const app = new Application();
   await app.init({
-    background: '#1e1e1e',
+    background: 0x1e1e1e,
     resizeTo: stage,
     antialias: true,
     autoDensity: true,
@@ -26,39 +37,144 @@ async function main(): Promise<void> {
   });
   stage.appendChild(app.canvas);
 
-  const card = new Graphics()
-    .roundRect(40, 40, 320, 140, 6)
-    .fill({ color: 0x252526 })
-    .stroke({ color: 0x569cd6, width: 1.5 });
-  app.stage.addChild(card);
+  const layout = computeLaneLayout(graph, app.screen.width);
 
-  const title = new Text({
-    text: 'CodeMap webview pipeline',
-    style: {
-      fill: 0xd4d4d4,
-      fontFamily: 'SF Mono, Menlo, Consolas, monospace',
-      fontSize: 13,
-    },
-  });
-  title.x = 56;
-  title.y = 60;
-  app.stage.addChild(title);
+  const root = app.stage;
+  const bgLayer = new Container();
+  const edgeLayer = new Container();
+  const nodeLayer = new Container();
+  const labelLayer = new Container();
+  root.addChild(bgLayer);
+  root.addChild(edgeLayer);
+  root.addChild(nodeLayer);
+  root.addChild(labelLayer);
 
-  const body = new Text({
-    text: 'Phase 1.1a placeholder — Pixi v8 ESM loaded via vendor copy + import map.',
-    style: {
-      fill: 0x858585,
-      fontFamily: 'SF Mono, Menlo, Consolas, monospace',
-      fontSize: 11,
-      wordWrap: true,
-      wordWrapWidth: 288,
-    },
+  const layers = { bgLayer, nodeLayer, labelLayer };
+  renderBcHeaders(layout, layers);
+  renderClassCards(layout, layers);
+  renderMethodPills(layout, graph, layers);
+
+  const router = buildRouter(toRoutingInput(layout), graph.methodEdges);
+  const edgesG = new Graphics();
+  renderEdges(graph.methodEdges, router, edgesG);
+  edgeLayer.addChild(edgesG);
+
+  let initial = fitToScreen(app, root, layout);
+  window.addEventListener('resize', () => {
+    initial = fitToScreen(app, root, layout);
   });
-  body.x = 56;
-  body.y = 90;
-  app.stage.addChild(body);
+  installInteraction(app, root, () => initial);
+
+  // Pixi v8 ESM doesn't auto-register the TickerPlugin, so app.ticker is
+  // undefined and the stage would never repaint. Drive it ourselves.
+  const loop = (): void => {
+    app.render();
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
 
   vscode.postMessage({ type: 'webview.ready' });
+}
+
+function loadFixture(): CodeMapGraph {
+  const el = document.getElementById('codemap-fixture');
+  if (!el || !el.textContent) {
+    throw new Error('#codemap-fixture script block missing');
+  }
+  return JSON.parse(el.textContent) as CodeMapGraph;
+}
+
+function toRoutingInput(layout: LaneLayout): {
+  methods: Record<string, PillRect>;
+  classes: Record<string, CardRect>;
+  pillH: number;
+} {
+  const methods: Record<string, PillRect> = {};
+  for (const ml of Object.values(layout.methods)) {
+    methods[ml.id] = {
+      cy: ml.cy,
+      bc: ml.bc,
+      pillL: ml.pillL,
+      pillR: ml.pillR,
+      pillCx: ml.pillCx,
+      pillCy: ml.pillCy,
+    };
+  }
+  const classes: Record<string, CardRect> = {};
+  for (const cl of Object.values(layout.classes)) {
+    classes[cl.id] = { x: cl.x, y: cl.y, w: cl.w, h: cl.h };
+  }
+  return { methods, classes, pillH: PILL_H };
+}
+
+interface ViewState {
+  x: number;
+  y: number;
+  sx: number;
+  sy: number;
+}
+
+function fitToScreen(app: Application, root: Container, layout: LaneLayout): ViewState {
+  const { minX, minY, maxX, maxY } = layout.bbox;
+  const headerTop = Math.min(minY, PAD.top - 50);
+  const bboxW = Math.max(1, maxX - minX);
+  const bboxH = Math.max(1, maxY - headerTop);
+  const w = app.screen.width;
+  const h = app.screen.height;
+  const margin = 40;
+  const vw = Math.max(1, w - 2 * margin);
+  const vh = Math.max(1, h - 2 * margin);
+  const sc = Math.min(vw / bboxW, vh / bboxH, 1.5);
+  root.scale.set(sc, sc);
+  root.x = margin + (vw - bboxW * sc) / 2 - minX * sc;
+  root.y = margin + (vh - bboxH * sc) / 2 - headerTop * sc;
+  return { x: root.x, y: root.y, sx: sc, sy: sc };
+}
+
+function installInteraction(app: Application, root: Container, getInitial: () => ViewState): void {
+  let dragging = false;
+  let lastX = 0, lastY = 0;
+  const canvas = app.canvas;
+
+  canvas.addEventListener('pointerdown', (e: PointerEvent) => {
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    canvas.setPointerCapture?.(e.pointerId);
+  });
+  canvas.addEventListener('pointerup', (e: PointerEvent) => {
+    dragging = false;
+    canvas.releasePointerCapture?.(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', (e: PointerEvent) => {
+    if (!dragging) return;
+    root.x += e.clientX - lastX;
+    root.y += e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+  });
+  canvas.addEventListener(
+    'wheel',
+    (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      const wx = (e.clientX - root.x) / root.scale.x;
+      const wy = (e.clientY - root.y) / root.scale.y;
+      root.scale.x *= factor;
+      root.scale.y *= factor;
+      root.x = e.clientX - wx * root.scale.x;
+      root.y = e.clientY - wy * root.scale.y;
+    },
+    { passive: false },
+  );
+  window.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'r' || e.key === 'R') {
+      const initial = getInitial();
+      root.x = initial.x;
+      root.y = initial.y;
+      root.scale.set(initial.sx, initial.sy);
+    }
+  });
 }
 
 main().catch((err: unknown) => {

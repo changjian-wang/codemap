@@ -5,8 +5,9 @@ import { defineConfig } from 'vitest/config';
 // docs/plan/v4-plan.md.
 export default defineConfig({
   test: {
-    include: ['test/unit/**/*.test.ts'],
+    include: ['test/unit/**/*.test.ts', 'test/integration/**/*.test.ts'],
     environment: 'node',
     passWithNoTests: true,
+    testTimeout: 30000,
   },
 });

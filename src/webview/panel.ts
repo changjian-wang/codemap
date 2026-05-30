@@ -3,18 +3,47 @@ import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { jumpToSource, type JumpRequest } from '../editor/jump-to-source';
+import type { CodeMapGraph } from '../shared/types';
 
 let currentPanel: vscode.WebviewPanel | undefined;
 
 export function openPanel(context: vscode.ExtensionContext): vscode.WebviewPanel {
+  const fixturePath = path.join(
+    context.extensionPath,
+    'eval', 'samples', 'lumen-mini', 'fixture.json',
+  );
+  const fixtureJson = fs.readFileSync(fixturePath, 'utf8');
+  return showGraphJson(context, fixtureJson, 'CodeMap (Dev)');
+}
+
+/**
+ * Render a live CodeMapGraph in the webview. Reuses the dev fixture panel
+ * if one is open; otherwise creates a new panel. Phase 3.3a entry point
+ * for the chat participant rewire in 3.3b.
+ */
+export function showGraph(
+  context: vscode.ExtensionContext,
+  graph: CodeMapGraph,
+  title = 'CodeMap',
+): vscode.WebviewPanel {
+  return showGraphJson(context, JSON.stringify(graph), title);
+}
+
+function showGraphJson(
+  context: vscode.ExtensionContext,
+  graphJson: string,
+  title: string,
+): vscode.WebviewPanel {
   if (currentPanel) {
     currentPanel.reveal(vscode.ViewColumn.Active);
+    currentPanel.title = title;
+    currentPanel.webview.html = buildHtml(context, currentPanel, graphJson);
     return currentPanel;
   }
 
   const panel = vscode.window.createWebviewPanel(
     'codemap.fixture',
-    'CodeMap (Dev)',
+    title,
     vscode.ViewColumn.Active,
     {
       enableScripts: true,
@@ -23,24 +52,7 @@ export function openPanel(context: vscode.ExtensionContext): vscode.WebviewPanel
     },
   );
 
-  const webview = panel.webview;
-  const nonce = randomBytes(16).toString('base64');
-  const sceneUri = webview.asWebviewUri(
-    vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview', 'scene.js'),
-  );
-
-  const fixturePath = path.join(
-    context.extensionPath,
-    'eval', 'samples', 'lumen-mini', 'fixture.json',
-  );
-  const fixtureJson = fs.readFileSync(fixturePath, 'utf8');
-
-  panel.webview.html = renderHtml({
-    cspSource: webview.cspSource,
-    nonce,
-    sceneUri: sceneUri.toString(),
-    fixtureJson,
-  });
+  panel.webview.html = buildHtml(context, panel, graphJson);
 
   currentPanel = panel;
   panel.onDidDispose(() => {
@@ -116,15 +128,35 @@ interface HtmlContext {
   cspSource: string;
   nonce: string;
   sceneUri: string;
-  fixtureJson: string;
+  graphJson: string;
+}
+
+function buildHtml(
+  context: vscode.ExtensionContext,
+  panel: vscode.WebviewPanel,
+  graphJson: string,
+): string {
+  const webview = panel.webview;
+  const nonce = randomBytes(16).toString('base64');
+  const sceneUri = webview.asWebviewUri(
+    vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview', 'scene.js'),
+  );
+  return renderHtml({
+    cspSource: webview.cspSource,
+    nonce,
+    sceneUri: sceneUri.toString(),
+    graphJson,
+  });
 }
 
 function renderHtml(ctx: HtmlContext): string {
-  const { cspSource, nonce, sceneUri, fixtureJson } = ctx;
-  // Embed the fixture as a non-executed JSON script block so the webview can
+  const { cspSource, nonce, sceneUri, graphJson } = ctx;
+  // Embed the graph as a non-executed JSON script block so the webview can
   // parse it via `document.getElementById('codemap-fixture').textContent`.
-  // Escape `</script>` defensively to prevent early tag closure.
-  const safeFixture = fixtureJson.replace(/<\/script/gi, '<\\/script');
+  // Escape `</script>` defensively to prevent early tag closure. The DOM id
+  // stays `codemap-fixture` so scene.js (loaded as a separate bundle) keeps
+  // working unchanged across the dev fixture path and the live graph path.
+  const safeGraph = graphJson.replace(/<\/script/gi, '<\\/script');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -163,7 +195,7 @@ function renderHtml(ctx: HtmlContext): string {
 <body>
   <div id="stage"></div>
   <div id="codemap-tooltip"></div>
-  <script type="application/json" id="codemap-fixture" nonce="${nonce}">${safeFixture}</script>
+  <script type="application/json" id="codemap-fixture" nonce="${nonce}">${safeGraph}</script>
   <script type="module" nonce="${nonce}" src="${sceneUri}"></script>
 </body>
 </html>`;

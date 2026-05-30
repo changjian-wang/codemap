@@ -38,6 +38,7 @@ import {
   type ResolveCalleesParams,
   type ResolveCalleesResult,
 } from '../../shared/calibrator-protocol';
+import type { CalibratorService } from '../calibrator-service';
 import { FrameDecoder, encodeFrame } from './rpc-framing';
 
 const MAX_RESPAWN_ATTEMPTS = 3;
@@ -89,7 +90,7 @@ export class CalibratorHostError extends Error {
   }
 }
 
-export class CSharpCalibratorHost {
+export class CSharpCalibratorHost implements CalibratorService {
   private readonly opts: CSharpCalibratorHostOptions;
   private readonly emitter = new EventEmitter();
   private state: LifecycleState = 'idle';

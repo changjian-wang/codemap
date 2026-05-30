@@ -151,6 +151,11 @@
           "minimum": 5000,
           "maximum": 120000,
           "description": "How long to wait for the language server to produce symbols before starting analysis. Default 30s covers a cold C# Dev Kit start. Raise it for very large solutions."
+        },
+        "codemap.csharpExecutable": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the codemap-calibrator-csharp binary. Leave empty to use the dev build at <extension>/tools/codemap-calibrator-csharp/bin/Debug/net8.0/codemap-calibrator-csharp."
         }
       }
     }

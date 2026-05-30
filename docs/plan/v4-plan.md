@@ -148,7 +148,7 @@ A standalone .NET project + JSON-RPC contract. Built and tested in isolation; th
 
 - New `src/orchestrator/` (built from scratch — old one lives in `legacy/`).
 - Single-file analyzer emits v2 `ClassNode` + `MethodNode` directly (no class-only intermediate).
-- Acceptance: feed `IngestUrlHandler.cs` → returns ClassNode with `methodIds: ['IngestUrlHandler.HandleAsync', …]` + MethodNodes.
+- Acceptance: feed `IngestUrlHandler.cs` → returns ClassNode with `methodIds: ['IngestUrlHandler.EnqueueAsync', 'IngestUrlHandler.ExecuteAsync', …]` + MethodNodes. (Earlier draft of this plan said `HandleAsync`; the lumen handler today exposes `EnqueueAsync` (queue path) and `ExecuteAsync` (execute path) and no `HandleAsync`.)
 
 ### 3.2 BC classifier + entry detector port — AFK
 

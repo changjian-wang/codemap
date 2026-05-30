@@ -1,10 +1,11 @@
-// Phase 3.3b -- intent-routed chat participant for the v4 stack.
+// Phase 3.3b/3.4 -- intent-routed chat participant for the v4 stack.
 //
 // Wires the v4 orchestrator (scanner -> analyzer -> calibrator -> aggregator)
 // into the @codemap chat surface. Slash commands dispatch through
-// responders.ts for /why, /focus, /explain, /entries; /eval is deferred
-// to Phase 3.4 (scorer rewrite). The most recently generated graph is
-// kept in a module-level slot and reused by the sub-commands.
+// responders.ts for /why, /focus, /explain, /entries; /eval (3.4) loads
+// a hand-authored golden and runs the v2 scorer. The most recently
+// generated graph is kept in a module-level slot and reused by the
+// sub-commands.
 
 import * as vscode from 'vscode';
 import * as path from 'path';
@@ -24,6 +25,7 @@ import { DEFAULT_SCAN_OPTIONS } from '../orchestrator/workspace-scanner';
 import { VscodeLmClient } from '../orchestrator/vscode-lm-client';
 import { CalibratorRegistry } from '../calibration/registry';
 import { CSharpCalibratorHost } from '../calibration/host/csharp-host';
+import { scoreGraph, type EvalScore, type GoldenSample } from '../eval/score';
 import type { CodeMapGraph } from '../shared/types';
 import type { CalibratorService } from '../calibration/calibrator-service';
 
@@ -59,7 +61,7 @@ export function registerChatParticipant(context: vscode.ExtensionContext): vscod
         await handleExplain(response);
         return;
       case 'eval':
-        await handleEval(response);
+        await handleEval(intent, response);
         return;
       case 'entries':
         await handleEntries(response);
@@ -74,7 +76,7 @@ export function registerChatParticipant(context: vscode.ExtensionContext): vscod
             '- `@codemap /why <Class>` -- explain partial/unverified state',
             '- `@codemap /explain unverified` -- list every unverified class',
             '- `@codemap /entries` -- list entry-point classes',
-            '- `@codemap /eval` -- _(deferred to Phase 3.4 -- v2 scorer)_',
+            '- `@codemap /eval [<path>]` -- score the cached graph against a golden YAML/JSON',
           ].join('\n'),
         );
         return;
@@ -292,16 +294,149 @@ async function handleEntries(response: vscode.ChatResponseStream): Promise<void>
   response.markdown(result.markdown);
 }
 
-async function handleEval(response: vscode.ChatResponseStream): Promise<void> {
-  response.markdown(
-    [
-      '`/eval` is **deferred to Phase 3.4** (v2 scorer rewrite).',
-      '',
-      'The legacy scorer compared a class-level graph against a golden YAML. v2 emits ',
-      'method edges plus a derived class-edge view; the scorer needs to be re-implemented ',
-      'against both. Track the slice in `docs/plan/v4-plan.md` (Phase 3.4).',
-    ].join('\n'),
+async function handleEval(
+  intent: ChatIntent,
+  response: vscode.ChatResponseStream,
+): Promise<void> {
+  const cached = requireCachedGraph(response);
+  if (!cached) return;
+
+  const config = vscode.workspace.getConfiguration('codemap');
+  const settingPath = (config.get<string>('devGoldenPath', '') ?? '').trim();
+  const override = intent.target?.trim();
+  const found = await locateGolden(cached.folder, override, settingPath);
+  if (!found) {
+    response.markdown(
+      [
+        '_No golden file found._ Looked at:',
+        override ? `- \`${override}\` (from /eval argument)` : null,
+        settingPath ? `- \`${settingPath}\` (from codemap.devGoldenPath)` : null,
+        '- `.codemap/golden.json` (workspace default)',
+      ]
+        .filter((x): x is string => x !== null)
+        .join('\n'),
+    );
+    return;
+  }
+
+  let golden: GoldenSample;
+  try {
+    golden = await readGolden(found.uri);
+  } catch (e) {
+    response.markdown(
+      `MISS Failed to parse golden at \`${vscode.workspace.asRelativePath(found.uri, false)}\`: ${(e as Error).message}`,
+    );
+    return;
+  }
+
+  const sc = scoreGraph(cached.graph, golden);
+  response.markdown(formatScoreMarkdown(sc, golden, found.uri));
+}
+
+interface GoldenLocation {
+  uri: vscode.Uri;
+  source: 'argument' | 'setting' | 'default';
+}
+
+async function locateGolden(
+  folder: vscode.WorkspaceFolder,
+  override: string | undefined,
+  settingPath: string,
+): Promise<GoldenLocation | undefined> {
+  const candidates: { uri: vscode.Uri; source: GoldenLocation['source'] }[] = [];
+  if (override && override.length > 0) {
+    candidates.push({ uri: resolveGoldenUri(folder, override), source: 'argument' });
+  }
+  if (settingPath.length > 0) {
+    candidates.push({ uri: resolveGoldenUri(folder, settingPath), source: 'setting' });
+  }
+  candidates.push({
+    uri: vscode.Uri.joinPath(folder.uri, '.codemap', 'golden.json'),
+    source: 'default',
+  });
+  for (const c of candidates) {
+    try {
+      await vscode.workspace.fs.stat(c.uri);
+      return c;
+    } catch {
+      // try next
+    }
+  }
+  return undefined;
+}
+
+function resolveGoldenUri(folder: vscode.WorkspaceFolder, p: string): vscode.Uri {
+  return path.isAbsolute(p)
+    ? vscode.Uri.file(p)
+    : vscode.Uri.joinPath(folder.uri, p);
+}
+
+async function readGolden(uri: vscode.Uri): Promise<GoldenSample> {
+  const bytes = await vscode.workspace.fs.readFile(uri);
+  const text = Buffer.from(bytes).toString('utf8');
+  const ext = path.extname(uri.fsPath).toLowerCase();
+  if (ext === '.json') return JSON.parse(text) as GoldenSample;
+  const YAML = await import('yaml');
+  return YAML.parse(text) as GoldenSample;
+}
+
+function fmtScore(sc: EvalScore): string {
+  return `P=${sc.precision.toFixed(3)} R=${sc.recall.toFixed(3)} F1=${sc.f1.toFixed(3)}`;
+}
+
+function formatScoreMarkdown(
+  sc: ReturnType<typeof scoreGraph>,
+  golden: GoldenSample,
+  goldenUri: vscode.Uri,
+): string {
+  const lines: string[] = [];
+  lines.push(`**Eval against** \`${vscode.workspace.asRelativePath(goldenUri, false)}\` (${golden.name})`);
+  if (golden.scopeFiles && golden.scopeFiles.length > 0) {
+    lines.push(`Scope: \`${golden.scopeFiles.join('`, `')}\``);
+  }
+  lines.push('');
+  lines.push(`- Classes:      ${fmtScore(sc.classes)}`);
+  lines.push(`- Class edges:  ${fmtScore(sc.classEdges)}`);
+  if (sc.methods && sc.methodEdges) {
+    lines.push(`- Methods:      ${fmtScore(sc.methods)}`);
+    lines.push(`- Method edges: ${fmtScore(sc.methodEdges)}`);
+  }
+
+  const cd = sc.diff.classes;
+  const summarise = (label: string, items: string[]): void => {
+    if (items.length === 0) return;
+    const shown = items.slice(0, 8);
+    lines.push('');
+    lines.push(`**${label} (${items.length}):**`);
+    for (const i of shown) lines.push(`- \`${i}\``);
+    if (items.length > shown.length) lines.push(`- _...and ${items.length - shown.length} more_`);
+  };
+  summarise('Missing class nodes', cd.missingNodes);
+  summarise('Extra class nodes', cd.extraNodes);
+  summarise(
+    'Missing class edges',
+    cd.missingEdges.map((e) => `${e.from} -> ${e.to}`),
   );
+  summarise(
+    'Extra class edges',
+    cd.extraEdges.map((e) => `${e.from} -> ${e.to}`),
+  );
+
+  if (sc.diff.methods) {
+    const md = sc.diff.methods;
+    summarise('Missing method nodes', md.missingNodes);
+    summarise('Extra method nodes', md.extraNodes);
+    summarise(
+      'Missing method edges',
+      md.missingEdges.map((e) => `${e.from} -> ${e.to}`),
+    );
+    summarise(
+      'Extra method edges',
+      md.extraEdges.map((e) => `${e.from} -> ${e.to}`),
+    );
+  }
+
+  return lines.join('\n');
 }
 
 function requireCachedGraph(response: vscode.ChatResponseStream): CachedGraph | null {

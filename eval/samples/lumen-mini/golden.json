@@ -1,0 +1,43 @@
+{
+  "name": "lumen-mini fixture self-check",
+  "description": "Smoke-check that the v2 scorer matches the canonical fixture against itself.",
+  "scopeFiles": ["apps/api/src/Lumen.Modules.Capture", "apps/api/src/Lumen.Modules.Recall"],
+  "classNodes": [
+    "IngestUrlHandler",
+    "WebContentExtractor",
+    "ChunkStore",
+    "AskByQueryHandler",
+    "OpenAIEmbedder"
+  ],
+  "classEdges": [
+    { "from": "IngestUrlHandler", "to": "WebContentExtractor" },
+    { "from": "IngestUrlHandler", "to": "ChunkStore" },
+    { "from": "WebContentExtractor", "to": "ext:SmartReader", "kind": "external_calls" },
+    { "from": "ChunkStore", "to": "ext:Dawning.ORM.Dapper", "kind": "external_calls" },
+    { "from": "ChunkStore", "to": "ext:Pgvector", "kind": "external_calls" },
+    { "from": "AskByQueryHandler", "to": "OpenAIEmbedder" },
+    { "from": "AskByQueryHandler", "to": "ChunkStore" },
+    { "from": "AskByQueryHandler", "to": "GroundedAskPromptsV2" },
+    { "from": "OpenAIEmbedder", "to": "ext:OpenAI", "kind": "external_calls" }
+  ],
+  "methodNodes": [
+    "IngestUrlHandler.EnqueueAsync",
+    "IngestUrlHandler.ExecuteAsync",
+    "WebContentExtractor.ExtractAsync",
+    "ChunkStore.InsertRangeAsync",
+    "ChunkStore.SearchByVectorAsync",
+    "AskByQueryHandler.HandleAsync",
+    "OpenAIEmbedder.EmbedAsync"
+  ],
+  "methodEdges": [
+    { "from": "IngestUrlHandler.ExecuteAsync", "to": "WebContentExtractor.ExtractAsync" },
+    { "from": "IngestUrlHandler.ExecuteAsync", "to": "ChunkStore.InsertRangeAsync" },
+    { "from": "WebContentExtractor.ExtractAsync", "to": "ext:SmartReader", "kind": "external_calls" },
+    { "from": "ChunkStore.InsertRangeAsync", "to": "ext:Dawning.ORM.Dapper", "kind": "external_calls" },
+    { "from": "ChunkStore.SearchByVectorAsync", "to": "ext:Pgvector", "kind": "external_calls" },
+    { "from": "AskByQueryHandler.HandleAsync", "to": "OpenAIEmbedder.EmbedAsync" },
+    { "from": "AskByQueryHandler.HandleAsync", "to": "ChunkStore.SearchByVectorAsync" },
+    { "from": "AskByQueryHandler.HandleAsync", "to": "GroundedAskPromptsV2" },
+    { "from": "OpenAIEmbedder.EmbedAsync", "to": "ext:OpenAI", "kind": "external_calls" }
+  ]
+}

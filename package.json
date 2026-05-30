@@ -167,7 +167,7 @@
     "package": "npm run build && vsce package",
     "test": "vitest run",
     "test:watch": "vitest",
-    "eval": "node -e \"console.error('eval rewrite pending — see docs/plan/v4-plan.md (Phase 3.3)'); process.exit(1)\"",
+    "eval": "ts-node --project eval/tsconfig.json eval/score-cli.ts",
     "lint": "tsc --noEmit"
   },
   "devDependencies": {

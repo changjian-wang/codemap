@@ -1,21 +1,34 @@
-// Phase 3.1 -- single-file LLM analyzer.
+// Phase 3.1 + 3.2 -- single-file LLM analyzer.
 //
 // Drives an LLM through the analyzer prompt and returns v2-shaped
 // ClassNode + MethodNode arrays for the file. This slice produces ONE
 // file at a time -- multi-file aggregation into a CodeMapGraph is the
-// orchestrator's next job (Phase 3.2+).
+// orchestrator's next job (Phase 3.3+).
 //
 // Calibration is NOT performed here: every returned node gets
 // `verification: 'unverified'`. Edges are not produced at all (those
 // come from CalibratorService.resolveCallees in a later pass).
 //
 // Fields the LLM does not see are filled with safe defaults:
-//   ClassNode.boundedContext = ''   (Phase 3.2 BC classifier fills)
+//   ClassNode.boundedContext = applyBoundedContext (Phase 3.2 BC classifier)
 //   ClassNode.file            = AnalyzeInput.filePath
 //   ClassNode.verification    = 'unverified'
 //   MethodNode.verification   = 'unverified'
+//
+// Entry-point tagging (Phase 3.2): the LLM is now allowed to emit
+// `isEntry`/`entryKind`/`entryMeta`; we validate them against the v2
+// EntryKind union and lift them onto ClassNode unchanged.
 
-import type { ClassNode, MethodNode, NodeKind, RiskType, Visibility } from '../shared/types';
+import type {
+  ClassNode,
+  EntryKind,
+  EntryMeta,
+  MethodNode,
+  NodeKind,
+  RiskType,
+  Visibility,
+} from '../shared/types';
+import { applyBoundedContext } from './bc-classifier';
 import {
   buildUserMessage,
   SYSTEM_PROMPT,
@@ -50,6 +63,13 @@ export interface AnalyzeResult {
 
 const VALID_NODE_KINDS = new Set<NodeKind>(['class', 'interface', 'record', 'enum', 'struct']);
 const VALID_VISIBILITY = new Set<Visibility>(['public', 'private', 'protected', 'internal']);
+const VALID_ENTRY_KINDS = new Set<EntryKind>([
+  'http_endpoint',
+  'cli_main',
+  'worker',
+  'sample',
+  'public_api',
+]);
 const VALID_RISK_TYPES = new Set<RiskType>([
   'security',
   'external_io',
@@ -94,6 +114,9 @@ export async function analyzeFile(input: AnalyzeInput, llm: LlmClient): Promise<
         methods.push(toMethodNode(m));
       }
       enforceMethodOwnership(classes, methods, parseErrors);
+      if (classes.length > 0) {
+        applyBoundedContext(classes);
+      }
     }
   } else if (raw.trim().length > 0) {
     parseErrors.push({
@@ -189,6 +212,7 @@ function validateClassFragment(
       throw new Error('methodIds is not a string[]');
     }
     const risks = validateClassRisks(raw['risks'], `${path}.risks`);
+    const { isEntry, entryKind, entryMeta } = validateEntryFields(raw, path, errors);
     return {
       id,
       kind: kind as NodeKind,
@@ -198,6 +222,9 @@ function validateClassFragment(
       confidence,
       risks,
       methodIds: methodIdsRaw as string[],
+      isEntry,
+      entryKind,
+      entryMeta,
     };
   } catch (e) {
     errors.push({ reason: `${path}: ${(e as Error).message}`, raw: JSON.stringify(raw).slice(0, 200) });
@@ -276,6 +303,93 @@ function validateClassRisks(value: unknown, path: string): { type: RiskType; des
   return out;
 }
 
+interface EntryFields {
+  isEntry?: boolean;
+  entryKind?: EntryKind;
+  entryMeta?: EntryMeta;
+}
+
+function validateEntryFields(
+  raw: Record<string, unknown>,
+  path: string,
+  errors: ParseError[]
+): EntryFields {
+  const isEntryRaw = raw['isEntry'];
+  let isEntry: boolean | undefined;
+  if (isEntryRaw !== undefined && isEntryRaw !== null) {
+    if (typeof isEntryRaw !== 'boolean') {
+      errors.push({
+        reason: `${path}.isEntry is not a boolean (got ${typeof isEntryRaw})`,
+        raw: String(isEntryRaw).slice(0, 200),
+      });
+    } else {
+      isEntry = isEntryRaw;
+    }
+  }
+
+  const entryKindRaw = raw['entryKind'];
+  let entryKind: EntryKind | undefined;
+  if (entryKindRaw !== undefined && entryKindRaw !== null) {
+    if (typeof entryKindRaw !== 'string' || !VALID_ENTRY_KINDS.has(entryKindRaw as EntryKind)) {
+      errors.push({
+        reason: `${path}.entryKind: unknown EntryKind ${String(entryKindRaw)}`,
+        raw: String(entryKindRaw).slice(0, 200),
+      });
+    } else {
+      entryKind = entryKindRaw as EntryKind;
+    }
+  }
+
+  const entryMetaRaw = raw['entryMeta'];
+  let entryMeta: EntryMeta | undefined;
+  if (entryMetaRaw !== undefined && entryMetaRaw !== null) {
+    if (!isObject(entryMetaRaw)) {
+      errors.push({
+        reason: `${path}.entryMeta is not an object`,
+        raw: JSON.stringify(entryMetaRaw).slice(0, 200),
+      });
+    } else {
+      const built: EntryMeta = {};
+      const routes = stringArrayOrUndefined(entryMetaRaw, 'routes', `${path}.entryMeta`, errors);
+      if (routes) built.routes = routes;
+      const commands = stringArrayOrUndefined(entryMetaRaw, 'commands', `${path}.entryMeta`, errors);
+      if (commands) built.commands = commands;
+      const sampleName = optionalString(entryMetaRaw, 'sampleName');
+      if (sampleName !== undefined) built.sampleName = sampleName;
+      const publicApis = stringArrayOrUndefined(entryMetaRaw, 'publicApis', `${path}.entryMeta`, errors);
+      if (publicApis) built.publicApis = publicApis;
+      if (
+        built.routes !== undefined ||
+        built.commands !== undefined ||
+        built.sampleName !== undefined ||
+        built.publicApis !== undefined
+      ) {
+        entryMeta = built;
+      }
+    }
+  }
+
+  return { isEntry, entryKind, entryMeta };
+}
+
+function stringArrayOrUndefined(
+  obj: Record<string, unknown>,
+  key: string,
+  path: string,
+  errors: ParseError[]
+): string[] | undefined {
+  const v = obj[key];
+  if (v === undefined || v === null) return undefined;
+  if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) {
+    errors.push({
+      reason: `${path}.${key} is not a string[]`,
+      raw: JSON.stringify(v).slice(0, 200),
+    });
+    return undefined;
+  }
+  return v as string[];
+}
+
 function validateMethodRisks(value: unknown, path: string): RiskType[] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) throw new Error(`${path} is not an array`);
@@ -340,7 +454,7 @@ function enforceMethodOwnership(
 // -------------------------------------------------------------------------
 
 function toClassNode(frag: LlmClassNodeFragment, filePath: string): ClassNode {
-  return {
+  const node: ClassNode = {
     id: frag.id,
     kind: frag.kind,
     boundedContext: '',
@@ -353,6 +467,10 @@ function toClassNode(frag: LlmClassNodeFragment, filePath: string): ClassNode {
     methodIds: frag.methodIds,
     verification: 'unverified',
   };
+  if (frag.isEntry !== undefined) node.isEntry = frag.isEntry;
+  if (frag.entryKind !== undefined) node.entryKind = frag.entryKind;
+  if (frag.entryMeta !== undefined) node.entryMeta = frag.entryMeta;
+  return node;
 }
 
 function toMethodNode(frag: LlmMethodNodeFragment): MethodNode {

@@ -1,13 +1,17 @@
-// Phase 3.1 -- analyzer prompt.
+// Phase 3.1 + 3.2 -- analyzer prompt.
 //
 // Narrow contract: extract every top-level type declaration and its
 // methods from a single source file, returning two fenced JSON blocks.
 // Constructors are intentionally excluded (the v2 shape contract: they
-// surface in the detail panel only, never as MethodNodes). Bounded-
-// context classification and entry-point detection are NOT part of this
-// prompt -- those belong to Phase 3.2.
+// surface in the detail panel only, never as MethodNodes).
+//
+// Phase 3.2 adds entry-point tagging: the LLM may now emit `isEntry`,
+// `entryKind`, and `entryMeta` on a ClassNode per the rules composed by
+// `entry-detection/`. Bounded-context classification is still NOT the
+// LLM's job -- it runs deterministically post-stream from the file path.
 
 import type { ClassNode, MethodNode } from '../shared/types';
+import { ENTRY_GUIDANCE_SECTION } from './entry-detection';
 
 export interface LlmClassNodeFragment {
   id: ClassNode['id'];
@@ -18,6 +22,9 @@ export interface LlmClassNodeFragment {
   confidence: ClassNode['confidence'];
   risks: ClassNode['risks'];
   methodIds: ClassNode['methodIds'];
+  isEntry?: ClassNode['isEntry'];
+  entryKind?: ClassNode['entryKind'];
+  entryMeta?: ClassNode['entryMeta'];
 }
 
 export interface LlmMethodNodeFragment {
@@ -65,7 +72,10 @@ Block 1 -- \`\`\`codemap-meta\`\`\` with this shape:
         { "type": "security|external_io|concurrency|low_confidence|high_coupling|missing_test",
           "desc": "<short>" }
       ],
-      "methodIds": ["<TypeName.MethodName>", ...]
+      "methodIds": ["<TypeName.MethodName>", ...],
+      "isEntry": <optional bool -- see Entry-point tagging below>,
+      "entryKind": "http_endpoint" | "cli_main" | "worker" | "sample" | "public_api",
+      "entryMeta": { "routes": [...], "commands": [...], "sampleName": "...", "publicApis": [...] }
     }
   ],
   "methods": [
@@ -106,12 +116,15 @@ CRITICAL RULES:
    declaration starts (the modifier or return-type keyword).
 7. \`startLine\`/\`endLine\` for class range cover the entire type body
    including opening and closing brace.
-8. Do NOT emit \`boundedContext\`, \`isEntry\`, \`entryKind\`, \`isShared\`,
-   \`verification\`, \`readState\`, or \`file\` fields -- those are
-   populated by downstream passes.
+8. Do NOT emit \`boundedContext\`, \`isShared\`, \`verification\`,
+   \`readState\`, or \`file\` fields -- those are populated by downstream
+   passes. You MAY emit \`isEntry\` / \`entryKind\` / \`entryMeta\` per the
+   Entry-point tagging section below.
 9. If the file contains no type declarations, emit an empty classes[]
    and methods[] -- do NOT skip the meta block.
-10. NO prose outside the two fenced blocks. NO additional fences.`;
+10. NO prose outside the two fenced blocks. NO additional fences.
+
+${ENTRY_GUIDANCE_SECTION}`;
 
 export function buildUserMessage(filePath: string, fileText: string): string {
   return [

@@ -119,7 +119,7 @@ describe('analyzeFile -- v2 shape from LLM reply', () => {
     expect(cls.file).toBe(
       'apps/api/src/Lumen.Modules.Capture/Features/IngestUrl/IngestUrlHandler.cs'
     );
-    expect(cls.boundedContext).toBe(''); // 3.2 BC classifier fills this
+    expect(cls.boundedContext).toBe('capture'); // Phase 3.2 BC classifier fills this
     expect(cls.verification).toBe('unverified');
     expect(cls.range).toEqual({ startLine: 12, endLine: 376 });
     expect(cls.methodIds).toContain('IngestUrlHandler.EnqueueAsync');
@@ -264,5 +264,86 @@ describe('analyzeFile -- v2 shape from LLM reply', () => {
     );
     // MockLlmClient doesn't honor signal; result should still be valid.
     expect(result.classes[0].id).toBe('IngestUrlHandler');
+  });
+
+  it('lifts entry tags (isEntry/entryKind/entryMeta) onto the ClassNode', async () => {
+    const reply = [
+      '```codemap-meta',
+      JSON.stringify({
+        classes: [
+          {
+            id: 'IngestUrlHandler',
+            kind: 'class',
+            range: { startLine: 1, endLine: 50 },
+            intent: 'HTTP entry for URL capture.',
+            confidence: 0.9,
+            risks: [],
+            methodIds: ['IngestUrlHandler.HandleAsync'],
+            isEntry: true,
+            entryKind: 'http_endpoint',
+            entryMeta: { routes: ['POST /api/captures/url'] },
+          },
+        ],
+        methods: [
+          {
+            id: 'IngestUrlHandler.HandleAsync',
+            ownerClassId: 'IngestUrlHandler',
+            name: 'HandleAsync',
+            signature: '()',
+            line: 5,
+            visibility: 'public',
+            risks: [],
+          },
+        ],
+      }),
+      '```',
+    ].join('\n');
+    const llm = new MockLlmClient([reply]);
+    const result = await analyzeFile(
+      {
+        filePath: 'apps/api/src/Lumen.Modules.Capture/Features/IngestUrl/IngestUrlHandler.cs',
+        fileText: '',
+        languageId: 'csharp',
+      },
+      llm
+    );
+    expect(result.parseErrors).toEqual([]);
+    const cls = result.classes[0];
+    expect(cls.isEntry).toBe(true);
+    expect(cls.entryKind).toBe('http_endpoint');
+    expect(cls.entryMeta).toEqual({ routes: ['POST /api/captures/url'] });
+    expect(cls.boundedContext).toBe('capture');
+  });
+
+  it('records a parseError for an unknown entryKind and drops the field', async () => {
+    const reply = [
+      '```codemap-meta',
+      JSON.stringify({
+        classes: [
+          {
+            id: 'Foo',
+            kind: 'class',
+            range: { startLine: 1, endLine: 10 },
+            intent: 'x',
+            confidence: 0.5,
+            risks: [],
+            methodIds: [],
+            isEntry: true,
+            entryKind: 'mystery_kind',
+          },
+        ],
+        methods: [],
+      }),
+      '```',
+    ].join('\n');
+    const llm = new MockLlmClient([reply]);
+    const result = await analyzeFile(
+      { filePath: 'x.cs', fileText: '', languageId: 'csharp' },
+      llm
+    );
+    expect(result.classes).toHaveLength(1);
+    expect(result.classes[0].isEntry).toBe(true);
+    expect(result.classes[0].entryKind).toBeUndefined();
+    expect(result.parseErrors.some((e) => /unknown EntryKind/.test(e.reason))).toBe(true);
   });
 });

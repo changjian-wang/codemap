@@ -23,8 +23,6 @@ import {
   Node,
   type CallExpression,
   type ClassDeclaration,
-  type FunctionDeclaration,
-  type MethodDeclaration,
   type NewExpression,
   type SourceFile,
   type Symbol as TsSymbol,
@@ -98,26 +96,29 @@ export class TypeScriptCalibrator implements CalibratorService {
       throw new TypeScriptCalibratorError(`source file not found: ${params.filePath}`);
     }
 
-    const decl = findMethodDeclaration(sourceFile, params.classId, params.methodName, params.line);
-    if (!decl) {
+    const match = findMethodMatch(sourceFile, params.classId, params.methodName, params.line);
+    if (!match) {
       throw new TypeScriptCalibratorError(
         `method not found: ${params.classId || '<top-level>'}.${params.methodName} (line ${params.line})`,
       );
     }
 
     const callees: Callee[] = [];
-    const calls = decl.getDescendantsOfKind(SyntaxKind.CallExpression);
+    const calls = match.body.getDescendantsOfKind(SyntaxKind.CallExpression);
     for (const call of calls) {
       const callee = projectCall(call);
       if (callee) callees.push(callee);
     }
-    const news = decl.getDescendantsOfKind(SyntaxKind.NewExpression);
+    const news = match.body.getDescendantsOfKind(SyntaxKind.NewExpression);
     for (const ne of news) {
       const callee = projectNew(ne);
       if (callee) callees.push(callee);
     }
 
-    const fqn = symbolToFqn(decl.getSymbol(), `${params.classId || ''}.${params.methodName}`);
+    const fqn = symbolToFqn(
+      match.symbol,
+      `${match.containingType ? match.containingType + '.' : ''}${params.methodName}`,
+    );
 
     return {
       filePath: sourceFile.getFilePath(),
@@ -174,24 +175,86 @@ function findSourceFile(project: Project, filePath: string): SourceFile | undefi
     .find((sf) => sf.getFilePath().toLowerCase() === lower);
 }
 
-function findMethodDeclaration(
+// Phase 2.7: matched method coordinates passed to the call walker.
+// `body` is the node we descend for CallExpression / NewExpression, which
+// for arrow-class-properties and top-level-arrow-consts is the inner
+// arrow function, not the outer property / variable declaration.
+interface MethodMatch {
+  body: Node;
+  symbol: TsSymbol | undefined;
+  spanStartLine: number;
+  spanEndLine: number;
+  containingType: string;
+}
+
+function findMethodMatch(
   sourceFile: SourceFile,
   classId: string,
   methodName: string,
   line: number,
-): FunctionDeclaration | MethodDeclaration | undefined {
-  const candidates: Array<FunctionDeclaration | MethodDeclaration> = [];
+): MethodMatch | undefined {
+  const candidates: MethodMatch[] = [];
 
   if (!classId) {
+    // Top-level function declarations.
     for (const fn of sourceFile.getFunctions()) {
-      if (fn.getName() === methodName) candidates.push(fn);
+      if (fn.getName() === methodName) {
+        candidates.push({
+          body: fn,
+          symbol: fn.getSymbol(),
+          spanStartLine: fn.getStartLineNumber(),
+          spanEndLine: fn.getEndLineNumber(),
+          containingType: '',
+        });
+      }
+    }
+    // Top-level `const foo = () => {}` / `const foo = function () {}`.
+    for (const vd of sourceFile.getVariableDeclarations()) {
+      if (vd.getName() !== methodName) continue;
+      const init = vd.getInitializer();
+      if (!init) continue;
+      if (Node.isArrowFunction(init) || Node.isFunctionExpression(init)) {
+        candidates.push({
+          body: init,
+          symbol: vd.getSymbol(),
+          spanStartLine: vd.getStartLineNumber(),
+          spanEndLine: vd.getEndLineNumber(),
+          containingType: '',
+        });
+      }
     }
   }
 
   for (const cls of sourceFile.getClasses()) {
     if (classId && !matchesClass(cls, classId)) continue;
+    const className = cls.getName() ?? '';
+
     for (const m of cls.getMethods()) {
-      if (m.getName() === methodName) candidates.push(m);
+      if (m.getName() === methodName) {
+        candidates.push({
+          body: m,
+          symbol: m.getSymbol(),
+          spanStartLine: m.getStartLineNumber(),
+          spanEndLine: m.getEndLineNumber(),
+          containingType: className,
+        });
+      }
+    }
+    // Class properties initialised with an arrow / function expression
+    // (e.g. `reset = (): void => {}`).
+    for (const prop of cls.getProperties()) {
+      if (prop.getName() !== methodName) continue;
+      const init = prop.getInitializer();
+      if (!init) continue;
+      if (Node.isArrowFunction(init) || Node.isFunctionExpression(init)) {
+        candidates.push({
+          body: init,
+          symbol: prop.getSymbol(),
+          spanStartLine: prop.getStartLineNumber(),
+          spanEndLine: prop.getEndLineNumber(),
+          containingType: className,
+        });
+      }
     }
   }
 
@@ -199,17 +262,15 @@ function findMethodDeclaration(
   if (candidates.length === 1) return candidates[0];
 
   // Overload disambiguation by line span (mirrors the C# resolver).
-  const covering = candidates.find((c) => {
-    const startLine = c.getStartLineNumber();
-    const endLine = c.getEndLineNumber();
-    return line >= startLine && line <= endLine;
-  });
+  const covering = candidates.find(
+    (c) => line >= c.spanStartLine && line <= c.spanEndLine,
+  );
   if (covering) return covering;
 
   let closest = candidates[0];
-  let closestDelta = Math.abs(closest.getStartLineNumber() - line);
+  let closestDelta = Math.abs(closest.spanStartLine - line);
   for (const c of candidates.slice(1)) {
-    const delta = Math.abs(c.getStartLineNumber() - line);
+    const delta = Math.abs(c.spanStartLine - line);
     if (delta < closestDelta) {
       closest = c;
       closestDelta = delta;
@@ -280,13 +341,24 @@ function classifyCall(call: CallExpression, symbol: TsSymbol): CalleeKind {
   if (decls.length === 0) return 'unknown';
   const first = decls[0];
   if (Node.isMethodDeclaration(first) || Node.isMethodSignature(first)) return 'method';
+  if (Node.isPropertyDeclaration(first) || Node.isPropertySignature(first)) {
+    // Arrow function attached to a class property surfaces as a method
+    // call from the caller's perspective.
+    return 'method';
+  }
   if (Node.isFunctionDeclaration(first)) {
     const ancestorFn = first.getFirstAncestor((a) => Node.isFunctionLikeDeclaration(a));
     return ancestorFn ? 'localFunction' : 'method';
   }
+  if (Node.isVariableDeclaration(first)) {
+    const init = first.getInitializer();
+    if (init && (Node.isArrowFunction(init) || Node.isFunctionExpression(init))) {
+      const ancestorFn = first.getFirstAncestor((a) => Node.isFunctionLikeDeclaration(a));
+      return ancestorFn ? 'localFunction' : 'method';
+    }
+    return 'method';
+  }
   if (Node.isConstructorDeclaration(first)) return 'constructor';
-  // Property assignments (arrow functions) -- treated as 'method' for 2.6
-  // parity; 2.7 will refine.
   void call;
   return 'method';
 }
@@ -347,7 +419,12 @@ function makeUnknown(displayName: string, invocationLine: number): Callee {
 function deriveContainingType(symbol: TsSymbol): string {
   const decls = symbol.getDeclarations();
   for (const d of decls) {
-    if (Node.isMethodDeclaration(d) || Node.isMethodSignature(d)) {
+    if (
+      Node.isMethodDeclaration(d) ||
+      Node.isMethodSignature(d) ||
+      Node.isPropertyDeclaration(d) ||
+      Node.isPropertySignature(d)
+    ) {
       const parent = d.getFirstAncestor(
         (a) => Node.isClassDeclaration(a) || Node.isInterfaceDeclaration(a),
       );

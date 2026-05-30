@@ -75,7 +75,7 @@ class RpcClient {
     }
   }
 
-  send(method: string, params: unknown, timeoutMs = 10000): Promise<{ result?: unknown; error?: CalibratorErrorEnvelope }> {
+  send(method: string, params: unknown, timeoutMs = 25000): Promise<{ result?: unknown; error?: CalibratorErrorEnvelope }> {
     const id = this.nextId++;
     const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params });
     const frame = `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\r\n\r\n${payload}`;

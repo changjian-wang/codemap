@@ -9,9 +9,10 @@ namespace CodeMap.Calibrator;
 
 public sealed class CalibratorService
 {
-    /// <summary>Fired when a client invokes <see cref="ShutdownAsync"/>.</summary>
+    /// <summary>Fired when a client invokes <see cref="Shutdown"/>.</summary>
     public event Action? OnShutdownRequested;
 
+    private readonly WorkspaceHost _workspaceHost = new();
     private InitializeResult? _initialized;
 
     [JsonRpcMethod("initialize", UseSingleObjectParameterDeserialization = true)]
@@ -25,7 +26,7 @@ public sealed class CalibratorService
             ServerVersion: ThisAssemblyVersion(),
             ProtocolVersion: 1,
             Capabilities: new ServerCapabilities(
-                SlnxLoading: false,         // Phase 2.2
+                SlnxLoading: true,
                 ResolveCallees: false       // Phase 2.3
             )
         );
@@ -46,6 +47,17 @@ public sealed class CalibratorService
         );
     }
 
+    [JsonRpcMethod("loadSolution", UseSingleObjectParameterDeserialization = true)]
+    public Task<LoadSolutionResult> LoadSolutionAsync(LoadSolutionParams @params, CancellationToken ct)
+    {
+        if (@params is null) throw new ArgumentNullException(nameof(@params));
+        if (string.IsNullOrWhiteSpace(@params.SlnxPath))
+        {
+            throw new ArgumentException("slnxPath is required", nameof(@params));
+        }
+        return _workspaceHost.LoadSolutionAsync(@params.SlnxPath, ct);
+    }
+
     [JsonRpcMethod("shutdown")]
     public ShutdownResult Shutdown()
     {
@@ -57,6 +69,7 @@ public sealed class CalibratorService
         _ = Task.Run(async () =>
         {
             await Task.Delay(50).ConfigureAwait(false);
+            await _workspaceHost.DisposeAsync().ConfigureAwait(false);
             OnShutdownRequested?.Invoke();
         });
         return new ShutdownResult(Accepted: true);

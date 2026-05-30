@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 using StreamJsonRpc;
 
 namespace CodeMap.Calibrator;
@@ -29,6 +31,11 @@ internal static class Program
         Log($"codemap-calibrator-csharp starting (pid={Environment.ProcessId}, args=[{string.Join(' ', args)}])");
 
         var formatter = new JsonMessageFormatter();
+        // Force camelCase on the wire (both directions) so the TypeScript
+        // host sees idiomatic JSON-RPC payloads. Deserialization is
+        // case-insensitive by default, so PascalCase requests still bind.
+        formatter.JsonSerializer.ContractResolver = new CamelCasePropertyNamesContractResolver();
+        formatter.JsonSerializer.NullValueHandling = NullValueHandling.Ignore;
         var handler = new HeaderDelimitedMessageHandler(stdoutRaw, stdinRaw, formatter);
 
         var service = new CalibratorService();

@@ -1,18 +1,15 @@
 // Pure d3-force layout — no Pixi, no DOM. Testable in isolation.
 //
-// Phase 1.2 replaces the hand-written column packer with a force simulation:
-//   - every MethodNode (and every ext / stub card) becomes a sim node;
-//   - same-class methods get a strong intra-class link so they cluster into
-//     a swimlane card;
-//   - each bounded context owns a vertical band (an `forceX` target), so
-//     `capture` / `recall` / `shared` / `ext` stay chromatically AND spatially
-//     distinct (ADR-005 §7.1 lesson 2);
-//   - methodEdges add weak inter-node links so callers drift toward callees.
+// Phase 1.2 placed every METHOD as a sim node, which produced beautiful
+// mini-graphs on the 5-class lumen fixture but collapsed under 30+ real
+// classes (edges everywhere, cards overlapping, no navigation).
 //
-// The simulation is run to completion synchronously (no animation) and the
-// settled coordinates are frozen into a `LaneLayout`, so the rest of the scene
-// pipeline (node-renderer back-fills pill bounds, edge-routing reads them)
-// is unchanged.
+// "ALL mode" rewrite (post Phase 3.4 HITL): every CLASS is one sim node.
+// Cards are pre-sized from class name length + method-count badge, so the
+// collision radius is correct from tick 0. Inter-class pull comes from
+// graph.classEdges (already collapsed via aggregator). Methods are not
+// part of this view -- use the /focus chat command for a method-level
+// subgraph.
 
 import {
   forceSimulation,
@@ -33,29 +30,35 @@ import {
   type Swimlane,
   HEADER_H,
   METHOD_H,
-  CARD_PAD,
-  PILL_H,
   PAD,
 } from './lane-layout';
 
-// Tunables — kept in one block so the HITL visual pass can iterate quickly.
-const BAND_W = 320; // horizontal width allotted to each BC band
-const NODE_SPACING = 64; // collision radius driver between method nodes
-const INTRA_CLASS_STRENGTH = 0.9; // same-class methods clamp together
-const INTER_EDGE_STRENGTH = 0.06; // caller→callee weak pull
-const CHARGE = -480; // node repulsion
-const BAND_X_STRENGTH = 0.18; // how hard a node is pulled to its BC band centre
-const Y_GRAVITY = 0.04; // gentle vertical centring
-const SETTLE_TICKS = 400; // synchronous run length
-const LANE_PAD = 36; // padding around a swimlane's node bbox
+// Tunables -- HITL visual pass iterates here.
+const BAND_W = 280;
+const CARD_GAP = 24;            // collision spacing between cards (added to each card's half-extent)
+const INTER_EDGE_STRENGTH = 0.05;
+const CHARGE = -360;
+const BAND_X_STRENGTH = 0.20;
+const Y_GRAVITY = 0.03;
+const SETTLE_TICKS = 350;
+const LANE_PAD = 36;
+
+// Card sizing for ALL-collapsed mode. The card shows the header (class
+// name + entry badge) and a small "N methods" subtitle when applicable.
+const CARD_W_MIN = 160;
+const CARD_W_PER_CHAR = 8.5;
+const CARD_W_PAD = 56;
+const CARD_W_MAX = 360;
+const CARD_H_HEADER_ONLY = HEADER_H + 14;     // class card with no methods
+const CARD_H_WITH_BADGE = HEADER_H + 26;      // class card with N-methods subtitle
+const CARD_H_EXT = METHOD_H + 14;             // ext / stub cards
 
 interface SimNode extends SimulationNodeDatum {
   id: string;
-  classId: string;
   bc: string;
   bandX: number;
-  /** ext / stub cards have no methods; they render as a single node. */
-  isCard: boolean;
+  /** Half-width + CARD_GAP, used by forceCollide. */
+  radius: number;
 }
 
 interface SimLink extends SimulationLinkDatum<SimNode> {
@@ -63,17 +66,17 @@ interface SimLink extends SimulationLinkDatum<SimNode> {
 }
 
 interface NodeBucket {
-  /** Real class cards keyed by classId → contained method node ids. */
   classes: Record<string, ClassLayout>;
-  /** Every sim node (methods + ext/stub cards). */
   nodes: SimNode[];
 }
 
-/**
- * Build the force input from the graph: one sim node per method, one per
- * ext dep, one per unresolved stub target. Returns the class scaffolding so
- * the caller can frame swimlane cards once positions settle.
- */
+function measureCardWidth(name: string): number {
+  return Math.max(
+    CARD_W_MIN,
+    Math.min(CARD_W_MAX, Math.round(name.length * CARD_W_PER_CHAR + CARD_W_PAD)),
+  );
+}
+
 function buildNodes(graph: CodeMapGraph, bandOf: (bc: string) => number): NodeBucket {
   const classes: Record<string, ClassLayout> = {};
   const nodes: SimNode[] = [];
@@ -82,86 +85,84 @@ function buildNodes(graph: CodeMapGraph, bandOf: (bc: string) => number): NodeBu
     const bc = graph.boundedContexts.includes(c.boundedContext)
       ? c.boundedContext
       : 'shared';
+    const w = measureCardWidth(c.id);
+    const h = c.methodIds.length > 0 ? CARD_H_WITH_BADGE : CARD_H_HEADER_ONLY;
     classes[c.id] = {
       id: c.id,
       name: c.id,
       kind: 'real',
       bc,
-      x: 0, y: 0, w: 0, h: 0,
+      x: 0, y: 0, w, h,
       classNode: c,
       methodIds: c.methodIds,
       isEntry: !!c.isEntry,
       verification: c.verification,
     };
-    for (const mid of c.methodIds) {
-      nodes.push({ id: mid, classId: c.id, bc, bandX: bandOf(bc), isCard: false });
-    }
+    nodes.push({
+      id: c.id, bc, bandX: bandOf(bc),
+      radius: Math.max(w, h) / 2 + CARD_GAP,
+    });
   }
 
   for (const dep of Object.values(graph.externalDeps)) {
+    const w = measureCardWidth(dep.name);
     classes[dep.id] = {
       id: dep.id,
       name: dep.name,
       kind: 'ext',
       bc: 'ext',
-      x: 0, y: 0, w: 0, h: 0,
+      x: 0, y: 0, w, h: CARD_H_EXT,
       classNode: null,
       methodIds: [],
       isEntry: false,
       verification: null,
     };
-    nodes.push({ id: dep.id, classId: dep.id, bc: 'ext', bandX: bandOf('ext'), isCard: true });
+    nodes.push({
+      id: dep.id, bc: 'ext', bandX: bandOf('ext'),
+      radius: Math.max(w, CARD_H_EXT) / 2 + CARD_GAP,
+    });
   }
 
   // Class-id fallback: an edge target that is neither method, ext, nor real
-  // class becomes an italic stub card in the ext band.
+  // class becomes a stub card in the ext band.
   const referenced = new Set<string>();
   for (const e of graph.methodEdges) referenced.add(e.target);
+  for (const e of graph.classEdges) referenced.add(e.target);
   for (const t of referenced) {
     if (graph.methods[t] || graph.externalDeps[t] || graph.classes[t]) continue;
+    const w = measureCardWidth(t);
     classes[t] = {
       id: t,
       name: t,
       kind: 'stub',
       bc: 'ext',
-      x: 0, y: 0, w: 0, h: 0,
+      x: 0, y: 0, w, h: CARD_H_EXT,
       classNode: null,
       methodIds: [],
       isEntry: false,
       verification: null,
     };
-    nodes.push({ id: t, classId: t, bc: 'ext', bandX: bandOf('ext'), isCard: true });
+    nodes.push({
+      id: t, bc: 'ext', bandX: bandOf('ext'),
+      radius: Math.max(w, CARD_H_EXT) / 2 + CARD_GAP,
+    });
   }
 
   return { classes, nodes };
 }
 
-/** Intra-class (strong) + inter-edge (weak) links between sim nodes. */
 function buildLinks(graph: CodeMapGraph, ids: Set<string>): SimLink[] {
   const links: SimLink[] = [];
-
-  // Same-class methods chained so the cluster stays tight.
-  for (const c of Object.values(graph.classes)) {
-    const ms = c.methodIds.filter((m) => ids.has(m));
-    for (let i = 1; i < ms.length; i++) {
-      links.push({ source: ms[i - 1], target: ms[i], strength: INTRA_CLASS_STRENGTH });
-    }
-  }
-
-  // Caller → callee weak pull, only when both endpoints are sim nodes.
-  for (const e of graph.methodEdges) {
+  for (const e of graph.classEdges) {
     if (!ids.has(e.source) || !ids.has(e.target)) continue;
     if (e.source === e.target) continue;
     links.push({ source: e.source, target: e.target, strength: INTER_EDGE_STRENGTH });
   }
-
   return links;
 }
 
 /**
  * Run the simulation to a settled state and project it into a `LaneLayout`.
- * `screenW` only seeds the initial band centring; the final bbox drives
- * fit-to-screen downstream.
  */
 export function computeForceLayout(graph: CodeMapGraph, screenW: number): LaneLayout {
   const bcs = [...graph.boundedContexts, 'ext'];
@@ -170,8 +171,8 @@ export function computeForceLayout(graph: CodeMapGraph, screenW: number): LaneLa
     presentBcs.add(graph.boundedContexts.includes(c.boundedContext) ? c.boundedContext : 'shared');
   }
   if (Object.keys(graph.externalDeps).length > 0) presentBcs.add('ext');
-  for (const e of graph.methodEdges) {
-    if (!graph.methods[e.target] && !graph.externalDeps[e.target] && !graph.classes[e.target]) {
+  for (const e of graph.classEdges) {
+    if (!graph.externalDeps[e.target] && !graph.classes[e.target]) {
       presentBcs.add('ext');
     }
   }
@@ -189,11 +190,10 @@ export function computeForceLayout(graph: CodeMapGraph, screenW: number): LaneLa
   const ids = new Set(nodes.map((n) => n.id));
   const links = buildLinks(graph, ids);
 
-  // Seed positions near the band centre so the sim converges quickly and
-  // deterministically (no random jitter — repeatable layout per fixture).
+  // Deterministic seed so the layout is repeatable per fixture.
   nodes.forEach((n, i) => {
-    n.x = n.bandX + ((i % 5) - 2) * 8;
-    n.y = PAD.top + (i % 7) * NODE_SPACING;
+    n.x = n.bandX + ((i % 5) - 2) * 12;
+    n.y = PAD.top + (i % 9) * 80;
   });
 
   const sim: Simulation<SimNode, SimLink> = forceSimulation(nodes)
@@ -201,13 +201,13 @@ export function computeForceLayout(graph: CodeMapGraph, screenW: number): LaneLa
       'link',
       forceLink<SimNode, SimLink>(links)
         .id((d) => d.id)
-        .distance((l) => (l.strength >= INTRA_CLASS_STRENGTH ? NODE_SPACING : NODE_SPACING * 3))
+        .distance(220)
         .strength((l) => l.strength),
     )
     .force('charge', forceManyBody<SimNode>().strength(CHARGE))
     .force('bandX', forceX<SimNode>((d) => d.bandX).strength(BAND_X_STRENGTH))
     .force('gravityY', forceY<SimNode>(PAD.top + 200).strength(Y_GRAVITY))
-    .force('collide', forceCollide<SimNode>(NODE_SPACING / 2))
+    .force('collide', forceCollide<SimNode>((d) => d.radius))
     .stop();
 
   for (let i = 0; i < SETTLE_TICKS; i++) sim.tick();
@@ -340,54 +340,25 @@ function chooseColumnCount(cards: readonly ClassLayout[]): number {
   return Math.max(1, Math.min(cards.length, Math.round(ideal)));
 }
 
-/** Freeze settled node coords into class cards, method pills, and swimlanes. */
+/** Freeze settled node coords into class cards. methods stays empty in
+ *  ALL-collapsed mode. */
 function projectLayout(
   classes: Record<string, ClassLayout>,
   nodes: SimNode[],
   visibleBcs: string[],
   bandW: number,
 ): LaneLayout {
-  const posById = new Map<string, { x: number; y: number }>();
-  for (const n of nodes) posById.set(n.id, { x: n.x ?? 0, y: n.y ?? 0 });
-
   const methods: Record<string, MethodLayout> = {};
-  for (const n of nodes) {
-    if (n.isCard) continue;
-    const p = posById.get(n.id)!;
-    methods[n.id] = {
-      id: n.id,
-      classId: n.classId,
-      bc: n.bc,
-      cx: p.x,
-      cy: p.y,
-      pillL: 0, pillR: 0, pillCx: 0, pillCy: 0,
-    };
-  }
 
-  // Frame each real class card around the bbox of its method nodes.
-  for (const cl of Object.values(classes)) {
-    if (cl.kind === 'real' && cl.methodIds.length > 0) {
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const mid of cl.methodIds) {
-        const p = posById.get(mid);
-        if (!p) continue;
-        minX = Math.min(minX, p.x);
-        minY = Math.min(minY, p.y);
-        maxX = Math.max(maxX, p.x);
-        maxY = Math.max(maxY, p.y);
-      }
-      cl.x = minX - CARD_PAD - 12;
-      cl.y = minY - HEADER_H - PILL_H / 2 - 4;
-      cl.w = maxX - minX + 2 * (CARD_PAD + 12) + 160;
-      cl.h = maxY - minY + HEADER_H + PILL_H + 2 * CARD_PAD;
-    } else {
-      // ext / stub: a single-node card framed on its own position.
-      const p = posById.get(cl.id) ?? { x: 0, y: 0 };
-      cl.x = p.x - CARD_PAD;
-      cl.y = p.y - HEADER_H / 2 - CARD_PAD;
-      cl.w = 200;
-      cl.h = HEADER_H + METHOD_H + CARD_PAD;
-    }
+  // Each SimNode IS a class card; center the pre-sized card on the
+  // settled (x, y).
+  for (const n of nodes) {
+    const cl = classes[n.id];
+    if (!cl) continue;
+    const cx = n.x ?? 0;
+    const cy = n.y ?? 0;
+    cl.x = cx - cl.w / 2;
+    cl.y = cy - cl.h / 2;
   }
 
   const swimlanes = buildSwimlanes(classes, visibleBcs);

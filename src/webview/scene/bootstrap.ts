@@ -3,7 +3,7 @@
 // systems to use polyfilled code paths and must load BEFORE Application.
 import 'pixi.js/unsafe-eval';
 import { Application, Container } from 'pixi.js';
-import type { CodeMapGraph } from '../../shared/types';
+import type { CodeMapGraph, MethodEdge } from '../../shared/types';
 import { type LaneLayout, PAD } from './lane-layout';
 import { computeForceLayout } from './force-layout';
 import { buildRouter, type PillRect, type CardRect } from './edge-routing';
@@ -54,11 +54,26 @@ async function main(): Promise<void> {
   const layers = { bgLayer, nodeLayer, labelLayer };
   renderSwimlanes(layout, layers);
   const cards = renderClassCards(layout, layers);
+  // ALL-collapsed mode: skip method pills and the reading-order overlay --
+  // the cards are header-only and edges connect class card centres. Pass
+  // an empty pill map to interaction so its hover/dim logic still works.
   const methodPills = renderMethodPills(layout, graph, layers);
   renderReadingOrder(layout, graph, layers);
 
-  const router = buildRouter(toRoutingInput(layout), graph.methodEdges);
-  const edges = renderEdges(graph.methodEdges, router, edgeLayer);
+  // Build class-level edges (collapsed view) shaped like MethodEdge so the
+  // existing router / edge-renderer / interaction layer keep working
+  // unchanged. Router falls back to class rects when methods[id] is empty.
+  const displayEdges: MethodEdge[] = graph.classEdges.map((e, i) => ({
+    id: `c${i}`,
+    source: e.source,
+    target: e.target,
+    kind: e.kind,
+    verified: e.verified,
+  }));
+  const displayGraph: CodeMapGraph = { ...graph, methodEdges: displayEdges };
+
+  const router = buildRouter(toRoutingInput(layout), displayEdges);
+  const edges = renderEdges(displayEdges, router, edgeLayer);
 
   const tooltip = ensureTooltip();
   installInteraction({
@@ -66,7 +81,7 @@ async function main(): Promise<void> {
     root,
     edgeLayer,
     layout,
-    graph,
+    graph: displayGraph,
     router,
     methodPills,
     cards,

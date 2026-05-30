@@ -106,6 +106,23 @@ export function renderClassCards(layout: LaneLayout, layers: NodeLayers): Map<st
     labelLayer.addChild(title);
     group.push(title);
 
+    // ALL-collapsed mode: show "N methods" subtitle in lieu of method pills.
+    if (cl.kind === 'real' && cl.methodIds.length > 0) {
+      const subtitle = new Text({
+        text: `${cl.methodIds.length} method${cl.methodIds.length === 1 ? '' : 's'}`,
+        style: {
+          fill: TEXT_PRIMARY,
+          fontSize: 10,
+          fontFamily: SANS_FONT,
+        },
+      });
+      subtitle.alpha = 0.55;
+      subtitle.x = cl.x + CARD_PAD;
+      subtitle.y = cl.y + 24;
+      labelLayer.addChild(subtitle);
+      group.push(subtitle);
+    }
+
     if (cl.isEntry) {
       const badge = new Graphics();
       badge.circle(cl.x + cl.w - 14, cl.y + 14, 5).fill(ENTRY_RING);

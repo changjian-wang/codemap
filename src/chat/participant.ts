@@ -197,7 +197,12 @@ async function handleGenerate(
     return;
   } finally {
     onCancel.dispose();
-    await registry.dispose().catch(() => undefined);
+    // Cap dispose at 5s -- a hung child-process teardown must not block
+    // the chat turn from rendering its summary.
+    await Promise.race([
+      registry.dispose().catch(() => undefined),
+      new Promise<void>((res) => setTimeout(res, 5000)),
+    ]);
   }
 
   lastGraph = { graph: result.graph, folder: workspaceFolder, generatedAt: Date.now() };

@@ -176,8 +176,23 @@ export class CSharpCalibratorHost implements CalibratorService {
       return;
     }
 
+    // Guard against a child that already exited before dispose ran (the
+    // common case after a failed spawn: 'error' and 'exit' both fire
+    // synchronously, then a respawn-timer schedules a fresh attempt that
+    // also fails, leaving us with a `proc` reference whose 'exit' event
+    // is already in the past. `proc.once('exit', ...)` would then never
+    // fire and the dispose() promise would hang forever).
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      this.emit({ type: 'disposed' });
+      return;
+    }
+
     const exited = new Promise<void>((res) => {
       proc.once('exit', () => res());
+      // ENOENT (or any pre-fork spawn failure) only ever fires 'error',
+      // never 'exit'. Resolving on either lets dispose() unblock promptly
+      // instead of waiting out the SIGTERM/SIGKILL grace window.
+      proc.once('error', () => res());
     });
 
     // Best-effort graceful shutdown. We deliberately don't go through
@@ -211,7 +226,12 @@ export class CSharpCalibratorHost implements CalibratorService {
       }
     }, GRACEFUL_SHUTDOWN_MS + SIGTERM_GRACE_MS);
 
-    await exited;
+    await Promise.race([
+      exited,
+      new Promise<void>((res) =>
+        setTimeout(res, GRACEFUL_SHUTDOWN_MS + SIGTERM_GRACE_MS + 500),
+      ),
+    ]);
     clearTimeout(sigterm);
     clearTimeout(sigkill);
     this.emit({ type: 'disposed' });

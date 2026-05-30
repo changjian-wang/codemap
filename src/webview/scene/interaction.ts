@@ -7,7 +7,7 @@
 
 import type { Application, Container, Graphics } from 'pixi.js';
 import { Graphics as PixiGraphics } from 'pixi.js';
-import type { CodeMapGraph, MethodEdge } from '../../shared/types';
+import type { CodeMapGraph, MethodEdge, VerificationDetails, VerificationState } from '../../shared/types';
 import { type LaneLayout, PILL_H } from './lane-layout';
 import { type Router, bezierPt } from './edge-routing';
 import type { NodeGroup } from './node-renderer';
@@ -209,12 +209,20 @@ export function installInteraction(h: SceneHandles): void {
       if (m.intent) lines.push(m.intent);
       if (cls?.intent) lines.push(`[${cls.boundedContext}] ${cls.intent}`);
       if (m.risks && m.risks.length > 0) lines.push(`risks: ${m.risks.join(', ')}`);
+      appendVerificationDetail(lines, m.verification, cls?.verificationDetails);
       return lines.join('\n');
     }
     if (hit.kind === 'card') {
       const cl = h.layout.classes[hit.id];
       const dep = h.graph.externalDeps[hit.id];
       if (dep) return `${dep.name} (external ${dep.kind ?? 'dep'})\nclick to list call sites`;
+      const cls = h.graph.classes[hit.id];
+      if (cls) {
+        const lines = [`${cls.id} (${cls.boundedContext})`];
+        if (cls.intent) lines.push(cls.intent);
+        appendVerificationDetail(lines, cls.verification, cls.verificationDetails);
+        return lines.join('\n');
+      }
       return `${cl?.name ?? hit.id} (unresolved)\nclass-id fallback — not in scope`;
     }
     const e = edgeById.get(hit.id);
@@ -356,4 +364,19 @@ function push<K, V>(m: Map<K, V[]>, k: K, v: V): void {
   const list = m.get(k);
   if (list) list.push(v);
   else m.set(k, [v]);
+}
+
+function appendVerificationDetail(
+  lines: string[],
+  state: VerificationState,
+  details: VerificationDetails | undefined,
+): void {
+  if (state === 'verified') return;
+  lines.push(state === 'partial' ? '⚠ partial verification' : '⚠ unverified');
+  if (!details) return;
+  if (details.droppedTargets.length > 0) {
+    lines.push(`dropped: ${details.droppedTargets.join(', ')}`);
+  }
+  if (details.reason) lines.push(details.reason);
+  if (details.lspNotReady) lines.push('(LSP not ready at calibration time)');
 }

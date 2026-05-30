@@ -8,7 +8,7 @@ import { type LaneLayout, PAD } from './lane-layout';
 import { computeForceLayout } from './force-layout';
 import { buildRouter, type PillRect, type CardRect } from './edge-routing';
 import { renderEdges } from './edge-renderer';
-import { renderSwimlanes, renderClassCards, renderMethodPills } from './node-renderer';
+import { renderSwimlanes, renderClassCards, renderMethodPills, renderReadingOrder } from './node-renderer';
 import { installInteraction, type ViewState } from './interaction';
 
 interface VsCodeApi {
@@ -55,6 +55,7 @@ async function main(): Promise<void> {
   renderSwimlanes(layout, layers);
   const cards = renderClassCards(layout, layers);
   const methodPills = renderMethodPills(layout, graph, layers);
+  renderReadingOrder(layout, graph, layers);
 
   const router = buildRouter(toRoutingInput(layout), graph.methodEdges);
   const edges = renderEdges(graph.methodEdges, router, edgeLayer);

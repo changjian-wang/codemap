@@ -53,6 +53,12 @@ export interface AnalyzeResult {
   filePath: string;
   classes: ClassNode[];
   methods: MethodNode[];
+  /**
+   * Best-effort LLM-declared outbound call lists, keyed by methodId.
+   * Used by the aggregator as the calibrator fallback when no LSP host
+   * answered for the method. Synthesized edges carry verified=false.
+   */
+  llmCalls: Record<string, string[]>;
   rootIntent?: string;
   narrative?: string;
   /** Raw LLM output, retained for debugging. */
@@ -103,6 +109,7 @@ export async function analyzeFile(input: AnalyzeInput, llm: LlmClient): Promise<
 
   const classes: ClassNode[] = [];
   const methods: MethodNode[] = [];
+  const llmCalls: Record<string, string[]> = {};
 
   if (meta) {
     const validated = validateMetaBlock(meta.data, parseErrors);
@@ -112,6 +119,7 @@ export async function analyzeFile(input: AnalyzeInput, llm: LlmClient): Promise<
       }
       for (const m of validated.methods) {
         methods.push(toMethodNode(m));
+        if (m.calls && m.calls.length > 0) llmCalls[m.id] = m.calls;
       }
       enforceMethodOwnership(classes, methods, parseErrors);
       if (classes.length > 0) {
@@ -139,6 +147,7 @@ export async function analyzeFile(input: AnalyzeInput, llm: LlmClient): Promise<
     filePath: input.filePath,
     classes,
     methods,
+    llmCalls,
     rootIntent,
     narrative,
     rawResponse: raw,
@@ -257,6 +266,7 @@ function validateMethodFragment(
       if (typeof isStaticRaw !== 'boolean') throw new Error('isStatic is not a boolean');
       isStatic = isStaticRaw;
     }
+    const calls = validateCallsField(raw['calls'], `${path}.calls`);
     return {
       id: expectString(raw, 'id', path),
       ownerClassId: expectString(raw, 'ownerClassId', path),
@@ -268,6 +278,7 @@ function validateMethodFragment(
       intent: optionalString(raw, 'intent'),
       docComment: optionalString(raw, 'docComment'),
       risks,
+      calls,
     };
   } catch (e) {
     errors.push({ reason: `${path}: ${(e as Error).message}`, raw: JSON.stringify(raw).slice(0, 200) });
@@ -399,6 +410,20 @@ function validateMethodRisks(value: unknown, path: string): RiskType[] {
     }
     return r as RiskType;
   });
+}
+
+function validateCallsField(value: unknown, path: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${path} is not an array`);
+  const out: string[] = [];
+  value.forEach((c, i) => {
+    if (typeof c !== 'string') {
+      throw new Error(`${path}[${i}] is not a string`);
+    }
+    const trimmed = c.trim();
+    if (trimmed.length > 0) out.push(trimmed);
+  });
+  return out.length > 0 ? out : undefined;
 }
 
 function expectString(obj: Record<string, unknown>, key: string, path: string): string {

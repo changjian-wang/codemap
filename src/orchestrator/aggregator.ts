@@ -46,7 +46,10 @@ export interface AggregateInput {
   /**
    * Per-method callee lists from CalibratorService.resolveCallees.
    * Methods missing from this map are treated as "calibrator could not
-   * answer" and stay verification='unverified' with no outgoing edges.
+   * answer" -- they fall back to the LLM-declared calls from
+   * AnalyzeResult.llmCalls and emit verified=false edges. Methods with
+   * no calibrator data AND no llmCalls get no outbound edges and stay
+   * verification='unverified'.
    */
   callees: ReadonlyMap<string, readonly Callee[]>;
 }
@@ -87,7 +90,14 @@ export function aggregate(input: AggregateInput): AggregateResult {
   }
 
   const externalDeps: Record<string, ExternalDepNode> = {};
-  const methodEdges = buildMethodEdges(methods, classes, input.callees, externalDeps);
+  const llmCallsByMethod = mergeLlmCalls(input.analyses);
+  const methodEdges = buildMethodEdges(
+    methods,
+    classes,
+    input.callees,
+    llmCallsByMethod,
+    externalDeps,
+  );
 
   applyVerification(methods, classes, input.callees, methodEdges, warnings);
 
@@ -132,6 +142,7 @@ function buildMethodEdges(
   methods: Record<string, MethodNode>,
   classes: Record<string, ClassNode>,
   callees: ReadonlyMap<string, readonly Callee[]>,
+  llmCalls: ReadonlyMap<string, readonly string[]>,
   externalDeps: Record<string, ExternalDepNode>,
 ): MethodEdge[] {
   const seen = new Set<string>();
@@ -139,10 +150,33 @@ function buildMethodEdges(
 
   for (const methodId of Object.keys(methods)) {
     const list = callees.get(methodId);
-    if (!list || list.length === 0) continue;
-
-    for (const c of list) {
-      const resolved = resolveCallee(methodId, c, methods, classes);
+    if (list && list.length > 0) {
+      for (const c of list) {
+        const resolved = resolveCallee(methodId, c, methods, classes);
+        if (!resolved) continue;
+        const key = `${resolved.source}|${resolved.target}|${resolved.kind}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          id: `e${out.length}`,
+          source: resolved.source,
+          target: resolved.target,
+          kind: resolved.kind,
+          verified: resolved.verified,
+        });
+        if (resolved.target.startsWith('ext:')) {
+          registerExternalDep(externalDeps, resolved.target);
+        }
+      }
+      continue;
+    }
+    // Calibrator did not answer for this method -- fall back to the
+    // LLM-declared calls. Edges are stamped verified=false so the
+    // verification rollup still flags the method as unverified.
+    const tokens = llmCalls.get(methodId);
+    if (!tokens || tokens.length === 0) continue;
+    for (const token of tokens) {
+      const resolved = resolveLlmCallToken(methodId, token, methods, classes);
       if (!resolved) continue;
       const key = `${resolved.source}|${resolved.target}|${resolved.kind}`;
       if (seen.has(key)) continue;
@@ -152,7 +186,7 @@ function buildMethodEdges(
         source: resolved.source,
         target: resolved.target,
         kind: resolved.kind,
-        verified: resolved.verified,
+        verified: false,
       });
       if (resolved.target.startsWith('ext:')) {
         registerExternalDep(externalDeps, resolved.target);
@@ -160,6 +194,73 @@ function buildMethodEdges(
     }
   }
   return out;
+}
+
+function mergeLlmCalls(
+  analyses: readonly AnalyzeResult[],
+): ReadonlyMap<string, readonly string[]> {
+  const out = new Map<string, string[]>();
+  for (const a of analyses) {
+    if (!a.llmCalls) continue;
+    for (const [methodId, tokens] of Object.entries(a.llmCalls)) {
+      if (out.has(methodId)) continue;
+      out.set(methodId, [...tokens]);
+    }
+  }
+  return out;
+}
+
+function resolveLlmCallToken(
+  sourceMethodId: string,
+  token: string,
+  methods: Record<string, MethodNode>,
+  classes: Record<string, ClassNode>,
+): ResolvedEdge | undefined {
+  const trimmed = token.trim();
+  if (!trimmed) return undefined;
+  // Already-namespaced ext targets are passed through verbatim.
+  if (trimmed.startsWith('ext:')) {
+    return {
+      source: sourceMethodId,
+      target: trimmed,
+      kind: 'external_calls',
+      verified: false,
+    };
+  }
+  if (methods[trimmed]) {
+    return {
+      source: sourceMethodId,
+      target: trimmed,
+      kind: 'calls',
+      verified: false,
+    };
+  }
+  if (classes[trimmed]) {
+    return {
+      source: sourceMethodId,
+      target: trimmed,
+      kind: 'calls',
+      verified: false,
+    };
+  }
+  const dot = trimmed.lastIndexOf('.');
+  if (dot > 0) {
+    const cls = trimmed.slice(0, dot);
+    if (classes[cls]) {
+      return {
+        source: sourceMethodId,
+        target: cls,
+        kind: 'calls',
+        verified: false,
+      };
+    }
+  }
+  return {
+    source: sourceMethodId,
+    target: `ext:${trimmed}`,
+    kind: 'external_calls',
+    verified: false,
+  };
 }
 
 function resolveCallee(

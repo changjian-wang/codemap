@@ -34,8 +34,13 @@ function mth(overrides: Partial<MethodNode> & { id: string; ownerClassId: string
   };
 }
 
-function analyze(filePath: string, classes: ClassNode[], methods: MethodNode[]): AnalyzeResult {
-  return { filePath, classes, methods, rawResponse: '', parseErrors: [] };
+function analyze(
+  filePath: string,
+  classes: ClassNode[],
+  methods: MethodNode[],
+  llmCalls: Record<string, string[]> = {},
+): AnalyzeResult {
+  return { filePath, classes, methods, llmCalls, rawResponse: '', parseErrors: [] };
 }
 
 function callee(overrides: Partial<Callee> & { containingType: string; methodName: string }): Callee {
@@ -274,5 +279,65 @@ describe('aggregate', () => {
     const a = analyze('x.cs', [recall1, recall2, capture1, shared1, shared2, shared3], []);
     const { graph } = aggregate({ rootRequest: 'r', scope: 's', analyses: [a], callees: new Map() });
     expect(graph.boundedContexts).toEqual(['recall', 'capture', 'shared']);
+  });
+
+  // -----------------------------------------------------------------------
+  //   LLM-calls fallback (calibrator absent / partial)
+  // -----------------------------------------------------------------------
+
+  it('emits verified=false edges from llmCalls when calibrator did not answer for a method', () => {
+    const A = cls({ id: 'A', file: 'a.cs', methodIds: ['A.run'] });
+    const B = cls({ id: 'B', file: 'b.cs', methodIds: ['B.handle'] });
+    const aRun = mth({ id: 'A.run', ownerClassId: 'A', name: 'run' });
+    const bHandle = mth({ id: 'B.handle', ownerClassId: 'B', name: 'handle' });
+    const ana = analyze('a.cs', [A, B], [aRun, bHandle], {
+      'A.run': ['B.handle', 'C', 'ExternalLib.Foo'],
+    });
+    const { graph } = aggregate({
+      rootRequest: 'r',
+      scope: 's',
+      analyses: [ana],
+      callees: new Map(),
+    });
+    // Three edges: in-graph method, ext: (C is not in graph -> ext:C),
+    // and ExternalLib.Foo -> class C is not in graph, the lastIndexOf('.')
+    // branch tries 'ExternalLib' as a class, also not in graph -> ext:.
+    const targets = graph.methodEdges.map((e) => `${e.target}|${e.verified}`).sort();
+    expect(targets).toEqual([
+      'B.handle|false',
+      'ext:C|false',
+      'ext:ExternalLib.Foo|false',
+    ]);
+    expect(graph.externalDeps['ext:C']).toBeDefined();
+    expect(graph.externalDeps['ext:ExternalLib.Foo']).toBeDefined();
+    // The source method has no calibrator data -> verification stays
+    // 'unverified' (no upgrade just because the LLM declared calls).
+    expect(graph.methods['A.run']!.verification).toBe('unverified');
+  });
+
+  it('prefers calibrator data over llmCalls when both are present for the same method', () => {
+    const A = cls({ id: 'A', file: 'a.cs', methodIds: ['A.run'] });
+    const B = cls({ id: 'B', file: 'b.cs', methodIds: ['B.handle'] });
+    const aRun = mth({ id: 'A.run', ownerClassId: 'A', name: 'run' });
+    const bHandle = mth({ id: 'B.handle', ownerClassId: 'B', name: 'handle' });
+    const ana = analyze('a.cs', [A, B], [aRun, bHandle], {
+      'A.run': ['FakeTarget'],
+    });
+    const callees = new Map<string, Callee[]>([
+      [
+        'A.run',
+        [callee({ containingType: 'B', methodName: 'handle' })],
+      ],
+    ]);
+    const { graph } = aggregate({
+      rootRequest: 'r',
+      scope: 's',
+      analyses: [ana],
+      callees,
+    });
+    expect(graph.methodEdges).toHaveLength(1);
+    expect(graph.methodEdges[0]!.target).toBe('B.handle');
+    expect(graph.methodEdges[0]!.verified).toBe(true);
+    expect(graph.externalDeps['ext:FakeTarget']).toBeUndefined();
   });
 });

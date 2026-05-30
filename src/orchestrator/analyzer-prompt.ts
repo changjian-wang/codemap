@@ -38,6 +38,14 @@ export interface LlmMethodNodeFragment {
   intent?: MethodNode['intent'];
   docComment?: MethodNode['docComment'];
   risks: MethodNode['risks'];
+  /**
+   * Best-effort LLM-declared outbound calls from this method. Each entry
+   * is a bare token: `TypeName.MethodName`, `TypeName` (class-id
+   * fallback), or a free-form `Symbol` (becomes `ext:Symbol` in the
+   * aggregated graph). Used as the calibrator fallback when no LSP host
+   * is available -- emitted edges carry `verified: false`.
+   */
+  calls?: string[];
 }
 
 export interface MetaBlockPayload {
@@ -89,7 +97,8 @@ Block 1 -- \`\`\`codemap-meta\`\`\` with this shape:
       "isStatic": <bool>,
       "intent": "<optional one-sentence summary>",
       "docComment": "<optional doc summary verbatim>",
-      "risks": ["security", "external_io", ...]
+      "risks": ["security", "external_io", ...],
+      "calls": ["<OtherType.OtherMethod>", "<OtherType>", "<ExternalSymbol>"]
     }
   ]
 }
@@ -123,6 +132,14 @@ CRITICAL RULES:
 9. If the file contains no type declarations, emit an empty classes[]
    and methods[] -- do NOT skip the meta block.
 10. NO prose outside the two fenced blocks. NO additional fences.
+11. \`calls\` is OPTIONAL but RECOMMENDED. List every outbound invocation
+    you can see in the method body. Preferred form is
+    \`OtherType.OtherMethod\`; if you can identify the type but not the
+    method, \`OtherType\` alone is fine; if neither is in this file, write
+    a bare token (\`OtherType\` or \`OtherType.OtherMethod\`) -- a downstream
+    calibrator may resolve it. Skip constructors, property getters,
+    operator overloads, and language built-ins (\`Console.WriteLine\`,
+    \`string.IsNullOrEmpty\`, LINQ). When unsure, omit rather than guess.
 
 ${ENTRY_GUIDANCE_SECTION}`;
 

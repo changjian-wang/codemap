@@ -212,7 +212,89 @@ export function computeForceLayout(graph: CodeMapGraph, screenW: number): LaneLa
 
   for (let i = 0; i < SETTLE_TICKS; i++) sim.tick();
 
-  return projectLayout(classes, nodes, visibleBcs, bandW);
+  const layout = projectLayout(classes, nodes, visibleBcs, bandW);
+  packBands(layout);
+  return layout;
+}
+
+// Tunables for the post-projection packer (Phase 3.4 dispose-hang fix sibling
+// commit -- real workspaces have 30+ classes and the raw force layout
+// produces cards that overlap when many classes have 0-1 methods all pulled
+// to the same Y by forceY gravity).
+const PACK_GAP_Y = 28;
+const PACK_GAP_X = 64;
+const PACK_TOP_PAD = 16;
+
+/**
+ * Deterministic post-projection packer. The force sim positions METHOD
+ * points and forceCollide only spaces those points by ~32px, so class
+ * CARDS framed around small / single-method method sets end up overlapping
+ * each other within a BC band. This pass:
+ *   1. Computes a left-to-right band layout from the max card width in
+ *      each BC, with no horizontal overlap between bands.
+ *   2. Within each band, sorts cards by their force-derived Y (preserves
+ *      caller -> callee top-down hint) and stacks them in a single column
+ *      with PACK_GAP_Y between rows.
+ *   3. Shifts each card and its contained method pills by the same delta
+ *      so edge routing reads the new positions unchanged.
+ *   4. Rebuilds swimlanes + bbox from the packed cards.
+ *
+ * The cost: caller -> callee X-alignment between bands is lost. The
+ * benefit: 30+ class workspaces render without manual scroll/zoom hell.
+ */
+function packBands(layout: LaneLayout): void {
+  const allCards = Object.values(layout.classes);
+  if (allCards.length === 0) return;
+
+  // 1. Per-band X layout.
+  const bandX = new Map<string, { center: number; width: number }>();
+  let cursorX = PAD.left + LANE_PAD;
+  for (const bc of layout.visibleBcs) {
+    const cardsInBand = allCards.filter((c) => c.bc === bc);
+    if (cardsInBand.length === 0) continue;
+    const maxW = Math.max(...cardsInBand.map((c) => c.w));
+    const center = cursorX + maxW / 2;
+    bandX.set(bc, { center, width: maxW });
+    cursorX += maxW + PACK_GAP_X;
+  }
+
+  // 2 + 3. Per-band Y stacking, snap X to band center.
+  for (const bc of layout.visibleBcs) {
+    const band = bandX.get(bc);
+    if (!band) continue;
+    const cardsInBand = allCards
+      .filter((c) => c.bc === bc)
+      .sort((a, b) => a.y - b.y);
+
+    let cursorY = PAD.top + PACK_TOP_PAD;
+    for (const card of cardsInBand) {
+      const newX = band.center - card.w / 2;
+      const dx = newX - card.x;
+      const dy = cursorY - card.y;
+      card.x = newX;
+      card.y = cursorY;
+      for (const mid of card.methodIds) {
+        const m = layout.methods[mid];
+        if (!m) continue;
+        m.cx += dx;
+        m.cy += dy;
+      }
+      cursorY = card.y + card.h + PACK_GAP_Y;
+    }
+  }
+
+  // 4. Rebuild swimlanes + bbox from the packed cards.
+  layout.swimlanes = buildSwimlanes(layout.classes, layout.visibleBcs);
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const lane of layout.swimlanes) {
+    minX = Math.min(minX, lane.x);
+    minY = Math.min(minY, lane.y);
+    maxX = Math.max(maxX, lane.x + lane.w);
+    maxY = Math.max(maxY, lane.y + lane.h);
+  }
+  if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 1; maxY = 1; }
+  minY = Math.min(minY, PAD.top - 50);
+  layout.bbox = { minX, minY, maxX, maxY };
 }
 
 /** Freeze settled node coords into class cards, method pills, and swimlanes. */

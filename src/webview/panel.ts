@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { jumpToSource, type JumpRequest } from '../editor/jump-to-source';
 
 let currentPanel: vscode.WebviewPanel | undefined;
 
@@ -52,11 +53,23 @@ export function openPanel(context: vscode.ExtensionContext): vscode.WebviewPanel
   // replace this with the real jump-to-source path; for now we just list
   // the in-graph call sites so the click is observably wired.
   panel.webview.onDidReceiveMessage((msg: unknown) => {
-    if (!isOpenReference(msg)) return;
-    const summary = msg.sources.length === 0
-      ? `${msg.target}: no in-graph call sites`
-      : `${msg.target} call sites: ${msg.sources.join(', ')}`;
-    vscode.window.showInformationMessage(summary);
+    if (isOpenReference(msg)) {
+      const summary = msg.sources.length === 0
+        ? `${msg.target}: no in-graph call sites`
+        : `${msg.target} call sites: ${msg.sources.join(', ')}`;
+      vscode.window.showInformationMessage(summary);
+      return;
+    }
+    if (isJumpToSource(msg)) {
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+      if (!root) {
+        vscode.window.showWarningMessage(
+          'Open a workspace folder before jumping from the CodeMap fixture.',
+        );
+        return;
+      }
+      void jumpToSource(root, msg.req);
+    }
   });
 
   return panel;
@@ -68,6 +81,11 @@ interface OpenReferenceMessage {
   sources: string[];
 }
 
+interface JumpToSourceMessage {
+  type: 'jump-to-source';
+  req: JumpRequest;
+}
+
 function isOpenReference(msg: unknown): msg is OpenReferenceMessage {
   if (typeof msg !== 'object' || msg === null) return false;
   const m = msg as Record<string, unknown>;
@@ -76,6 +94,21 @@ function isOpenReference(msg: unknown): msg is OpenReferenceMessage {
     typeof m.target === 'string' &&
     Array.isArray(m.sources) &&
     m.sources.every((s) => typeof s === 'string')
+  );
+}
+
+function isJumpToSource(msg: unknown): msg is JumpToSourceMessage {
+  if (typeof msg !== 'object' || msg === null) return false;
+  const m = msg as Record<string, unknown>;
+  if (m.type !== 'jump-to-source') return false;
+  const req = m.req as Record<string, unknown> | undefined;
+  if (!req || typeof req !== 'object') return false;
+  return (
+    typeof req.file === 'string' &&
+    typeof req.nodeId === 'string' &&
+    (req.verification === 'verified' ||
+      req.verification === 'partial' ||
+      req.verification === 'unverified')
   );
 }
 

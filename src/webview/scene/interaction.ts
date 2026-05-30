@@ -29,7 +29,17 @@ export interface SceneHandles {
   edges: Map<string, Graphics>;
   tooltip: HTMLElement;
   onRequestOpenReference: (target: string, sources: string[]) => void;
+  onRequestJumpToSource: (req: JumpRequest) => void;
   fitToScreen: () => ViewState;
+}
+
+export interface JumpRequest {
+  file: string;
+  nodeId: string;
+  method?: string;
+  classLine?: number;
+  methodLine?: number;
+  verification: VerificationState;
 }
 
 export interface ViewState {
@@ -316,6 +326,14 @@ export function installInteraction(h: SceneHandles): void {
     }
   });
 
+  canvas.addEventListener('dblclick', (e: MouseEvent) => {
+    const world = toWorld(e.clientX, e.clientY);
+    const hit = hitTest(world.x, world.y);
+    if (!hit || hit.kind !== 'method') return;
+    const req = buildJumpRequest(hit.id);
+    if (req) h.onRequestJumpToSource(req);
+  });
+
   canvas.addEventListener(
     'wheel',
     (e: WheelEvent) => {
@@ -352,6 +370,21 @@ export function installInteraction(h: SceneHandles): void {
     return {
       x: (clientX - h.root.x) / h.root.scale.x,
       y: (clientY - h.root.y) / h.root.scale.y,
+    };
+  }
+
+  function buildJumpRequest(methodId: string): JumpRequest | null {
+    const m = h.graph.methods[methodId];
+    if (!m) return null;
+    const cls = h.graph.classes[m.ownerClassId];
+    if (!cls) return null;
+    return {
+      file: cls.file,
+      nodeId: cls.id,
+      method: m.name,
+      classLine: cls.range.startLine,
+      methodLine: m.line,
+      verification: m.verification,
     };
   }
 }

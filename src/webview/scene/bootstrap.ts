@@ -76,6 +76,9 @@ async function main(): Promise<void> {
     onRequestOpenReference: (target, sources) => {
       vscode.postMessage({ type: 'open-reference', target, sources });
     },
+    onRequestJumpToSource: (req) => {
+      vscode.postMessage({ type: 'jump-to-source', req });
+    },
   });
 
   // Pixi v8 ESM doesn't auto-register the TickerPlugin, so app.ticker is

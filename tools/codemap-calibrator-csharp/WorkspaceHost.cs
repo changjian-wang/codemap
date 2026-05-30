@@ -23,6 +23,12 @@ internal sealed class WorkspaceHost : IAsyncDisposable
 
     public bool IsLoaded => _workspace is not null;
 
+    /// <summary>
+    /// Current Roslyn solution after the last <see cref="LoadSolutionAsync"/>
+    /// call. Null until a solution has been loaded.
+    /// </summary>
+    public Solution? CurrentSolution => _workspace?.CurrentSolution;
+
     public async Task<LoadSolutionResult> LoadSolutionAsync(string slnxPath, CancellationToken ct)
     {
         if (!File.Exists(slnxPath))

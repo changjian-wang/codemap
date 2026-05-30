@@ -27,7 +27,7 @@ public sealed class CalibratorService
             ProtocolVersion: 1,
             Capabilities: new ServerCapabilities(
                 SlnxLoading: true,
-                ResolveCallees: false       // Phase 2.3
+                ResolveCallees: true
             )
         );
         _initialized = result;
@@ -56,6 +56,15 @@ public sealed class CalibratorService
             throw new ArgumentException("slnxPath is required", nameof(@params));
         }
         return _workspaceHost.LoadSolutionAsync(@params.SlnxPath, ct);
+    }
+
+    [JsonRpcMethod("resolveCallees", UseSingleObjectParameterDeserialization = true)]
+    public Task<ResolveCalleesResult> ResolveCalleesAsync(ResolveCalleesParams @params, CancellationToken ct)
+    {
+        if (@params is null) throw new ArgumentNullException(nameof(@params));
+        var solution = _workspaceHost.CurrentSolution
+            ?? throw new InvalidOperationException("loadSolution must be called before resolveCallees");
+        return CalleeResolver.ResolveAsync(solution, @params, ct);
     }
 
     [JsonRpcMethod("shutdown")]

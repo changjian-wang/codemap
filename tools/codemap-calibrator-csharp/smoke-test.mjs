@@ -134,6 +134,33 @@ function fail(msg) {
       for (const s of load.skipped.slice(0, 10)) console.error(`  - ${s.path}: ${s.reason}`);
     }
 
+    // Phase 2.3 -- resolveCallees against a known Lumen handler.
+    const targetFile = resolve(
+      __dirname,
+      '../../../lumen/apps/api/src/Lumen.Modules.Recall/Features/RecallByQuery/RecallByQueryHandler.cs',
+    );
+    const callees = await send('resolveCallees', {
+      filePath: targetFile,
+      line: 15,
+      classId: 'RecallByQueryHandler',
+      methodName: 'HandleAsync',
+    }, 30000);
+    console.error(`[smoke] resolveCallees -> elapsedMs=${callees.elapsedMs} method=${callees.methodFullyQualifiedName}`);
+    console.error(`[smoke] callees (${callees.callees.length}):`);
+    for (const c of callees.callees) {
+      const flag = c.isExternal ? '[ext]' : '[src]';
+      console.error(`  ${flag} ${c.displayName} (kind=${c.kind}, line=${c.invocationLine})`);
+    }
+    if (callees.callees.length === 0) fail('expected at least one callee');
+    const calleeNames = callees.callees.map((c) => c.methodName);
+    if (!calleeNames.includes('EmbedQueryAsync')) fail('missing EmbedQueryAsync callee');
+    if (!calleeNames.includes('SearchAsync')) fail('missing SearchAsync callee');
+    if (!calleeNames.includes('ParsePayload')) {
+      // ParsePayload is invoked inside the .Select lambda; if SemanticModel
+      // skipped lambda bodies we'd miss it.
+      fail('missing ParsePayload (lambda-body invocation)');
+    }
+
     const sd = await send('shutdown', null);
     console.error(`[smoke] shutdown -> ${JSON.stringify(sd)}`);
     if (sd.accepted !== true) fail('shutdown not accepted');

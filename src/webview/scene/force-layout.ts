@@ -222,68 +222,91 @@ export function computeForceLayout(graph: CodeMapGraph, screenW: number): LaneLa
 // produces cards that overlap when many classes have 0-1 methods all pulled
 // to the same Y by forceY gravity).
 const PACK_GAP_Y = 28;
-const PACK_GAP_X = 64;
+const PACK_GAP_X = 28;
+const PACK_BAND_GAP_X = 64;
 const PACK_TOP_PAD = 16;
+const PACK_TARGET_ASPECT = 1.4; // band aspect ratio (w / h) target -> wider bands prefer more columns
 
 /**
  * Deterministic post-projection packer. The force sim positions METHOD
  * points and forceCollide only spaces those points by ~32px, so class
  * CARDS framed around small / single-method method sets end up overlapping
  * each other within a BC band. This pass:
- *   1. Computes a left-to-right band layout from the max card width in
- *      each BC, with no horizontal overlap between bands.
- *   2. Within each band, sorts cards by their force-derived Y (preserves
- *      caller -> callee top-down hint) and stacks them in a single column
- *      with PACK_GAP_Y between rows.
- *   3. Shifts each card and its contained method pills by the same delta
+ *   1. Decides a column count per band so the band aspect (w/h) stays
+ *      readable. A single column for 37 classes produces a vertical strip
+ *      taller than the viewport; ceil(sqrt(n)) gives a roughly square
+ *      grid that pans on standard displays.
+ *   2. Sorts cards by their force-derived Y (preserves caller -> callee
+ *      top-down hint) and grids them column-major: card[0..rows-1] in
+ *      column 0, card[rows..2*rows-1] in column 1, etc. Each column's
+ *      width = max card width in that column; rows in the same column
+ *      stack with PACK_GAP_Y.
+ *   3. Bands lay out left-to-right with PACK_BAND_GAP_X between them.
+ *   4. Shifts each card and its contained method pills by the same delta
  *      so edge routing reads the new positions unchanged.
- *   4. Rebuilds swimlanes + bbox from the packed cards.
+ *   5. Rebuilds swimlanes + bbox from the packed cards.
  *
- * The cost: caller -> callee X-alignment between bands is lost. The
- * benefit: 30+ class workspaces render without manual scroll/zoom hell.
+ * The cost: caller -> callee X-alignment is approximate. The benefit:
+ * 30+ class workspaces render in a navigable rectangle instead of a
+ * 6000px tall column.
  */
 function packBands(layout: LaneLayout): void {
   const allCards = Object.values(layout.classes);
   if (allCards.length === 0) return;
 
-  // 1. Per-band X layout.
-  const bandX = new Map<string, { center: number; width: number }>();
-  let cursorX = PAD.left + LANE_PAD;
-  for (const bc of layout.visibleBcs) {
-    const cardsInBand = allCards.filter((c) => c.bc === bc);
-    if (cardsInBand.length === 0) continue;
-    const maxW = Math.max(...cardsInBand.map((c) => c.w));
-    const center = cursorX + maxW / 2;
-    bandX.set(bc, { center, width: maxW });
-    cursorX += maxW + PACK_GAP_X;
-  }
+  let bandLeftX = PAD.left + LANE_PAD;
 
-  // 2 + 3. Per-band Y stacking, snap X to band center.
   for (const bc of layout.visibleBcs) {
-    const band = bandX.get(bc);
-    if (!band) continue;
     const cardsInBand = allCards
       .filter((c) => c.bc === bc)
       .sort((a, b) => a.y - b.y);
+    if (cardsInBand.length === 0) continue;
 
-    let cursorY = PAD.top + PACK_TOP_PAD;
-    for (const card of cardsInBand) {
-      const newX = band.center - card.w / 2;
-      const dx = newX - card.x;
-      const dy = cursorY - card.y;
-      card.x = newX;
-      card.y = cursorY;
-      for (const mid of card.methodIds) {
-        const m = layout.methods[mid];
-        if (!m) continue;
-        m.cx += dx;
-        m.cy += dy;
-      }
-      cursorY = card.y + card.h + PACK_GAP_Y;
+    const cols = chooseColumnCount(cardsInBand);
+    const rows = Math.ceil(cardsInBand.length / cols);
+
+    // Slice into columns (column-major, so caller -> callee Y order is
+    // preserved within each column).
+    const columns: ClassLayout[][] = [];
+    for (let i = 0; i < cols; i++) {
+      columns.push(cardsInBand.slice(i * rows, (i + 1) * rows));
     }
+
+    // Per-column width = max card width in that column.
+    const colWidths = columns.map((col) =>
+      col.length === 0 ? 0 : Math.max(...col.map((c) => c.w)),
+    );
+
+    // Lay out each column.
+    let cursorX = bandLeftX;
+    for (let ci = 0; ci < columns.length; ci++) {
+      const col = columns[ci]!;
+      const colW = colWidths[ci]!;
+      const colCenter = cursorX + colW / 2;
+      let cursorY = PAD.top + PACK_TOP_PAD;
+      for (const card of col) {
+        const newX = colCenter - card.w / 2;
+        const dx = newX - card.x;
+        const dy = cursorY - card.y;
+        card.x = newX;
+        card.y = cursorY;
+        for (const mid of card.methodIds) {
+          const m = layout.methods[mid];
+          if (!m) continue;
+          m.cx += dx;
+          m.cy += dy;
+        }
+        cursorY = card.y + card.h + PACK_GAP_Y;
+      }
+      cursorX += colW + PACK_GAP_X;
+    }
+
+    // Advance to next band; pull back the last column gap and add the
+    // larger band gap.
+    bandLeftX = cursorX - PACK_GAP_X + PACK_BAND_GAP_X;
   }
 
-  // 4. Rebuild swimlanes + bbox from the packed cards.
+  // 5. Rebuild swimlanes + bbox from the packed cards.
   layout.swimlanes = buildSwimlanes(layout.classes, layout.visibleBcs);
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const lane of layout.swimlanes) {
@@ -295,6 +318,26 @@ function packBands(layout: LaneLayout): void {
   if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 1; maxY = 1; }
   minY = Math.min(minY, PAD.top - 50);
   layout.bbox = { minX, minY, maxX, maxY };
+}
+
+function chooseColumnCount(cards: readonly ClassLayout[]): number {
+  if (cards.length <= 4) return 1;
+  // Estimate average card aspect from this band to pick cols so the band
+  // aspect ratio lands near PACK_TARGET_ASPECT.
+  let totalW = 0;
+  let totalH = 0;
+  for (const c of cards) {
+    totalW += c.w;
+    totalH += c.h + PACK_GAP_Y;
+  }
+  const avgW = totalW / cards.length;
+  const avgH = totalH / cards.length;
+  // For c columns, band width ~ c * (avgW + PACK_GAP_X), band height ~
+  // ceil(n/c) * avgH. Solve c * (avgW + gap) / (n/c * avgH) ~= aspect.
+  const ideal = Math.sqrt(
+    (cards.length * avgH * PACK_TARGET_ASPECT) / (avgW + PACK_GAP_X),
+  );
+  return Math.max(1, Math.min(cards.length, Math.round(ideal)));
 }
 
 /** Freeze settled node coords into class cards, method pills, and swimlanes. */

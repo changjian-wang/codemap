@@ -4,6 +4,7 @@ test/**
 eval/**
 legacy/**
 docs/**
+tools/**
 .vscode/**
 .vscode-test/**
 .github/**

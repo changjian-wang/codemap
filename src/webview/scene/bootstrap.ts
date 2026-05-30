@@ -4,10 +4,11 @@
 import 'pixi.js/unsafe-eval';
 import { Application, Container, Graphics } from 'pixi.js';
 import type { CodeMapGraph } from '../../shared/types';
-import { computeLaneLayout, type LaneLayout, PILL_H, PAD } from './lane-layout';
+import { type LaneLayout, PILL_H, PAD } from './lane-layout';
+import { computeForceLayout } from './force-layout';
 import { buildRouter, type PillRect, type CardRect } from './edge-routing';
 import { renderEdges } from './edge-renderer';
-import { renderBcHeaders, renderClassCards, renderMethodPills } from './node-renderer';
+import { renderSwimlanes, renderClassCards, renderMethodPills } from './node-renderer';
 
 interface VsCodeApi {
   postMessage(msg: unknown): void;
@@ -37,7 +38,7 @@ async function main(): Promise<void> {
   });
   stage.appendChild(app.canvas);
 
-  const layout = computeLaneLayout(graph, app.screen.width);
+  const layout = computeForceLayout(graph, app.screen.width);
 
   const root = app.stage;
   const bgLayer = new Container();
@@ -50,7 +51,7 @@ async function main(): Promise<void> {
   root.addChild(labelLayer);
 
   const layers = { bgLayer, nodeLayer, labelLayer };
-  renderBcHeaders(layout, layers);
+  renderSwimlanes(layout, layers);
   renderClassCards(layout, layers);
   renderMethodPills(layout, graph, layers);
 

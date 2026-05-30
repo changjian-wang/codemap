@@ -90,6 +90,8 @@ The extension host knows nothing about Roslyn, `MSBuildWorkspace`, ts-morph, or 
 - Phase 0.2 — `types-v2.draft.ts` + `fixture-v2.draft.json` landed.
 - Phase 0.3 — **Done 2026-05-27.** R1 and R2 spike conclusions logged in §7.1 / §7.2. Phase 1 / Phase 2 are now unblocked.
 - Phase 0.4 — **Done 2026-05-27.** v2 drafts promoted to canonical (`src/shared/types.ts` / `eval/samples/lumen-mini/fixture.json`); v4-plan Phase 2.2 rewritten to use the slnx XML walk per R2.
+- Phase 1.1 — **Done 2026-05-28.** Pixi bootstrap + fixture render ported from the R1 spike into `src/webview/scene/` (1.1a placeholder → 1.1b production pipeline). CSP fix: external-pixi + importmap is incompatible with `pixi.js/unsafe-eval` (it patches sibling-imported classes on the same module instance); the webview now inline-bundles Pixi + the polyfill into `scene.js` via esbuild.
+- Phase 1.2 — **Done 2026-05-30.** d3-force layout + swimlane grouping. Resolves the layout tension below in favour of force-directed placement (see §7.1).
 
 ### 7.1 R1 — Pixi.js in VS Code webview
 
@@ -110,6 +112,8 @@ Implication for Phase 1: Pixi v8 + hand-written column layout + custom bezier ro
 
 1. Edge routing must be **endpoint-aware** — multiple co-side edges need fanning, and reverse cross-lane edges need a separate code path so the endpoint tangent stays horizontal. A single sankey-style bezier for all edges is not enough.
 2. Visual signals must be **geometrically distinct AND chromatically distinct** — `verification:partial` (class outline) and `entry method` both wanted amber rings and collided; entry got demoted to a triangle glyph and amber is now reserved exclusively for `partial`.
+
+**Layout decision (Phase 1.2, 2026-05-30).** R1's conclusion above ("hand-written column layout is the right shape") was in tension with §2's stated default (d3-force). Phase 1.2 resolves this in favour of **d3-force**, consistent with §2-1 ("d3-force is the default layout; ELK is the alternate"): the column packer (`computeLaneLayout`) is replaced by a force simulation (`src/webview/scene/force-layout.ts`). Methods are sim nodes; same-class methods get a strong intra-class link (clustering into a swimlane card), `methodEdges` add a weak caller→callee pull, and each bounded context owns a `forceX` band so `capture` / `recall` / `ext` stay spatially separable. The simulation runs to completion synchronously (deterministic, no random seeding) and freezes settled coordinates into the existing `LaneLayout` shape, so node-renderer / edge-routing are unchanged. The R1 column work is retained in git history as the 1.1b reference; the spike's edge-routing + styling logic (the parts R1 actually validated) transplanted intact. The within-column-packing gap R1 flagged for ≥50-class graphs is now moot — force handles overflow natively; large-graph performance is re-evaluated when real calibrator data lands (Phase 3.3).
 
 Remaining gap (the part R1 deliberately did **not** cover, deferred to Phase 1 implementation):
 

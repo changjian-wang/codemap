@@ -4,7 +4,6 @@ import {
   type LaneLayout,
   type MethodLayout,
   CARD_PAD,
-  PAD,
   PILL_H,
   PILL_HPAD,
 } from './lane-layout';
@@ -37,26 +36,25 @@ export interface NodeLayers {
   labelLayer: Container;
 }
 
-export function renderBcHeaders(layout: LaneLayout, layers: NodeLayers): void {
+export function renderSwimlanes(layout: LaneLayout, layers: NodeLayers): void {
   const { bgLayer, labelLayer } = layers;
-  layout.visibleBcs.forEach((bc, ci) => {
-    const colX = PAD.left + ci * layout.colW;
-    const color = bcColor(bc);
-    const headerBg = new Graphics();
-    headerBg
-      .roundRect(colX, PAD.top - 50, layout.colW - 16, 36, 4)
-      .fill({ color, alpha: 0.1 })
-      .stroke({ color, width: 1, alpha: 0.5 });
-    bgLayer.addChild(headerBg);
+  for (const lane of layout.swimlanes) {
+    const color = bcColor(lane.bc);
+    const band = new Graphics();
+    band
+      .roundRect(lane.x, lane.y, lane.w, lane.h, 10)
+      .fill({ color, alpha: 0.06 })
+      .stroke({ color, width: 1, alpha: 0.35 });
+    bgLayer.addChild(band);
 
     const label = new Text({
-      text: bc,
+      text: lane.bc,
       style: { fill: color, fontSize: 14, fontWeight: '700', fontFamily: SANS_FONT },
     });
-    label.x = colX + 12;
-    label.y = PAD.top - 42;
+    label.x = lane.x + 12;
+    label.y = lane.y + 8;
     labelLayer.addChild(label);
-  });
+  }
 }
 
 export function renderClassCards(layout: LaneLayout, layers: NodeLayers): void {
@@ -130,12 +128,11 @@ export function renderMethodPills(
       style: { fill: TEXT_PRIMARY, fontSize: 11, fontWeight: '400', fontFamily: MONO_FONT },
     });
 
-    const cl = layout.classes[ml.classId];
+    // Force layout gives a node centre (ml.cx/cy); the pill is label-driven
+    // and centred on it. No column clamp — cards are framed around pills.
     const entryLeadPad = isEntry ? 10 : 0;
-    const maxPillW = cl ? cl.x + cl.w - CARD_PAD - ml.cx : 240;
-    const labelW = Math.min(label.width, maxPillW - 2 * PILL_HPAD - entryLeadPad);
-    const pillW = labelW + 2 * PILL_HPAD + entryLeadPad;
-    const pillX = ml.cx;
+    const pillW = label.width + 2 * PILL_HPAD + entryLeadPad;
+    const pillX = ml.cx - pillW / 2;
     const pillY = ml.cy - PILL_H / 2;
 
     const pill = new Graphics();

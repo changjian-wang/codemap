@@ -2,13 +2,14 @@
 // webview CSP rejects that. This sibling module patches the offending
 // systems to use polyfilled code paths and must load BEFORE Application.
 import 'pixi.js/unsafe-eval';
-import { Application, Container, Graphics } from 'pixi.js';
+import { Application, Container } from 'pixi.js';
 import type { CodeMapGraph } from '../../shared/types';
-import { type LaneLayout, PILL_H, PAD } from './lane-layout';
+import { type LaneLayout, PAD } from './lane-layout';
 import { computeForceLayout } from './force-layout';
 import { buildRouter, type PillRect, type CardRect } from './edge-routing';
 import { renderEdges } from './edge-renderer';
 import { renderSwimlanes, renderClassCards, renderMethodPills } from './node-renderer';
+import { installInteraction, type ViewState } from './interaction';
 
 interface VsCodeApi {
   postMessage(msg: unknown): void;
@@ -52,19 +53,29 @@ async function main(): Promise<void> {
 
   const layers = { bgLayer, nodeLayer, labelLayer };
   renderSwimlanes(layout, layers);
-  renderClassCards(layout, layers);
-  renderMethodPills(layout, graph, layers);
+  const cards = renderClassCards(layout, layers);
+  const methodPills = renderMethodPills(layout, graph, layers);
 
   const router = buildRouter(toRoutingInput(layout), graph.methodEdges);
-  const edgesG = new Graphics();
-  renderEdges(graph.methodEdges, router, edgesG);
-  edgeLayer.addChild(edgesG);
+  const edges = renderEdges(graph.methodEdges, router, edgeLayer);
 
-  let initial = fitToScreen(app, root, layout);
-  window.addEventListener('resize', () => {
-    initial = fitToScreen(app, root, layout);
+  const tooltip = ensureTooltip();
+  installInteraction({
+    app,
+    root,
+    edgeLayer,
+    layout,
+    graph,
+    router,
+    methodPills,
+    cards,
+    edges,
+    tooltip,
+    fitToScreen: () => fitToScreen(app, root, layout),
+    onRequestOpenReference: (target, sources) => {
+      vscode.postMessage({ type: 'open-reference', target, sources });
+    },
   });
-  installInteraction(app, root, () => initial);
 
   // Pixi v8 ESM doesn't auto-register the TickerPlugin, so app.ticker is
   // undefined and the stage would never repaint. Drive it ourselves.
@@ -83,6 +94,16 @@ function loadFixture(): CodeMapGraph {
     throw new Error('#codemap-fixture script block missing');
   }
   return JSON.parse(el.textContent) as CodeMapGraph;
+}
+
+function ensureTooltip(): HTMLElement {
+  let el = document.getElementById('codemap-tooltip');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'codemap-tooltip';
+    document.body.appendChild(el);
+  }
+  return el;
 }
 
 function toRoutingInput(layout: LaneLayout): {
@@ -105,14 +126,7 @@ function toRoutingInput(layout: LaneLayout): {
   for (const cl of Object.values(layout.classes)) {
     classes[cl.id] = { x: cl.x, y: cl.y, w: cl.w, h: cl.h };
   }
-  return { methods, classes, pillH: PILL_H };
-}
-
-interface ViewState {
-  x: number;
-  y: number;
-  sx: number;
-  sy: number;
+  return { methods, classes, pillH: 22 };
 }
 
 function fitToScreen(app: Application, root: Container, layout: LaneLayout): ViewState {
@@ -130,52 +144,6 @@ function fitToScreen(app: Application, root: Container, layout: LaneLayout): Vie
   root.x = margin + (vw - bboxW * sc) / 2 - minX * sc;
   root.y = margin + (vh - bboxH * sc) / 2 - headerTop * sc;
   return { x: root.x, y: root.y, sx: sc, sy: sc };
-}
-
-function installInteraction(app: Application, root: Container, getInitial: () => ViewState): void {
-  let dragging = false;
-  let lastX = 0, lastY = 0;
-  const canvas = app.canvas;
-
-  canvas.addEventListener('pointerdown', (e: PointerEvent) => {
-    dragging = true;
-    lastX = e.clientX;
-    lastY = e.clientY;
-    canvas.setPointerCapture?.(e.pointerId);
-  });
-  canvas.addEventListener('pointerup', (e: PointerEvent) => {
-    dragging = false;
-    canvas.releasePointerCapture?.(e.pointerId);
-  });
-  canvas.addEventListener('pointermove', (e: PointerEvent) => {
-    if (!dragging) return;
-    root.x += e.clientX - lastX;
-    root.y += e.clientY - lastY;
-    lastX = e.clientX;
-    lastY = e.clientY;
-  });
-  canvas.addEventListener(
-    'wheel',
-    (e: WheelEvent) => {
-      e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.1 : 0.9;
-      const wx = (e.clientX - root.x) / root.scale.x;
-      const wy = (e.clientY - root.y) / root.scale.y;
-      root.scale.x *= factor;
-      root.scale.y *= factor;
-      root.x = e.clientX - wx * root.scale.x;
-      root.y = e.clientY - wy * root.scale.y;
-    },
-    { passive: false },
-  );
-  window.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'r' || e.key === 'R') {
-      const initial = getInitial();
-      root.x = initial.x;
-      root.y = initial.y;
-      root.scale.set(initial.sx, initial.sy);
-    }
-  });
 }
 
 main().catch((err: unknown) => {

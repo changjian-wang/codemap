@@ -8,6 +8,13 @@ import {
   PILL_HPAD,
 } from './lane-layout';
 
+/**
+ * One renderable node = several Pixi children spread across layers (card on
+ * bg, badge on node, title on label). The interaction layer dims a node by
+ * setting `alpha` on every entry in this group.
+ */
+export type NodeGroup = Container[];
+
 // VS-Code-dark palette, kept in sync with the R1 spike.
 const BC_COLORS: Record<string, number> = {
   capture: 0x4ec9b0,
@@ -57,11 +64,14 @@ export function renderSwimlanes(layout: LaneLayout, layers: NodeLayers): void {
   }
 }
 
-export function renderClassCards(layout: LaneLayout, layers: NodeLayers): void {
+export function renderClassCards(layout: LaneLayout, layers: NodeLayers): Map<string, NodeGroup> {
   const { bgLayer, nodeLayer, labelLayer } = layers;
+  const byId = new Map<string, NodeGroup>();
+
   for (const cl of Object.values(layout.classes)) {
     const color = bcColor(cl.bc);
     const isStub = cl.kind === 'stub';
+    const group: NodeGroup = [];
 
     const card = new Graphics();
     card
@@ -69,6 +79,7 @@ export function renderClassCards(layout: LaneLayout, layers: NodeLayers): void {
       .fill({ color: PAGE_BG, alpha: 1 })
       .stroke({ color, width: 2, alpha: isStub ? 0.5 : 1 });
     bgLayer.addChild(card);
+    group.push(card);
 
     const titleStr = isStub ? `${cl.name} (unresolved)` : cl.name;
     const title = new Text({
@@ -84,11 +95,13 @@ export function renderClassCards(layout: LaneLayout, layers: NodeLayers): void {
     title.x = cl.x + CARD_PAD;
     title.y = cl.y + 8;
     labelLayer.addChild(title);
+    group.push(title);
 
     if (cl.isEntry) {
       const badge = new Graphics();
       badge.circle(cl.x + cl.w - 14, cl.y + 14, 5).fill(ENTRY_RING);
       nodeLayer.addChild(badge);
+      group.push(badge);
     }
 
     if (cl.verification === 'partial') {
@@ -97,8 +110,13 @@ export function renderClassCards(layout: LaneLayout, layers: NodeLayers): void {
         .roundRect(cl.x - 1, cl.y - 1, cl.w + 2, cl.h + 2, 13)
         .stroke({ color: PARTIAL, width: 1.5, alpha: 0.85 });
       bgLayer.addChild(overlay);
+      group.push(overlay);
     }
+
+    byId.set(cl.id, group);
   }
+
+  return byId;
 }
 
 /**
@@ -109,9 +127,10 @@ export function renderMethodPills(
   layout: LaneLayout,
   graph: CodeMapGraph,
   layers: NodeLayers,
-): void {
+): Map<string, NodeGroup> {
   const { nodeLayer, labelLayer } = layers;
   const entryIds = new Set(graph.entryMethodIds);
+  const byId = new Map<string, NodeGroup>();
 
   for (const ml of Object.values(layout.methods)) {
     const m = graph.methods[ml.id];
@@ -119,6 +138,7 @@ export function renderMethodPills(
     const isEntry = entryIds.has(ml.id);
     const rawName = m ? m.name : (graph.externalDeps[ml.id]?.name ?? ml.id);
     const textStr = m ? `+ ${rawName}()` : rawName;
+    const group: NodeGroup = [];
 
     const pillBorder = isPartial ? PARTIAL : PILL_BORDER;
     const pillBorderW = isPartial ? 2 : 1;
@@ -141,6 +161,7 @@ export function renderMethodPills(
       .fill({ color: PILL_FILL, alpha: 1 })
       .stroke({ color: pillBorder, width: pillBorderW, alpha: 1 });
     nodeLayer.addChild(pill);
+    group.push(pill);
 
     if (isEntry) {
       const triX = pillX + 6;
@@ -152,14 +173,19 @@ export function renderMethodPills(
         .closePath()
         .fill({ color: ENTRY_RING, alpha: 1 });
       nodeLayer.addChild(tri);
+      group.push(tri);
     }
 
     label.x = pillX + PILL_HPAD + entryLeadPad;
     label.y = ml.cy - label.height / 2;
     labelLayer.addChild(label);
+    group.push(label);
 
     fillPillBounds(ml, pillX, pillW);
+    byId.set(ml.id, group);
   }
+
+  return byId;
 }
 
 function fillPillBounds(ml: MethodLayout, pillX: number, pillW: number): void {

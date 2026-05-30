@@ -48,7 +48,35 @@ export function openPanel(context: vscode.ExtensionContext): vscode.WebviewPanel
     }
   });
 
+  // Bridge ext / stub card clicks to a VS Code message. Phase 1.5 will
+  // replace this with the real jump-to-source path; for now we just list
+  // the in-graph call sites so the click is observably wired.
+  panel.webview.onDidReceiveMessage((msg: unknown) => {
+    if (!isOpenReference(msg)) return;
+    const summary = msg.sources.length === 0
+      ? `${msg.target}: no in-graph call sites`
+      : `${msg.target} call sites: ${msg.sources.join(', ')}`;
+    vscode.window.showInformationMessage(summary);
+  });
+
   return panel;
+}
+
+interface OpenReferenceMessage {
+  type: 'open-reference';
+  target: string;
+  sources: string[];
+}
+
+function isOpenReference(msg: unknown): msg is OpenReferenceMessage {
+  if (typeof msg !== 'object' || msg === null) return false;
+  const m = msg as Record<string, unknown>;
+  return (
+    m.type === 'open-reference' &&
+    typeof m.target === 'string' &&
+    Array.isArray(m.sources) &&
+    m.sources.every((s) => typeof s === 'string')
+  );
 }
 
 interface HtmlContext {
@@ -81,10 +109,27 @@ function renderHtml(ctx: HtmlContext): string {
       overflow: hidden;
     }
     #stage { position: absolute; inset: 0; }
+    #codemap-tooltip {
+      position: fixed;
+      display: none;
+      max-width: 360px;
+      padding: 6px 10px;
+      background: rgba(30, 30, 30, 0.96);
+      border: 1px solid #3c3c3c;
+      border-radius: 4px;
+      color: #d4d4d4;
+      font-family: 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.45;
+      pointer-events: none;
+      white-space: pre-wrap;
+      z-index: 10;
+    }
   </style>
 </head>
 <body>
   <div id="stage"></div>
+  <div id="codemap-tooltip"></div>
   <script type="application/json" id="codemap-fixture" nonce="${nonce}">${safeFixture}</script>
   <script type="module" nonce="${nonce}" src="${sceneUri}"></script>
 </body>

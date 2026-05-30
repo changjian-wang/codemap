@@ -1,4 +1,4 @@
-import { Graphics } from 'pixi.js';
+import { Container, Graphics } from 'pixi.js';
 import type { MethodEdge } from '../../shared/types';
 import {
   type Bezier,
@@ -11,17 +11,30 @@ import {
 const NEUTRAL_EDGE = 0xc0c8d2;
 const DIM_EDGE = 0x858585;
 
+/**
+ * Draw each edge into its own `Graphics`, mounted on `edgeLayer`. Per-edge
+ * graphics let the interaction layer dim individual edges by setting
+ * `alpha`, at the cost of one extra draw call per edge — fine for the
+ * lumen-mini bar; large-graph batching is a Phase 3.3 concern.
+ *
+ * Returned map is keyed by edge id so interaction can resolve hover hits.
+ */
 export function renderEdges(
   edges: readonly MethodEdge[],
   router: Router,
-  edgesG: Graphics,
-): void {
+  edgeLayer: Container,
+): Map<string, Graphics> {
+  const byId = new Map<string, Graphics>();
   for (const e of edges) {
     const bz = router.bezierForEdge(e);
     if (!bz) continue;
-    drawEdgeStroke(edgesG, e, bz);
-    drawArrowhead(edgesG, e, bz);
+    const g = new Graphics();
+    drawEdgeStroke(g, e, bz);
+    drawArrowhead(g, e, bz);
+    edgeLayer.addChild(g);
+    byId.set(e.id, g);
   }
+  return byId;
 }
 
 function drawEdgeStroke(g: Graphics, e: MethodEdge, bz: Bezier): void {

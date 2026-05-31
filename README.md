@@ -1,5 +1,14 @@
 # CodeMap
 
+> [!WARNING]
+> **DEPRECATED -- 2026-05-31.** This repository is no longer maintained. The
+> "call-graph as visual aid for reading code" thesis did not pan out in HITL
+> use against real workspaces (30+ class projects produce unreadable
+> visualisations regardless of layout strategy). The orchestrator, v2 graph
+> schema, scorer, and chat participant scaffold remain useful as reference
+> implementations of an LLM-analyzer + LSP-calibrator pipeline. The author has
+> moved on to a different source-reading assistant design.
+
 > Interactive UML-style call graph + reading guidance for AI-generated code, packaged as a VS Code chat participant.
 
 **Status:** v0.0.5 — prompt v3.7 (decoupled entry detection + workspace cross-file hints) and eval v3.7.1 (BCL/infra noise filtering).
